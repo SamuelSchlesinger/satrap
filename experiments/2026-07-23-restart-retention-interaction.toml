@@ -1,0 +1,134 @@
+[experiment]
+id = "2026-07-23-restart-retention-interaction"
+owner = "Codex"
+status = "complete"
+worktree_revision = "uncommitted initial worktree"
+
+[hypothesis]
+mechanism = "Chronological backtracking and ReusedTrail both preserve assignments that ordinary CDCL would discard. Their composition may accumulate retention debt: a scheduled restart can become too weak to restore search displacement after many already-shortened backjumps."
+prediction = "If composition is the cause of the observed family split, disabling chronological backtracking while retaining ReusedTrail will materially reduce deterministic conflicts on Break_12_50 without eliminating ReusedTrail's conflict reduction on 6s268r_Iter94."
+falsification = "The interaction hypothesis is rejected if reuse without chronological backtracking remains strongly worse than root restarts on Break_12_50, or if it loses the development solve on 6s268r_Iter94 at the declared limit. In that case, a guarded or learned trail-reuse acceptance policy remains necessary."
+
+[prior_art]
+checked = [
+  "https://www.cs.cmu.edu/~mheule/publications/JSAT7_11_vanderTak.pdf",
+  "https://cca.informatik.uni-freiburg.de/papers/BiereFroehlich-SAT15.pdf",
+  "https://arxiv.org/abs/1608.04720",
+  "https://arxiv.org/abs/0907.5032",
+  "https://arxiv.org/abs/2404.03753",
+  "https://arxiv.org/abs/2404.16387",
+  "https://doi.org/10.3390/sym11020197",
+]
+established = "The score-frontier ReusedTrail rule, adaptive selection among restart schedules, MAB selection between restart and reset, duplicate-trail-triggered activity perturbation, and periodic cold restarts are prior art."
+not_claimed = "Neither partial restart nor adaptive restart selection is claimed as novel."
+open_boundary = "This experiment asks only whether two independently established retention mechanisms have a harmful interaction in this implementation. A later online acceptance rule would require its own preregistration and a broader literature review before any novelty claim."
+
+[variants]
+binary = "target/release/sat"
+root_chrono = "--no-reuse-trail --chrono"
+reuse_chrono = "--reuse-trail --chrono"
+root_no_chrono = "--no-reuse-trail --no-chrono"
+reuse_no_chrono = "--reuse-trail --no-chrono"
+compiler = "rustc stable with -C target-cpu=native and release fat LTO"
+
+[corpus]
+role = "development"
+deduplication = "sha256"
+instances = [
+  "Break_12_50.xml.cnf",
+  "6s268r_Iter94.cnf",
+]
+sha256 = [
+  "41bd39956ff5bd83e3673ce990abdd27b7fe92e24c3e2f0815b02185bf77b1a1",
+  "d487719bbab2977de4fbaaa815e12027190e29cb344a1020f089f853b2bf87b8",
+]
+rationale = "These are the two already-revealed development cases with opposite ReusedTrail outcomes. No held-out instance will be used to choose or revise the mechanism."
+
+[protocol]
+timeout_seconds = 25
+memory_megabytes = 0
+threads = 1
+repetitions = 3
+order_seed = 20250812
+primary_metric = "deterministic conflict count"
+secondary_metrics = [
+  "validated status",
+  "wall-time median",
+  "restart count",
+  "reused restart count",
+  "reused decision levels",
+  "chronological backtrack count",
+]
+stopping_rule = "Run the missing reuse-without-chronological-backtracking corner on both declared instances. Compare against the already-recorded other corners; repeat all timing-sensitive comparisons three times. Do not inspect held-out data or tune a threshold from these outcomes."
+
+[validation]
+sat_models = "tools/benchmark.py must report valid"
+unsat_proofs = "Reuse-without-chrono must emit DRAT on 6s268r_Iter94 and DRAT-trim must verify it if this corner is retained for any subsequent claim."
+disagreements = "quarantine and investigate"
+
+[results]
+solver_binary_sha256 = "61548a86f5da15ffe70577a14d1be7e56a7bcd123fbc4ca607d92bfc361a8d43"
+break12_jsonl = "/private/tmp/sat-baselines-20260723/restart-retention-interaction-break12-repeat3.jsonl"
+break12_jsonl_sha256 = "396abe9593d349e5f52e7cac875bfa2854e907fab7e5a0a7feb836f2fbb735aa"
+sixs268_jsonl = "/private/tmp/sat-baselines-20260723/restart-retention-interaction-6s268-repeat3.jsonl"
+sixs268_jsonl_sha256 = "3179bff86c891cfb5a9da75a726d0b7bcd627f4e2599435e1c4e8e7894975f69"
+summary = "All 24 runs returned the expected status; all Break_12_50 models validated. Removing chronological backtracking made both reuse variants slower. Reuse without chronology remained directionally helpful relative to root without chronology on 6s268, but remained strongly harmful on Break."
+conclusion = "Reject the strong interaction hypothesis. Chronological backtracking is not the cause of the ReusedTrail family split: it improves both root and reuse variants. Trail reuse still needs an explicit acceptance policy or a different mechanism."
+
+[results.break12.root_chrono]
+median_seconds = 3.553935
+conflicts = 118557
+restarts = 317
+chronological_backtracks = 5536
+
+[results.break12.reuse_chrono]
+median_seconds = 19.363803
+conflicts = 575697
+restarts = 1212
+reused_restarts = 39
+reused_levels = 962
+chronological_backtracks = 32694
+
+[results.break12.root_no_chrono]
+median_seconds = 6.145427
+conflicts = 198354
+restarts = 509
+
+[results.break12.reuse_no_chrono]
+median_seconds = 23.226093
+conflicts = 701515
+restarts = 1531
+reused_restarts = 42
+reused_levels = 283
+
+[results.sixs268.root_chrono]
+median_seconds = 5.645161
+conflicts = 78479
+restarts = 251
+chronological_backtracks = 17804
+
+[results.sixs268.reuse_chrono]
+median_seconds = 0.645556
+conflicts = 7614
+restarts = 30
+reused_restarts = 2
+reused_levels = 20
+chronological_backtracks = 1390
+
+[results.sixs268.root_no_chrono]
+median_seconds = 13.392910
+conflicts = 105373
+restarts = 269
+
+[results.sixs268.reuse_no_chrono]
+median_seconds = 10.924800
+conflicts = 67497
+restarts = 207
+reused_restarts = 13
+reused_levels = 101
+
+[results.sixs268_no_chrono_drat]
+proof_sha256 = "9517c5f23d06f32c41228bf7e6b183c50b774aedd77da0c11a137b7b8d26cd34"
+proof_bytes = 6825650
+checker = "DRAT-trim v05.22.2023"
+checker_result = "VERIFIED"

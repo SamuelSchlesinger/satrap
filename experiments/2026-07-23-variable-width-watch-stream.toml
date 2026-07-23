@@ -1,0 +1,168 @@
+[experiment]
+id = "2026-07-23-variable-width-watch-stream"
+owner = "Codex"
+status = "complete"
+worktree_revision = "uncommitted initial worktree"
+control_binary = "/private/tmp/sat-baselines-20260723/sat-promoted-sparse-binary-activity"
+control_sha256 = "d0e9d16c7407eac20c536e00f4624aee52aa923a73c8de49c689919c5ba0041e"
+
+[hypothesis]
+mechanism = "Every current watch consumes eight bytes even though a binary watch needs only a stable 31-bit binary-clause index: its other literal is already recoverable from the split binary literal pair and the watch-list key. Encoding binary entries in one u32 word and long entries in two u32 words should nearly halve the binary-watch payload and improve cache density without changing logical watch order."
+prediction = "The one-word/two-word stream will preserve exact deterministic trajectories and proof bytes, remove at least six million logical watch bytes on 6s268, and lower its newly repeated median peak RSS by at least two percent versus the promoted sparse-binary control without violating any five-percent runtime ceiling."
+falsification = "Reject unchanged if any result, model, proof byte, deterministic search counter, watch-order invariant, optional-feature result, or slow-binary-path result changes; logical watch savings on 6s268 are below six million bytes; median RSS does not improve by at least two percent; any selected or endpoint runtime regresses by more than five percent; or easy pooled overhead exceeds five percent. Do not tune encoding, growth, or thresholds after observing treatment results."
+
+[prior_art]
+checked = [
+  "Kissat 4.0.4 8af8e56f174b778aef3aa45af9f739b2a5f492c2 src/watch.h, src/proplit.h, and src/assign.c",
+  "CaDiCaL 3.0.1 c60730422e758ef1cebe7aeddf2dda31c996bf04 src/watch.hpp and src/internal.hpp",
+]
+established = "Kissat stores a binary watch as one tagged 32-bit other literal and a long watch as two 32-bit words, while its binary reasons store the antecedent literal directly. CaDiCaL instead keeps a fixed pointer-based Watch containing a blocker and cached size."
+distinction = "This treatment adopts only the variable-width 32-bit stream. Its binary word stores the existing stable binary ClauseRef index rather than Kissat's direct other literal, so the current clause-reference reasons, lazy deletion, proof paths, optional preprocessors, activity arithmetic, and binary-fast-path ablation remain unchanged. The blocker is derived from the indexed two-literal array."
+novelty_status = "Established representation engineering. No novelty claim."
+
+[policy]
+word = "Introduce a repr(transparent) four-byte WatchWord around u32."
+binary_entry = "Store exactly one word containing the existing packed binary ClauseRef, whose high tag bit is set."
+long_entry = "Store exactly two words in logical-watch order: a packed long ClauseRef header with a clear high tag bit, followed by the raw blocking literal."
+iteration = "Decode entries with a one- or two-word stride. In-place retention copies the complete encoded entry; a conflict copies the unread word suffix exactly; moved long watches append the same two-word encoding to the destination list."
+binary_blocker = "For a binary header, load its two literals and select the member unequal to the current watch-list key. Preserve the existing slow-path literal swap only when --no-binary-fast-path is active."
+everything_else = "Do not change ClauseRef, binary clause storage, reasons, activities, flags, clause allocation order, logical watch insertion order, proof logging, branching, restart, reduction, preprocessing, model reconstruction, or any default option."
+default = "Promote only if the frozen correctness, runtime, logical-storage, and RSS gates all pass."
+
+[variants]
+control = "/private/tmp/sat-baselines-20260723/sat-promoted-sparse-binary-activity --no-eliminate --no-compact-arena --no-binary-minimize --no-subsume --no-vivify --no-probe"
+treatment = "target/release/sat --no-eliminate --no-compact-arena --no-binary-minimize --no-subsume --no-vivify --no-probe"
+compiler = "rustc stable with -C target-cpu=native and release fat LTO"
+
+[corpus]
+manifest = "benchmarks/manifests/satcomp-2025-development.json"
+role = "development"
+deduplication = "sha256"
+heldout_use = "none"
+
+[protocol]
+full_slice_timeout_seconds = 2
+full_slice_repetitions = 1
+jointly_solved_repetitions = 7
+jointly_solved_selection = "After the frozen full-slice control/treatment run, repeat every development instance that either variant solves and whose control or treatment wall time is at least 0.1 seconds. Apply the per-instance ceiling to every selected case."
+endpoint_instances = ["Break_12_50.xml.cnf", "6s268r_Iter94.cnf"]
+endpoint_timeout_seconds = 25
+endpoint_repetitions = 3
+easy_overhead_repetitions = 11
+memory_instance = "6s268r_Iter94.cnf"
+memory_repetitions = 3
+memory_measurement = "/usr/bin/time -l maximum resident set size, newly repeated for control and treatment after implementation"
+threads = 1
+order_seed = 20251103
+primary_metric = "median maximum resident set size improvement on 6s268 versus the promoted sparse-binary control"
+secondary_metrics = [
+  "exact logical watch words and bytes",
+  "validated two-second development solved count",
+  "deterministic search counters and proof bytes",
+  "paired wall time",
+]
+stopping_rule = "Implement the frozen word stream once, run correctness checks, then execute the declared comparisons. Do not consume held-out data or combine this with direct-literal reasons, direct-literal binary watches, a separate binary adjacency list, changed vector growth, flag repacking, or any heuristic change."
+
+[correctness]
+layout_tests = "Assert WatchWord is four bytes; binary entries occupy one word; long entries occupy two; maximum packed references and literals round-trip; mixed entries decode in insertion order."
+propagation_tests = "Exercise satisfied, unit, conflicting, deleted, ignored, moved-long-watch, fast-binary, and slow-binary paths without changing expected results."
+differential = "Run the full deterministic brute-force differential suite and every optional-feature regression."
+trajectory = "Compare every deterministic search counter on gm24, 6s299, Break, and 6s268 against the promoted control. Any mismatch rejects the treatment."
+proof = "Require the treatment 6s268 proof to be byte-identical to SHA-256 a787ce78cf16cde3e314ad9b490908a5cbf5271b8560506862489aa8f993ae64, then verify it with DRAT-trim."
+
+[promotion_gate]
+development_solved_delta_minimum = 0
+deterministic_counter_mismatches_maximum = 0
+proof_bytes_must_match = true
+logical_watch_storage_savings_bytes_minimum = 6000000
+control_relative_memory_improvement_percent_minimum = 2
+jointly_solved_max_regression_percent = 5
+endpoint_max_regression_percent = 5
+easy_overhead_max_percent = 5
+sat_model_validation_required = true
+proof_validation_required = true
+next_step = "If promoted, document the stream as the default and separately evaluate direct-literal binary watches/reasons only if profiling justifies the larger semantic change. If rejected, restore the promoted sparse-binary representation and move to a different baseline gap."
+
+[results]
+treatment_binary_sha256 = "0a7e2164b0cd010e828f16777bd7812373ef70916b6482e558dd1ed5b04efc1c"
+full_slice_jsonl = "/private/tmp/sat-baselines-20260723/variable-width-watch-full-2s.jsonl"
+full_slice_jsonl_sha256 = "acbee827c7090a0ab96ef612a1dda4fb09c3ff89051be93e2594b63b59343311"
+jointly_solved_jsonl = "/private/tmp/sat-baselines-20260723/variable-width-watch-jointly-solved-repeat7.jsonl"
+jointly_solved_jsonl_sha256 = "92ca8b1d39463465651903107914c97fc4d8331de07458e1d397deda7d4946f7"
+endpoint_jsonl = "/private/tmp/sat-baselines-20260723/variable-width-watch-endpoints-repeat3.jsonl"
+endpoint_jsonl_sha256 = "aea2f7b51e6608ae9f0d6417c74defea53d8a6ad7432d83794358fc910fb8979"
+easy_jsonl = "/private/tmp/sat-baselines-20260723/variable-width-watch-easy-repeat11.jsonl"
+easy_jsonl_sha256 = "2d94ab4a1368dd391b3a07c137791a05ebb10971fd3c55a7684e55fe41b075ae"
+treatment_proof = "/private/tmp/sat-baselines-20260723/variable-width-watch-6s268.drat"
+proof_sha256 = "a787ce78cf16cde3e314ad9b490908a5cbf5271b8560506862489aa8f993ae64"
+summary = "The stream preserved 3/8 validated two-second solves, every inspected deterministic counter, every optional-feature test, and the byte-identical independently verified 6s268 proof. It removed 6994936 logical watch bytes and improved newly repeated median RSS by 3.774253 percent. However, deriving each binary blocker through the stable clause index added an indirection and failed all four nontrivial runtime ceilings: regressions ranged from 7.945005 to 12.572211 percent."
+conclusion = "Rejected unchanged and restored to the promoted fixed 8-byte watch representation. The memory hypothesis was confirmed, but the indexed-blocker implementation traded 10 MiB of median RSS for a 9.57 percent increase in retired instructions and broad 8-13 percent runtime regressions. Do not reinterpret this as evidence against Kissat-style one-word direct-literal watches; those require a separate direct-literal reason design and a new preregistration."
+
+[results.full_slice]
+control_solved = 3
+treatment_solved = 3
+sat_models = "all valid"
+status_disagreements = 0
+
+[results.jointly_solved]
+control_pooled_median_seconds = 0.649352708
+treatment_pooled_median_seconds = 0.702731582
+change_percent = 8.220321
+
+[results.jointly_solved.gm24sparrc]
+control_median_seconds = 0.334438625
+treatment_median_seconds = 0.361009791
+change_percent = 7.945005
+
+[results.jointly_solved.six299]
+control_median_seconds = 0.314914083
+treatment_median_seconds = 0.341721791
+change_percent = 8.512705
+
+[results.endpoints.break12]
+control_median_seconds = 3.133032917
+treatment_median_seconds = 3.465711958
+change_percent = 10.618434
+
+[results.endpoints.six268]
+control_median_seconds = 5.074348292
+treatment_median_seconds = 5.712306084
+change_percent = 12.572211
+
+[results.easy]
+control_pooled_median_seconds = 0.014724001
+treatment_pooled_median_seconds = 0.014810833
+change_percent = 0.589731
+
+[results.memory]
+instance = "6s268r_Iter94.cnf"
+control_maximum_resident_set_size_bytes = [278675456, 277774336, 277823488]
+treatment_maximum_resident_set_size_bytes = [267337728, 267583488, 267337728]
+control_median_bytes = 277823488
+treatment_median_bytes = 267337728
+savings_bytes = 10485760
+improvement_percent = 3.774252521
+gate = "memory gate passed; overall promotion failed on runtime ceilings"
+
+[results.watch_storage_at_end_of_six268]
+logical_watch_entries = 3323199
+control_fixed_watch_bytes = 26585592
+treatment_watch_words = 4897664
+treatment_watch_bytes = 19590656
+savings_bytes = 6994936
+savings_percent = 26.311003
+
+[results.supplementary_time_counters]
+control_instructions_retired = [39757283527, 39740459762, 39742320099]
+treatment_instructions_retired = [43545804486, 43553678207, 43542441526]
+control_median_instructions_retired = 39742320099
+treatment_median_instructions_retired = 43545804486
+change_percent = 9.570363
+
+[results.correctness]
+deterministic_counter_cases = ["gm24sparrc", "6s299b685_Iter22", "Break_12_50", "6s268r_Iter94"]
+deterministic_counter_mismatches = 0
+proof_bytes = 7984674
+proof_lines = 78479
+proof = "byte-identical to the promoted control proof; DRAT-trim VERIFIED the treatment"
+tests = "87 Rust tests and clippy passed for the treatment"

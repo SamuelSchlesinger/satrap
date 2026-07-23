@@ -1,0 +1,148 @@
+[experiment]
+id = "2026-07-23-bounded-root-vivification"
+owner = "Codex"
+status = "complete"
+worktree_revision = "uncommitted initial worktree"
+
+[hypothesis]
+mechanism = "Root-level unit propagation under successive negations of a clause prefix can prove a strict prefix clause by RUP. Replacing the original clause with that explicit shorter clause should improve later propagation without relying on incidental probe-induced watch reordering."
+prediction = "On the frozen development slice, bounded original-clause vivification will remove literals on at least one real instance, preserve the 2-second solved count, and avoid a greater-than-ten-percent median regression on either Break_12_50 or 6s268r_Iter94."
+falsification = "Reject default promotion unchanged if no development clause is shortened, 2-second solved count falls, either hard endpoint regresses by more than ten percent, any SAT model fails validation, or any emitted strengthening fails DRAT-trim. Do not tune candidate count, effort, or literal ordering after observing outcomes."
+
+[prior_art]
+checked = [
+  "https://arxiv.org/abs/1807.11061",
+  "https://fmv.jku.at/papers/BiereJarvisaloKiesl-SAT-Handbook-2021-Preprocessing-Chapter-Manuscript.pdf",
+  "CaDiCaL 3.0.1 src/vivify.cpp and options.hpp at pinned local revision c607304d8d0e3f62b28c1dbf4e47e8811d115c06",
+]
+established = "Clause vivification by unit propagation is established preprocessing and inprocessing. Modern implementations select clauses, bound effort, preserve phase state, ignore the clause being vivified, analyze conflicts, and vivify original and learned clauses."
+distinction = "This first Rust baseline implements only conservative root preprocessing of original clauses. It learns a current-order prefix only after direct BCP conflict or an already-implied prefix literal, and separately removes root-false literals. It does not perform vivification conflict analysis, decision reuse, learned-clause vivification, or repeated inprocessing."
+novelty_status = "Baseline engineering only. No novelty claim."
+
+[policy]
+name = "one-pass bounded conservative root vivification"
+schedule = "Run once after initial root propagation and optional failed-literal probing, before the first CDCL decision."
+candidates = "Snapshot active original clauses of length at least three; sort by current length then stable clause reference and retain at most the first 5000."
+literal_order = "Use each clause's current in-memory literal order, as recommended by the vivification study."
+root_simplification = "Skip a root-satisfied clause. Remove root-false literals from every other candidate; a strict result is RUP in the presence of root propagation."
+attempt = "Ignore the candidate clause itself. Successively assume the negation of each remaining literal at its own temporary level without changing saved phases. If the literal is already true or propagation conflicts, the processed prefix is RUP. Backtrack to level zero without recording best phases."
+replacement = "Only install a strict shortening. Emit the shortened clause as a textual DRAT addition, mark the original clause deleted internally, and attach a new original clause. A derived unit is installed and propagated at level zero. Proof deletion lines remain omitted."
+budget = "Stop between literal assumptions once vivification has processed min(1000000, original_nonunit_literal_count) trail literals. Finish a started propagation, then abandon an unfinished candidate if the bound has been reached."
+rounds = 1
+default = "disabled until the promotion gate passes"
+
+[variants]
+control = "target/release/sat --no-vivify --no-probe"
+treatment = "target/release/sat --vivify --no-probe"
+compiler = "rustc stable with -C target-cpu=native and release fat LTO"
+
+[corpus]
+manifest = "benchmarks/manifests/satcomp-2025-development.json"
+role = "development"
+deduplication = "sha256"
+heldout_use = "none"
+
+[protocol]
+full_slice_timeout_seconds = 2
+full_slice_repetitions = 1
+endpoint_timeout_seconds = 25
+endpoint_repetitions = 3
+easy_overhead_repetitions = 11
+threads = 1
+order_seed = 20250917
+primary_metric = "validated solved count on the frozen eight-instance development slice at two seconds"
+secondary_metrics = [
+  "clauses strengthened",
+  "literals removed",
+  "vivification checks and propagations",
+  "deterministic search conflicts",
+  "paired wall time",
+]
+stopping_rule = "Implement the frozen conservative policy once, run correctness and proof checks, then execute the declared development comparisons. Do not inspect held-out data or change the policy after observing results."
+
+[correctness]
+unit_tests = "Exercise conflict-prefix shortening, already-implied prefix shortening, root-false removal, no-op candidates, unit replacement, phase preservation, candidate ignoring, and the effort/schedule caps."
+differential = "Add vivification to deterministic brute-force differential testing and validate returned SAT models against the original clauses."
+unsat_proof = "Retain a proof whose first lemma is a vivified strict clause and require independent DRAT-trim verification on both a crafted case and a real development UNSAT result if any real clause is shortened."
+storage = "Replacement uses a fresh arena clause and lazy deletion so clause references held by watches remain stable."
+disabled_overhead = "The default disabled path performs only one configuration branch before search; ordinary propagation is separately monomorphized and contains no runtime vivification branch."
+
+[promotion_gate]
+development_solved_delta_minimum = 0
+development_literals_removed_minimum = 1
+endpoint_max_regression_percent = 10
+easy_overhead_max_percent = 5
+proof_required = true
+next_step = "If promoted, separately preregister learned-clause inprocessing and conflict-analysis-based vivification. If rejected, retain the proof-safe storage machinery and move to occurrence-indexed subsumption/SSR."
+
+[results]
+solver_binary_sha256 = "c1866aec28f5420541627047ea312aecdc232777805df9198c92305b958c3ddc"
+full_slice_jsonl = "/private/tmp/sat-baselines-20260723/bounded-root-vivification-full-2s.jsonl"
+full_slice_jsonl_sha256 = "9b13f290b86188bee74dd314478d2664fd7b5496b4abe951f7622149f60330fe"
+endpoint_jsonl = "/private/tmp/sat-baselines-20260723/bounded-root-vivification-endpoints-repeat3.jsonl"
+endpoint_jsonl_sha256 = "c55448e8302b8561dd10f644ec3a371e64a763f5cfafb72ea08d976b071871fc"
+easy_jsonl = "/private/tmp/sat-baselines-20260723/bounded-root-vivification-easy-repeat11.jsonl"
+easy_jsonl_sha256 = "f0d2c0c75f5a425ecf02dc115731cb8debb9cb884849a62241d0ce3f518b270b"
+summary = "Vivification preserved the 3/8 solved count and produced a striking proof-producing win on gm24sparrc, but failed the preregistered hard-family gate. It reduced gm24sparrc from 0.307 seconds and 147 search conflicts to 0.043 seconds and zero search conflicts by strengthening 24 clauses, removing 29 literals, and deriving five root units. It improved 6s268 by 8.8 percent, but one single-literal strengthening plus unsuccessful vivification watch perturbations made Break_12_50 about 3.98x slower."
+conclusion = "Rejected unchanged as the default because Break_12_50 exceeded the preregistered ten-percent regression ceiling by a wide margin. Retain --vivify as a proof-checked baseline capability and retain the stable fresh-clause replacement machinery. Do not tune this schedule or inspect held-out data; move to separately preregistered occurrence-indexed subsumption/SSR."
+
+[results.full_slice]
+control_solved = 3
+treatment_solved = 3
+sat_models = "all valid"
+status_disagreements = 0
+
+[results.endpoints.break12]
+control_median_seconds = 3.277844
+treatment_median_seconds = 13.051438
+treatment_slowdown_factor = 3.98
+control_conflicts = 118557
+treatment_conflicts = 438808
+treatment_vivification_checks = 4667
+treatment_vivified_clauses = 1
+treatment_vivified_literals = 1
+treatment_vivification_propagations = 124728
+
+[results.endpoints.sixs268]
+control_median_seconds = 5.351903
+treatment_median_seconds = 4.879981
+treatment_improvement_percent = 8.8
+control_conflicts = 78479
+treatment_conflicts = 83693
+treatment_vivification_checks = 2153
+treatment_vivified_clauses = 118
+treatment_vivified_literals = 143
+treatment_vivified_units = 25
+treatment_vivification_propagations = 1004668
+
+[results.gm24sparrc]
+control_wall_seconds = 0.306930
+treatment_wall_seconds = 0.043324
+treatment_direct_solve_seconds = 0.012645
+control_conflicts = 147
+treatment_conflicts = 0
+treatment_vivification_checks = 88
+treatment_vivified_clauses = 24
+treatment_vivified_literals = 29
+treatment_vivified_units = 5
+treatment_vivification_propagations = 415768
+
+[results.easy_overhead]
+control_pooled_median_seconds = 0.001868542
+treatment_pooled_median_seconds = 0.001862750
+delta_percent = -0.31
+interpretation = "process-launch noise dominates; no measurable disabled-path overhead"
+
+[results.drat.gm24sparrc]
+proof_sha256 = "7bdc2fa1325bc03f99be61d9ee77199beb114c53bf728664bf9a21bb4ad3d7c2"
+proof_bytes = 194
+checker = "DRAT-trim v05.22.2023"
+checker_result = "VERIFIED"
+
+[results.drat.smoke]
+instance = "benchmarks/smoke/vivify-unsat.cnf"
+first_lemma = "1 2 0"
+proof_sha256 = "ac7cc0755d2475a6f55020d832263eac09f8b08c7bfd36cf697227d408f62100"
+proof_bytes = 26
+checker = "DRAT-trim v05.22.2023"
+checker_result = "VERIFIED"

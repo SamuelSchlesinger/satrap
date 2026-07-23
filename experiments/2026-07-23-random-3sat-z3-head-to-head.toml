@@ -1,0 +1,167 @@
+[experiment]
+id = "2026-07-23-random-3sat-z3-head-to-head"
+owner = "Codex"
+status = "complete"
+worktree_revision = "uncommitted initial worktree"
+scope = "Exploratory pure-CNF head-to-head against Z3, not an SMT or state-of-the-art claim"
+
+[question]
+primary = "How does the current promoted Rust CDCL configuration compare with installed Z3 4.16.0 on deterministic uniform random 3-SAT near the satisfiability threshold?"
+interpretation = "This measures one narrow synthetic distribution. It cannot establish general SAT performance, SMT performance, or superiority to Z3 on Z3's intended mixed-theory workloads."
+
+[corpus]
+family = "uniform random 3-SAT"
+generator = "tools/generate_random_ksat.py"
+generator_sha256 = "c528b54e2559de066dffee44ee44a3ac02e72852ad6cfec1eb067e952f8a1c90"
+width = 3
+clauses_per_variable = 4.267
+variable_counts = [250, 500, 750, 1000]
+instances_per_size = 8
+seed_rule = "seed = 202607230000 + 10 * variable_count + index, for index 0 through 7"
+corpus_directory = "/private/tmp/sat-random-z3-20260723/corpus"
+expected_instance_count = 32
+role = "fresh exploratory corpus; no heuristic changes may be selected from it and then re-evaluated on the same formulas"
+
+[solvers.rust]
+name = "sat-rust"
+command = "/private/tmp/sat-random-z3-20260723/sat-rust --no-factor"
+version = "sat 0.1.0, current promoted defaults"
+binary_sha256 = "2235741f31c2da810da75de1deeec789bd55bb8c0d1baa003b0eaa132ca40d15"
+notes = "Native release build with RUSTFLAGS=-C target-cpu=native; model output enabled; proof output disabled during timing"
+
+[solvers.z3]
+name = "z3"
+command = "/opt/homebrew/bin/z3 -dimacs sat.threads=1"
+version = "Z3 4.16.0 64-bit"
+binary_sha256 = "edae32f9e37ea4b5bb35310d72f0e352d0dc07626cac4e9e30bc1ea9a5bc8efb"
+notes = "DIMACS SAT frontend with one SAT thread; model output enabled"
+
+[protocol]
+runner = "tools/benchmark.py"
+runner_sha256 = "16ee4e49930dd5b1fc4352b0433e29b691b5eb4a3efc4f53b291e48b71503348"
+timeout_seconds = 5
+repetitions = 3
+task_order_seed = 20260723
+threads_per_solver = 1
+proof_logging_during_timing = false
+competing_proof_checkers = "paused before timing and resumed afterward"
+raw_output = "/private/tmp/sat-random-z3-20260723/head-to-head-repeat3.jsonl"
+
+[validation]
+sat = "The runner must validate every reported model against every original clause."
+agreement = "Any SAT/UNSAT disagreement is a hard correctness failure and must remain visible."
+unsat = "After timing, emit and independently DRAT-check at least one nontrivial Rust UNSAT result. Z3 UNSAT results are cross-checked by status agreement but Z3 does not emit DRAT through this invocation."
+determinism = "Within each solver-instance pair, all three runs must agree on status. Runtime need not be identical."
+
+[metrics]
+primary = "solved count at five seconds, then PAR-2 over all 32 instances using per-instance median runtime"
+secondary = [
+  "SAT and UNSAT solved counts",
+  "per-size solved counts",
+  "per-size median and geometric-mean runtime on jointly solved instances",
+  "per-instance median speed ratio",
+  "wins and losses using a ten-percent practical-equivalence band",
+]
+timeout_penalty_seconds = 10
+
+[reporting]
+minimum_claim = "Report exact solver versions, binary hashes, corpus construction, validation outcome, timeouts, and raw artifact hash."
+forbidden_claims = [
+  "Rust beats Z3 in general",
+  "Rust beats a state-of-the-art SAT portfolio",
+  "Rust is a state-of-the-art SMT solver",
+  "a random-family win transfers to industrial or theory formulas",
+]
+
+[results.artifacts]
+preregistration = "/private/tmp/sat-random-z3-20260723/preregistered.toml"
+preregistration_sha256 = "64a75941bd186377b218b59ad70fc2c69f3e105143f075670d17c695e4e4f742"
+corpus_files = 32
+corpus_bytes = 1281653
+corpus_aggregate_sha256 = "e9e26de96f1cb8d63ca51fb5c6a24cdc529dc7882ca14fb1902365a0df5212cd"
+corpus_hash_definition = "SHA-256 over each lexicographically sorted basename, a NUL byte, and the complete file contents"
+raw_jsonl = "/private/tmp/sat-random-z3-20260723/head-to-head-repeat3.jsonl"
+raw_jsonl_sha256 = "a36aa0245a4e9e3057bed5f56012a464334503696be367a12c07b16a62419434"
+raw_rows = 192
+summary_json = "/private/tmp/sat-random-z3-20260723/summary.json"
+summary_json_sha256 = "16fcbcd680b32c7f8b7564c3f156c86093561e9aece33fb5319056d4311780b2"
+summarizer = "tools/summarize_benchmark.py"
+summarizer_sha256 = "e2858002dd5f49cc6446efba86582b0a371f068f9eee680cb617b0e6d6ec85bc"
+
+[results.raw_runs]
+rust_sat = 12
+rust_unsat = 12
+rust_timeouts = 72
+z3_sat = 12
+z3_unsat = 6
+z3_timeouts = 78
+invalid_executions = 0
+invalid_sat_models = 0
+status_disagreements = 0
+
+[results.median_instances]
+rust_solved = 8
+rust_sat = 4
+rust_unsat = 4
+rust_timeouts = 24
+rust_par2_mean_seconds = 7.936447636750927
+z3_solved = 6
+z3_sat = 4
+z3_unsat = 2
+z3_timeouts = 26
+z3_par2_mean_seconds = 8.381739178405951
+rust_par2_improvement_percent = 5.312638966412098
+rust_only = ["r3-n0250-s03.cnf", "r3-n0250-s06.cnf"]
+z3_only = []
+jointly_solved = 6
+joint_rust_practical_wins = 2
+joint_z3_practical_wins = 4
+joint_within_ten_percent = 0
+joint_z3_over_rust_time_geomean = 0.25034497961550617
+joint_z3_speedup_geomean = 3.9944879323558076
+
+[results.by_size.n250]
+rust_solved = 8
+rust_sat = 4
+rust_unsat = 4
+rust_par2_mean_seconds = 1.7457905470037076
+z3_solved = 6
+z3_sat = 4
+z3_unsat = 2
+z3_par2_mean_seconds = 3.526956713623804
+jointly_solved = 6
+joint_rust_time_geomean_seconds = 1.011423501472523
+joint_z3_time_geomean_seconds = 0.2532047958587827
+
+[results.by_size.n500]
+rust_solved = 0
+z3_solved = 0
+rust_par2_mean_seconds = 10.0
+z3_par2_mean_seconds = 10.0
+
+[results.by_size.n750]
+rust_solved = 0
+z3_solved = 0
+rust_par2_mean_seconds = 10.0
+z3_par2_mean_seconds = 10.0
+
+[results.by_size.n1000]
+rust_solved = 0
+z3_solved = 0
+rust_par2_mean_seconds = 10.0
+z3_par2_mean_seconds = 10.0
+
+[results.proof]
+instance = "r3-n0250-s03.cnf"
+formula_sha256 = "b13d1384b79cf76baed9f46f42555fd0ac0addf4212b632fa3de29d51af027bb"
+proof = "/private/tmp/sat-random-z3-20260723/proofs/r3-n0250-s03.drat"
+proof_sha256 = "17b45f803bf0baf77a899fc2880604efa13d6a03cd6639707b2636ea834a8eb0"
+proof_bytes = 10206960
+proof_lines = 185437
+checker = "DRAT-trim v05.22.2023 commit 2e5e29cb0019d5cfd547d4208dca1b3ec290349f"
+backward = "VERIFIED: 1063 of 1067 input clauses and 155581 of 185438 lemmas in core; 4532092 resolution steps; 0 RAT lemmas; 4.821 seconds"
+strict_forward = "VERIFIED with -f -W: 1063 of 1067 input clauses and 165356 of 185438 lemmas in core; 4879290 resolution steps; 0 RAT lemmas; 12.323 seconds"
+
+[results.conclusion]
+summary = "At the five-second median cutoff, Rust solved all eight 250-variable formulas while Z3 solved six; neither solver solved a 500-, 750-, or 1000-variable formula. Rust therefore won solved count 8 to 6 and lowered corpus PAR-2 by 5.313 percent. On the six jointly solved formulas, however, Z3 won four and had a 3.994x geometric-mean speed advantage; Rust won the two jointly solved UNSAT cases and uniquely solved two more UNSAT cases."
+claim = "The current Rust solver has a real solved-count edge over Z3 4.16.0 on this exact narrow random-3-SAT screen, including one independently proof-verified Z3-timeout UNSAT result. Z3 is substantially faster on the jointly solved subset. The coarse size grid leaves 24/32 formulas as double timeouts, so this is useful exploratory evidence rather than a general SAT, SMT, or state-of-the-art result."

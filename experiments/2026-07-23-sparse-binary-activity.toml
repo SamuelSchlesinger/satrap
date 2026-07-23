@@ -1,0 +1,169 @@
+[experiment]
+id = "2026-07-23-sparse-binary-activity"
+owner = "Codex"
+status = "complete"
+worktree_revision = "uncommitted initial worktree"
+legacy_control_binary = "/private/tmp/sat-baselines-20260723/sat-before-separate-binary-storage"
+legacy_control_sha256 = "7c567511f43213362ea18b821f6db4ebbc33b84e003ebd53b4ff2d1d11d1827f"
+intermediate_control_binary = "/private/tmp/sat-baselines-20260723/sat-before-variable-width-watches"
+intermediate_control_sha256 = "f1187eb0638d2d207773f11807bca4037860d301a2ec4e75aa8a7665945a5698"
+
+[hypothesis]
+mechanism = "The separate-binary intermediate allocates one f64 activity for every original and learned binary clause, but bump_clause_activity returns before touching original clauses. Replacing those permanent zeroes with a u32 sentinel/activity index and allocating f64 values only for learned binaries removes several megabytes while preserving every activity addition and rescaling operation that can influence search."
+prediction = "The sparse treatment will preserve the intermediate's exact deterministic trajectory and proof bytes, reduce its logical binary-storage payload by at least three megabytes on 6s268, and make the combined packed representation clear the original experiment's ten-percent median-RSS gate against the legacy binary without violating any five-percent runtime ceiling."
+falsification = "Reject sparse activity unchanged if any result, model, proof byte, deterministic counter, learned-binary activity value, or rescale outcome changes; logical binary-storage savings on 6s268 are below three megabytes; combined median RSS does not improve by at least ten percent versus legacy; any selected or endpoint runtime regresses by more than five percent versus legacy; or easy pooled overhead exceeds five percent. Do not tune representation fields or thresholds after observing treatment results."
+
+[prior_art]
+checked = [
+  "Kissat 4.0.4 8af8e56f174b778aef3aa45af9f739b2a5f492c2 src/watch.h and src/assign.h",
+  "CaDiCaL 3.0.1 c60730422e758ef1cebe7aeddf2dda31c996bf04 src/clause.hpp and src/analyze.cpp",
+]
+established = "Mature solvers specialize binary clauses and avoid long-clause retention metadata that has no effect on permanent binaries. Sparse side metadata for the smaller learned subset is an implementation technique, not an algorithmic novelty."
+distinction = "The treatment keeps stable binary clause identities, the existing 8-byte watches, exact f64 learned activities, and lazy deletion flags. Only the mapping from binary clause index to activity storage changes."
+novelty_status = "Baseline engineering only. No novelty claim."
+
+[policy]
+activity_index = "Replace Vec<f64> aligned with every binary clause by Vec<u32> aligned with binary clauses. Store u32::MAX for original binaries and a zero-based learned-activity index for learned binaries."
+learned_activity = "Append one zero-initialized f64 to a dense Vec<f64> for each learned binary clause. Resolve every learned binary bump through its frozen index."
+rescaling = "When any learned clause crosses 1e20, multiply all long-clause activities and every dense learned-binary activity by 1e-20, then scale clause_increment exactly as before. Skipping original zero slots must not change arithmetic on any live value."
+flags = "Keep the separate u8 learned/deleted flags unchanged so propagation's deletion check has the same footprint and behavior."
+everything_else = "Do not change ClauseRef, Watch, binary literals, clause allocation order, proof logging, branching, restart, reduction, preprocessing, model reconstruction, or any default option."
+default = "Promote the combined separate-binary plus sparse-activity representation only if the final legacy-relative gate passes."
+
+[variants]
+legacy_control = "/private/tmp/sat-baselines-20260723/sat-before-separate-binary-storage --no-eliminate --no-compact-arena --no-binary-minimize --no-subsume --no-vivify --no-probe"
+intermediate_control = "/private/tmp/sat-baselines-20260723/sat-before-variable-width-watches --no-eliminate --no-compact-arena --no-binary-minimize --no-subsume --no-vivify --no-probe"
+treatment = "target/release/sat --no-eliminate --no-compact-arena --no-binary-minimize --no-subsume --no-vivify --no-probe"
+compiler = "rustc stable with -C target-cpu=native and release fat LTO"
+
+[corpus]
+manifest = "benchmarks/manifests/satcomp-2025-development.json"
+role = "development"
+deduplication = "sha256"
+heldout_use = "none"
+
+[protocol]
+full_slice_timeout_seconds = 2
+full_slice_repetitions = 1
+jointly_solved_repetitions = 7
+jointly_solved_selection = "After the frozen full-slice legacy/treatment run, repeat every development instance that either variant solves and whose legacy or treatment wall time is at least 0.1 seconds. Apply the per-instance ceiling to every selected case."
+endpoint_instances = ["Break_12_50.xml.cnf", "6s268r_Iter94.cnf"]
+endpoint_timeout_seconds = 25
+endpoint_repetitions = 3
+easy_overhead_repetitions = 11
+memory_instance = "6s268r_Iter94.cnf"
+memory_repetitions = 3
+memory_measurement = "/usr/bin/time -l maximum resident set size, newly repeated for legacy and treatment after implementation"
+threads = 1
+order_seed = 20251103
+primary_metric = "combined median maximum resident set size improvement against the original legacy binary"
+secondary_metrics = [
+  "exact logical binary activity-index and learned-activity bytes",
+  "validated two-second development solved count",
+  "deterministic search counters and proof bytes versus the intermediate control",
+  "paired wall time versus the original legacy control",
+]
+stopping_rule = "Implement the frozen sparse mapping once, run correctness checks, then execute the declared comparisons. Do not consume held-out data or combine this with variable-width watches, direct-literal reasons, f32 activities, flag repacking, or a heuristic change."
+
+[correctness]
+layout_tests = "Assert original binary clauses hold the sentinel, learned binary clauses receive dense consecutive indices, all parallel arrays stay aligned where intended, and logical storage accounting includes only learned f64 activities."
+activity_tests = "Bump learned binaries through their dense index, force the rescale threshold, and compare all long and binary activity values plus clause_increment with the prior arithmetic."
+differential = "Run the full deterministic brute-force differential suite and every optional-feature regression."
+trajectory = "Compare every deterministic search counter on gm24, 6s299, Break, and 6s268 against the intermediate binary. Any mismatch rejects the treatment."
+proof = "Require the treatment 6s268 proof to be byte-identical to the already retained intermediate/control proof SHA-256 a787ce78cf16cde3e314ad9b490908a5cbf5271b8560506862489aa8f993ae64, then verify it with DRAT-trim."
+
+[promotion_gate]
+development_solved_delta_minimum = 0
+deterministic_counter_mismatches_maximum = 0
+proof_bytes_must_match = true
+logical_binary_storage_savings_bytes_minimum = 3000000
+legacy_relative_memory_improvement_percent_minimum = 10
+jointly_solved_max_regression_percent = 5
+endpoint_max_regression_percent = 5
+easy_overhead_max_percent = 5
+sat_model_validation_required = true
+proof_validation_required = true
+next_step = "If promoted, document the combined packed representation as the default and separately preregister variable-width 32-bit watches. If rejected, restore the original legacy representation and move to an independent baseline gap."
+
+[results]
+treatment_binary_sha256 = "d0e9d16c7407eac20c536e00f4624aee52aa923a73c8de49c689919c5ba0041e"
+full_slice_jsonl = "/private/tmp/sat-baselines-20260723/sparse-binary-activity-full-2s.jsonl"
+full_slice_jsonl_sha256 = "1ef362caa2d2d78a399526093de10e4b92697382f014647734b6de121e70bcbe"
+jointly_solved_jsonl = "/private/tmp/sat-baselines-20260723/sparse-binary-activity-jointly-solved-repeat7.jsonl"
+jointly_solved_jsonl_sha256 = "d5885c82bf6aef029ac00f20cd9cb49589f74fd523f27fe6b76ff72221cb3253"
+endpoint_jsonl = "/private/tmp/sat-baselines-20260723/sparse-binary-activity-endpoints-repeat3.jsonl"
+endpoint_jsonl_sha256 = "9b6773082638d0767aa4e3af65dfa0b44cd4077cfc7ad200342e93b3d24f37d6"
+easy_jsonl = "/private/tmp/sat-baselines-20260723/sparse-binary-activity-easy-repeat11.jsonl"
+easy_jsonl_sha256 = "94d7488e52bc4827e731323f873f852201136859910e3b2562e9aed33ed5978a"
+treatment_proof = "/private/tmp/sat-baselines-20260723/sparse-binary-activity-6s268.drat"
+proof_sha256 = "a787ce78cf16cde3e314ad9b490908a5cbf5271b8560506862489aa8f993ae64"
+summary = "The sparse activity mapping preserved the intermediate solver's exact deterministic trajectories and byte-identical verified 6s268 proof. Against the original legacy representation, the combined packed design tied 3/8 validated two-second solves, passed every five-percent runtime ceiling, removed 3440708 more logical binary-storage bytes than the intermediate, and reduced newly measured median peak RSS from 323043328 to 277856256 bytes: an exact 13.987929 percent improvement."
+conclusion = "Promoted as the default representation. This is baseline engineering, not an algorithmic novelty claim. The next independent representation experiment may test variable-width watches, but must be separately preregistered and evaluated against this promoted baseline."
+
+[results.full_slice]
+legacy_solved = 3
+treatment_solved = 3
+sat_models = "all valid"
+status_disagreements = 0
+
+[results.jointly_solved]
+legacy_pooled_median_seconds = 0.645938709
+treatment_pooled_median_seconds = 0.634839166
+change_percent = -1.718359
+
+[results.jointly_solved.gm24sparrc]
+legacy_median_seconds = 0.327111459
+treatment_median_seconds = 0.326946666
+change_percent = -0.050378
+
+[results.jointly_solved.six299]
+legacy_median_seconds = 0.318827250
+treatment_median_seconds = 0.307892500
+change_percent = -3.429679
+
+[results.endpoints.break12]
+legacy_median_seconds = 3.458844958
+treatment_median_seconds = 3.204893416
+change_percent = -7.342091
+
+[results.endpoints.six268]
+legacy_median_seconds = 5.652083792
+treatment_median_seconds = 5.242890792
+change_percent = -7.239684
+
+[results.easy]
+legacy_pooled_median_seconds = 0.016547708
+treatment_pooled_median_seconds = 0.016511332
+change_percent = -0.219825
+
+[results.memory]
+instance = "6s268r_Iter94.cnf"
+legacy_maximum_resident_set_size_bytes = [323043328, 322682880, 323059712]
+treatment_maximum_resident_set_size_bytes = [277807104, 278642688, 277856256]
+legacy_median_bytes = 323043328
+treatment_median_bytes = 277856256
+savings_bytes = 45187072
+improvement_percent = 13.987929198
+gate = "passed without rounding"
+
+[results.storage_at_end_of_six268]
+stored_binary_clauses = 874367
+stored_long_clauses = 848585
+learned_binary_activity_values = 7095
+intermediate_binary_storage_bytes = 14864239
+treatment_binary_storage_bytes = 11423531
+binary_storage_savings_bytes = 3440708
+binary_storage_savings_percent = 23.147556
+long_storage_bytes = 42022568
+reason_storage_bytes = 1950032
+packed_logical_total_bytes = 55396131
+legacy_equivalent_storage_bytes = 84797376
+legacy_logical_improvement_percent = 34.672352
+
+[results.correctness]
+deterministic_counter_cases = ["gm24sparrc", "6s299b685_Iter22", "Break_12_50", "6s268r_Iter94"]
+deterministic_counter_mismatches = 0
+proof_bytes = 7984674
+proof_lines = 78479
+proof = "byte-identical to the intermediate proof; DRAT-trim VERIFIED the treatment"
+tests_before_documentation = "87 Rust tests passed after the sparse representation change"

@@ -1,0 +1,172 @@
+[experiment]
+id = "2026-07-23-bounded-variable-elimination"
+owner = "Codex"
+status = "complete"
+worktree_revision = "uncommitted initial worktree"
+
+[hypothesis]
+mechanism = "Replacing every active clause containing an unassigned pivot variable by its non-tautological positive/negative resolvents can remove variables and encoded definitions before CDCL search. A zero-growth bound limits formula expansion, while reverse reconstruction restores eliminated variables in SAT models."
+prediction = "On the frozen development slice, one bounded root pass will eliminate at least one variable, preserve validated two-second solved count, and either add one solved instance or improve the pooled repeated median of triggered nontrivial jointly solved cases by at least five percent without a greater-than-ten-percent per-instance or endpoint regression."
+falsification = "Reject default promotion unchanged if no variable is eliminated, the two-second solved count falls, neither the solved-count nor repeated-runtime alternative succeeds, any selected nontrivial case or hard endpoint regresses by more than ten percent, easy pooled overhead exceeds five percent, any reconstructed SAT model is invalid, or any emitted UNSAT proof fails DRAT-trim. Do not change limits or consume held-out data after observing results."
+
+[prior_art]
+checked = [
+  "Preprocessing in SAT Solving, Biere, Järvisalo, and Kiesl, Handbook of Satisfiability 2021, https://fmv.jku.at/papers/BiereJarvisaloKiesl-SAT-Handbook-2021-Preprocessing-Chapter-Manuscript.pdf",
+  "MiniSat 2 variable-elimination simplifier and model-extension stack, https://minisat.se/MiniSat.html",
+  "CaDiCaL 3.0.1 c60730422e758ef1cebe7aeddf2dda31c996bf04 src/elim.cpp and src/extend.cpp",
+  "Kissat 4.0.4 8af8e56f174b778aef3aa45af9f739b2a5f492c2 src/resolve.c and src/eliminate.c",
+]
+established = "Bounded variable elimination is established SAT preprocessing. Mature implementations bound added resolvents relative to removed clauses, cap occurrence and resolvent sizes, simplify under root assignments, reschedule affected variables, recognize definitions, combine elimination with subsumption, and save removed clauses for reverse model reconstruction."
+distinction = "This first Rust baseline is a single deterministic root round with zero permitted clause growth, no gate recognition, no duplicate-resolvent suppression, no subsumption coupling, and no later inprocessing. Its explicit goals are a trustworthy proof/model foundation and an isolated first performance measurement."
+novelty_status = "Baseline engineering only. No novelty claim."
+
+[policy]
+name = "one-pass zero-growth bounded variable elimination"
+schedule = "Run once after root propagation and every other optional root simplifier, before the first CDCL decision."
+index = "Build complete literal occurrence lists for all active non-learned arena clauses. New non-unit resolvents are appended to the same lists; deleted entries remain stale and are filtered lazily."
+candidates = "Snapshot every root-unassigned variable with at least one occurrence, sort by initial total occurrence count then variable index, and visit once. Pure variables are eligible regardless of count. A mixed-polarity pivot is eligible only when its current positive-plus-negative active occurrence count is at most 100."
+resolution = "Resolve every active positive occurrence with every active negative occurrence. Remove the pivot and root-false literals; ignore a pair if either antecedent is root-satisfied or the resolvent is tautological. Canonically sort each surviving resolvent by packed literal index. Count and install duplicate resolvents independently."
+growth = "Accept a pivot only when every surviving resolvent has at most 100 literals and the total number of surviving resolvents, including units or an empty clause, is at most the number of active pivot clauses removed. No additional clause growth is allowed."
+effort = "Charge each attempted pair by the sum of its two antecedent lengths. Stop the whole pass before a pair that would exceed min(1000000, initial active non-unit literal count); abandon the current uncommitted pivot."
+commit = "Proof-log and install every accepted resolvent before lazily deleting all active pivot clauses. Attach non-units as original clauses, enqueue units at level zero, then propagate once after the pivot is removed. Mark the eliminated pivot assigned to its saved phase without placing it on the trail so branching skips it."
+model = "For each eliminated variable, save all removed clauses and its pivot. On SAT, process elimination records in reverse order. If a saved clause is false on all non-pivot literals, set the pivot literal true; the installed resolvents guarantee that opposite requirements cannot coexist. Leave the saved-phase value when no clause requires a polarity."
+proof = "Each installed resolvent is RUP while both antecedents remain in the proof formula. The textual DRAT stream keeps removed clauses because deletion lines are still omitted; subsequent learned clauses derived from the weaker simplified formula remain implied by the retained stronger proof formula."
+rounds = 1
+default = "disabled until the promotion gate passes"
+
+[variants]
+control = "target/release/sat --no-eliminate --no-compact-arena --no-binary-minimize --no-subsume --no-vivify --no-probe"
+treatment = "target/release/sat --eliminate --no-compact-arena --no-binary-minimize --no-subsume --no-vivify --no-probe"
+compiler = "rustc stable with -C target-cpu=native and release fat LTO"
+
+[corpus]
+manifest = "benchmarks/manifests/satcomp-2025-development.json"
+role = "development"
+deduplication = "sha256"
+heldout_use = "none"
+
+[protocol]
+full_slice_timeout_seconds = 2
+full_slice_repetitions = 1
+jointly_solved_repetitions = 7
+jointly_solved_selection = "After the frozen full-slice run, repeat every development instance that either variant solves and whose control or treatment wall time is at least 0.1 seconds. Apply the per-instance ceiling to every selected case. The pooled triggered metric is the sum of per-instance medians over selected cases whose treatment eliminates at least one variable."
+endpoint_instances = ["Break_12_50.xml.cnf", "6s268r_Iter94.cnf"]
+endpoint_timeout_seconds = 25
+endpoint_repetitions = 3
+easy_overhead_repetitions = 11
+threads = 1
+order_seed = 20251103
+primary_metric = "validated solved count on the frozen eight-instance development slice at two seconds"
+secondary_metrics = [
+  "variables eliminated",
+  "resolution pairs and literal touches",
+  "clauses removed and resolvents installed",
+  "unit resolvents",
+  "saved extension clauses and literals",
+  "deterministic search conflicts",
+  "paired wall time",
+]
+stopping_rule = "Implement the frozen policy once, run model/proof correctness checks, then execute the declared development comparisons. Do not inspect held-out data, add definition recognition, suppress duplicate resolvents, or alter limits after observing outcomes."
+
+[correctness]
+unit_tests = "Exercise pure elimination, mixed-polarity resolution, tautological and root-satisfied pairs, root-false simplification, units, empty resolvents, size/count/effort rejection, stale occurrences, multiple elimination records, and reverse reconstruction requiring both pivot polarities in separate formulas."
+differential = "Add elimination to deterministic brute-force differential testing and validate every reconstructed SAT model against the original clauses."
+sat_model = "Retain a CLI SAT case whose emitted model changes an eliminated variable away from its saved phase and validate every original clause."
+unsat_proof = "Retain a proof containing an elimination resolvent and require independent DRAT-trim verification on a crafted case plus a real development UNSAT case if elimination emits resolvents there."
+disabled_overhead = "The default disabled path performs one configuration branch before search and allocates no occurrence or extension storage."
+
+[promotion_gate]
+development_solved_delta_minimum = 0
+development_eliminated_variables_minimum = 1
+performance_alternative = "Either treatment solves at least one more full-slice instance, or solved count ties and the pooled triggered repeated median improves by at least 5 percent."
+triggered_pooled_improvement_percent_minimum_if_tied = 5
+jointly_solved_max_regression_percent = 10
+endpoint_max_regression_percent = 10
+easy_overhead_max_percent = 5
+sat_model_validation_required = true
+proof_required_if_resolvents_emitted = true
+next_step = "If promoted, make this conservative pass the default and separately preregister definition-aware or relaxed-bound BVE. If rejected, retain the proof/model foundation only if useful and move to separate packed binary storage or another independent gap."
+
+[results]
+solver_binary_sha256 = "7c567511f43213362ea18b821f6db4ebbc33b84e003ebd53b4ff2d1d11d1827f"
+full_slice_jsonl = "/private/tmp/sat-baselines-20260723/bounded-variable-elimination-full-2s.jsonl"
+full_slice_jsonl_sha256 = "3cc30f375c61e5319d409426ec9311a3417df3e1c52cdfc9055bbc8dc0b3f55d"
+jointly_solved_jsonl = "/private/tmp/sat-baselines-20260723/bounded-variable-elimination-jointly-solved-repeat7.jsonl"
+jointly_solved_jsonl_sha256 = "f46e81d1abd9194d4f6dc4e79c3d8e4c0df5db29e740c44b7cc17bd53023e9ad"
+endpoint_jsonl = "/private/tmp/sat-baselines-20260723/bounded-variable-elimination-endpoints-repeat3.jsonl"
+endpoint_jsonl_sha256 = "32fb028cc9688d7c4db38100c8afeb3aec7da644436ed2272c495e78713621e6"
+easy_jsonl = "/private/tmp/sat-baselines-20260723/bounded-variable-elimination-easy-repeat11.jsonl"
+easy_jsonl_sha256 = "4b63beee8464023d766d2b3928ab40c4795341d4804c275ef7f31966c9121159"
+crafted_proof = "/private/tmp/sat-baselines-20260723/bounded-variable-elimination-smoke.drat"
+crafted_proof_sha256 = "0b3656acb6d108aec227d4fea92925a058ed8ef2f3be03210ac9fa1585d8110a"
+real_proof = "/private/tmp/sat-baselines-20260723/bounded-variable-elimination-gm24.drat"
+real_proof_sha256 = "d2e3f5a2ea5faec4f35d410cfa51a3fd70ef4b2e926f74c08dfb274ba2e36755"
+summary = "The pass tied the control at 3/8 validated two-second development solves and eliminated variables on every inspected nontrivial case. Both retained UNSAT proofs passed DRAT-trim and every emitted SAT model was valid. It nevertheless missed the performance alternative: the pooled repeated median over gm24 and 6s299 regressed 8.21 percent, 6s299 alone regressed 15.46 percent, and Break_12_50 regressed 336.86 percent. The same fixed policy improved 6s268 by 29.33 percent, demonstrating a strong family interaction rather than a safe default."
+conclusion = "Rejected unchanged as the default. Retain --eliminate as a proof-checked zero-growth BVE and model-extension baseline, but do not tune its bounds or selector on these revealed families. The next independent engineering gap is separate packed binary storage; any future selective, definition-aware, or repeated elimination policy requires a new preregistration and fresh evaluation data."
+
+[results.full_slice]
+control_solved = 3
+treatment_solved = 3
+sat_models = "all valid"
+status_disagreements = 0
+
+[results.jointly_solved]
+control_pooled_median_seconds = 0.621371958
+treatment_pooled_median_seconds = 0.672382208
+pooled_change_percent = 8.209294
+
+[results.jointly_solved.gm24sparrc]
+control_median_seconds = 0.309886125
+treatment_median_seconds = 0.312741583
+change_percent = 0.921454
+control_conflicts = 147
+treatment_conflicts = 113
+eliminated_variables = 342
+elimination_pairs = 146484
+elimination_literal_touches = 913116
+removed_clauses = 3406
+resolvents = 2547
+
+[results.jointly_solved.six299]
+control_median_seconds = 0.311485833
+treatment_median_seconds = 0.359640625
+change_percent = 15.459705
+control_conflicts = 3205
+treatment_conflicts = 3234
+eliminated_variables = 26340
+elimination_pairs = 167428
+elimination_literal_touches = 1000000
+removed_clauses = 127702
+resolvents = 80214
+
+[results.endpoints.break12]
+control_median_seconds = 3.203874625
+treatment_median_seconds = 13.996328083
+change_percent = 336.856298
+control_conflicts = 118557
+treatment_conflicts = 454296
+eliminated_variables = 1239
+removed_clauses = 4165
+resolvents = 3126
+
+[results.endpoints.six268]
+control_median_seconds = 5.354366000
+treatment_median_seconds = 3.783957125
+change_percent = -29.329502
+control_conflicts = 78479
+treatment_conflicts = 52849
+eliminated_variables = 51745
+removed_clauses = 198369
+resolvents = 94727
+
+[results.easy]
+control_pooled_median_seconds = 0.014648832
+treatment_pooled_median_seconds = 0.014769667
+change_percent = 0.824877
+
+[results.correctness]
+local_checks = "85 Rust tests plus 7 Python tests passed under make check"
+differential_formulas = 2000
+crafted_proof = "DRAT-trim VERIFIED; first lemma is the elimination resolvent 2 3 0"
+real_proof = "DRAT-trim VERIFIED on gm24sparrc; 2660 lines and 50411 bytes"
+model_reconstruction = "The CLI regression changes a pure eliminated pivot away from its saved phase; benchmark.py validated every SAT row against the original CNF."

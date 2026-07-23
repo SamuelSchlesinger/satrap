@@ -1,0 +1,6 @@
+c self-subsuming resolution derives unit 2 before root propagation conflicts
+p cnf 3 4
+1 2 0
+-1 2 0
+-2 3 0
+-2 -3 0

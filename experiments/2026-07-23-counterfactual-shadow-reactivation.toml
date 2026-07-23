@@ -1,0 +1,299 @@
+[experiment]
+id = "2026-07-23-counterfactual-shadow-reactivation"
+owner = "Codex"
+status = "complete; rejected unchanged; retained as a reproducible negative result"
+worktree_revision = "uncommitted worktree after sampled nonregular-retention"
+frozen_preregistration_sha256 = "ee56fe9376d2502808eff606842d6844025580c6c7954f4d292e4ac111a144cc"
+
+[amendment]
+time = "before any declared performance comparison"
+change = "Removed --no-factor from the promoted-control command only. The pinned control predates that option and rejected it; it also predates factoring itself, so removal makes the command executable without changing control semantics. The treatment retains --no-factor. No mechanism, constant, corpus, metric, threshold, or stopping rule changed."
+discovery = "The invalid option was found while running the preregistered disabled-equivalence check."
+
+[implementation]
+treatment_binary = "/private/tmp/sat-baselines-20260723/sat-counterfactual-shadow-reactivation"
+treatment_binary_sha256 = "a6e351ec6c76380f661461670eecfd2e95a1e01840322b7975b6592aa2076ec7"
+treatment_binary_bytes = 712800
+control_binary_sha256 = "ff29d62f9f74f5923905f465988d01e4a14651a42bcc6e4a09c4deb9669d1232"
+solver_source_sha256 = "2d3b3ced4c23dda738ac393254883e48a02b4b2569ef5096a088790d2e94c2e4"
+main_source_sha256 = "d37a544b222c3ed532d5d40f6017c5c79db159734f06f1c7bd05a3bf461948d8"
+differential_test_sha256 = "490818fa822885bb77b81c7bf34699e8c774f773893e87c942a65e69da90583c"
+cli_test_sha256 = "e5ef3fd2be094e56f93f89063487287ed068eb41c230c9471236b7059a3a0687"
+compiler = "rustc 1.97.0 (2d8144b78 2026-07-07), aarch64-apple-darwin, LLVM 22.1.6"
+checks = "make check passed: rustfmt, clippy -D warnings, 104 library tests, 19 CLI-parser tests, 16 process-level CLI tests, 8 integration tests including 2000-formula differential coverage, and 7 Python tests"
+disabled_equivalence = "Passed on 6s268 against the pinned promoted control: UNSAT status and all 99 common deterministic counters were exact. Both had 42363 decisions, 5893854 propagations, 5551 conflicts, 28 restarts, 5517 learned clauses, 52491 learned literals, 1577 permanent deletions, and 4 reductions. All 14 new shadow counters were zero when disabled."
+real_exercise = "Pigeonhole 8 into 7 exercised the release-equivalent mechanism: 6 shadows started, peak 6, 880 shadow watch visits, 3618 shadow literal checks, 1 unit trigger, 1 reactivation, 5 expiries, 6 effective removals, and 1716 summed observation conflicts. It completed UNSAT with 5599 decisions, 68797 propagations, 5022 conflicts, 27 restarts, and 3 reductions. This is a correctness and mechanism diagnostic, not a declared performance result."
+
+[boundary]
+training_derived = true
+statement = "The SAT Competition development corpus and every existing local held-out slice have already been revealed. They may falsify this mechanism and qualify it for a later new outcome-blind corpus, but they cannot establish generalization, novelty, priority, state-of-the-art performance, or a previously-unsolved claim."
+heldout_use = "none"
+default_promotion = "not authorized from this experiment"
+
+[hypothesis]
+mechanism = "Ordinary clause-management scores predict future utility from a clause's past or structure, while deletion removes the evidence needed to tell whether that prediction was wrong. Keep a tiny deterministic subset of clauses selected for deletion attached as noncausal shadows. A shadow updates its watches but never propagates or conflicts. If it becomes unit or false under the actual subsequent search, that is exact counterfactual evidence that the deleted clause would have been used. Delayed root-boundary reactivation lets the next epoch benefit from that evidence without contaminating the epoch that measured it."
+prediction = "At least one shadow clause will generate a real would-propagate or would-conflict event and be reactivated. The treatment will preserve the promoted solver's 5/8 two-second development coverage and either add a solve or improve the repeated sum of jointly solved per-instance medians by at least five percent, while staying within the frozen per-case, endpoint, easy-overhead, correctness, and determinism ceilings."
+falsification = "Reject the frozen treatment if no shadow triggers; no clause is reactivated; development coverage falls; it neither adds a development solve nor improves the qualifying repeated aggregate by five percent; any repeated development or endpoint case regresses more than twenty percent; easy overhead exceeds five percent; observation changes the logical search before a scheduled reactivation; or any model, proof, differential, watch-invariant, metadata, accounting, or determinism check fails. Do not tune capacity, horizon, rank, trigger semantics, delayed activation, restored score, reducer, schedule, or thresholds after observing results."
+
+[prior_art]
+freezing = "Audemard, Lagniez, Mazure, and Sais, On Freezing and Reactivating Learnt Clauses, SAT 2011, pages 188-200, https://doi.org/10.1007/978-3-642-21581-0_14"
+freezing_mechanism = "That work detaches learned clauses and reactivates them from a progress-saving polarity measure. Freezing, reactivation, phase-based relevance, and active/frozen/dead clause states are established."
+triggered_import = "Prevot, Soos, and Meel, Leveraging GPUs for Effective Clause Sharing in Parallel SAT Solving, SAT 2021, https://arxiv.org/abs/2012.03119"
+triggered_import_mechanism = "GpuShareSat tests absent remote clauses against assignment snapshots and imports a clause that would have propagated or conflicted. The counterfactual trigger predicate and its recent-utility motivation are established."
+prioritized_propagation = "Fleury and Schidler, Prioritised Unit Propagation by Partitioning the Watch Lists, Pragmatics of SAT 2023, https://ceur-ws.org/Vol-3545/paper2.pdf"
+duplicate_retention = "Kochemazov et al., Speeding Up CDCL Inference with Duplicate Learnt Clauses, ECAI 2020, https://doi.org/10.3233/FAIA200111"
+causal_analysis = "Yang, Shaw, Baluta, Soos, and Meel, Explaining SAT Solving Using Causal Reasoning, SAT 2023, https://doi.org/10.4230/LIPIcs.SAT.2023.28"
+usage_control = "Cai, Zhang, Shi, Tao, and Xu, Rethinking Clause Management for CDCL SAT Solvers, arXiv:2602.20829v2, https://arxiv.org/pdf/2602.20829"
+established = "Clause freezing/reactivation, phase-based relevance, active/inactive propagation partitions, duplicate-relearned-clause protection, offline causal utility analysis, recent-use retention, and would-propagate/would-conflict tests for remote clause import are established and are not claimed here."
+distinction = "The proposed treatment neither predicts reactivation from phase, imports another worker's clause, permanently stores duplicates, changes propagation priority, nor estimates effects offline. It takes clauses that this same sequential solver has just selected for deletion, observes a bounded deterministic subset inline under the solver's exact future assignments while preventing those clauses from influencing that observation epoch, and feeds a real trigger back only after a delayed root boundary. A targeted primary-source and pinned-source search found no exact collision for this local deletion-regret loop."
+novelty_status = "Provisional candidate contribution only. The ingredients have close prior art and their combination may be obvious or implemented elsewhere. No novelty or priority claim is authorized without a broader scholarly and solver-source audit plus successful untouched evaluation."
+
+[policy]
+name = "counterfactual shadow-clause reactivation"
+flag = "--shadow-reactivation"
+disable_flag = "--no-shadow-reactivation"
+default = "disabled"
+requires = "the promoted LBD-free clause-management policy, root restarts, and ordinary search propagation"
+incompatible = "--scan-debt-reduction, --nonregular-retention, and any non-root trail-reuse policy"
+capacity = 64
+minimum_observation_conflicts = 256
+selection = "At each LBD-free reduction, first compute the exact promoted locks, positive-score protections, zero-score deletion order, schedule, and quota. Among clauses the control would delete, fill unused shadow capacity with the lowest deterministic ranks; every unselected clause is deleted exactly as in the control. Rank clause reference c in one-indexed reduction r by SplitMix64(c xor (r shifted left 32)), breaking ties by c. A shadow leaves the active database and active-learned count immediately, so the active deletion quota is unchanged."
+accounting = "Shadow clauses are ineligible for later reductions and cannot be locked because they never become reasons. active_learned_clauses decreases when a clause is shadowed and increases only on reactivation. The existing deleted_clauses counter continues to count permanent deletion: it increments immediately for ordinary deletions and only at expiry for an untriggered shadow. New effective_removals and reactivations counters expose the active-database transitions without redefining the legacy statistic."
+storage = "Only when enabled, allocate one u8 state and one u64 start-conflict entry aligned with each long ClauseRef plus a vector of at most 64 current shadow references. Learned binaries are permanent and ineligible. Do not expand Clause, binary storage, Watch, reason, or literal records."
+states = "A long clause is active, observing-shadow, triggered-shadow, or deleted. The optional side state is authoritative; the existing deleted bit remains false for both shadow states so their ordinary watch entries survive."
+observation = "During ordinary search BCP only, process an observing or triggered shadow's two watches exactly as an active long clause would: blocker test, other-watch test, replacement scan, and stable watch movement. It never enqueues a literal, returns a conflict, becomes a reason, increments clause usage or activity, participates in conflict analysis, or changes any branching/restart statistic. On the first state with every literal false, mark conflict-triggered; on the first state with exactly one unassigned literal and all others false, mark unit-triggered. A triggered shadow continues maintaining its watches but further events do not change policy."
+noncausality = "Until reactivation, shadow processing may consume time and move only that clause's watches, but it must not change assignments, active-clause relative watch order, decisions, propagations, conflicts, learned clauses, restarts, reductions, or any pre-existing deterministic counter."
+lifetime = "A shadow becomes eligible for finalization only after at least 256 subsequent analyzed conflicts. Finalize all eligible shadows at the first later restart that backtracks to level zero. A root restart before the horizon leaves them shadowed. If the solver finishes first, shadows never affect its logical result."
+finalization = "At an eligible root boundary, permanently delete every untriggered shadow. Reactivate every triggered shadow, restore its active-learned count, and set its promoted usage score to exactly one. Scan each reactivated clause under the root assignment before the next decision: enqueue a root unit with that clause as reason, record a deferred root conflict if false, and otherwise leave its maintained watches attached. Complete ordinary root propagation before selecting another decision."
+proof = "Shadowing and reactivation do not change the formula: every shadow is an already logged RUP learned clause, and the current textual DRAT writer emits no deletion steps. Therefore no proof record is needed for either state transition. If proof deletion logging is introduced later, reactivation must first re-add the clause as RUP."
+quota = "At a fixed reduction state, active clauses removed from propagation equal the promoted control's exact deletion count. Shadow capacity changes only whether up to 64 of those inactive clauses retain noncausal observation metadata and may return in a later epoch."
+diagnostics = "Report clauses shadowed, active shadow peak, shadow watch visits, shadow literal checks, unit triggers, conflict triggers, reactivated clauses, expired untriggered clauses, root units, root conflicts, capacity skips, and conflicts from selection to finalization."
+everything_else = "Keep the promoted usage-score initialization and increments, 2048-conflict decay, reduction schedule and fractions, EVSIDS, Luby root restarts, chronological backtracking, phase saving, proof logging, model reconstruction, minimization, propagation, preprocessing defaults, and every unrelated policy unchanged."
+
+[variants]
+control = "/private/tmp/sat-baselines-20260723/sat-promoted-lbd-free-clause-management --search=evsids --restart=luby --reuse-trail=never --no-rephase --no-tiers --no-eliminate --no-compact-arena --no-binary-minimize --no-subsume --no-vivify --no-probe"
+control_sha256 = "ff29d62f9f74f5923905f465988d01e4a14651a42bcc6e4a09c4deb9669d1232"
+treatment = "/private/tmp/sat-baselines-20260723/sat-counterfactual-shadow-reactivation --shadow-reactivation --search=evsids --restart=luby --reuse-trail=never --no-rephase --no-tiers --no-eliminate --no-compact-arena --no-binary-minimize --no-subsume --no-vivify --no-probe --no-factor"
+compiler = "rustc stable with -C target-cpu=native and release fat LTO"
+
+[corpus.development]
+manifest = "benchmarks/manifests/satcomp-2025-development.json"
+role = "revealed development and mechanism falsification"
+instances = 8
+
+[corpus.easy]
+directory = "benchmarks/smoke"
+role = "overhead and correctness smoke corpus"
+instances_at_preregistration = 10
+
+[protocol]
+development_timeout_seconds = 2
+development_repetitions = 1
+jointly_solved_repetitions = 7
+jointly_solved_selection = "Freeze every case solved by both variants in the first declared pass before repeats; do not select on treatment speedup."
+endpoint_instances = ["Break_12_50.xml.cnf", "6s268r_Iter94.cnf"]
+endpoint_timeout_seconds = 25
+endpoint_repetitions = 3
+easy_repetitions = 11
+threads = 1
+order_seed = 2026072308
+primary_metric = "validated development solved count, then sum of repeated per-instance medians over the frozen jointly solved set"
+secondary_metrics = [
+  "per-instance medians and endpoint medians",
+  "decisions, propagations, conflicts, restarts, learned literals, reductions, and deletions",
+  "all shadow selection, observation, trigger, finalization, and root-effect counters",
+  "easy aggregate overhead",
+]
+stopping_rule = "Implement the frozen mechanism once, complete unit and differential checks, freeze the binary, and execute every declared comparison. Do not consume any existing heldout manifest, change constants, or tune from treatment results."
+
+[correctness]
+unit = "Test deterministic rank and capacity; exact promoted active-deletion quota; active/shadow/deleted state transitions; binary and locked exclusions; blocker, replacement, unit, and conflict shadow scans; no enqueue/conflict/use/activity side effect while shadowed; minimum horizon; root-only finalization; triggered reactivation; untriggered expiry; restored score exactly one; root unit/conflict handling; optional metadata; lazy watch cleanup; and compaction rejection or alignment."
+differential = "Extend the deterministic 2000-formula brute-force suite with --shadow-reactivation and every supported combination, requiring exact SAT/UNSAT agreement and original-formula model validation."
+models = "Independently validate every SAT model emitted in all benchmark passes."
+proof = "Emit a treatment DRAT proof for a real completed UNSAT development instance that exercises both trigger and reactivation, and require independent DRAT-trim verification against the original CNF."
+disabled_equivalence = "The modified binary with --no-shadow-reactivation must reproduce the frozen promoted deterministic trajectory and all existing counters on 6s268."
+determinism = "Repeated treatment executions must have identical result, search counters, and shadow counters after excluding solve_seconds."
+noncausality = "A unit harness and at least one real diagnostic must compare a shadow-observation prefix against a control forced to stop before first eligible finalization; every pre-existing logical/search counter and learned clause must match exactly."
+metadata = "Side arrays must remain aligned with stable long ClauseRefs, stay empty when disabled, and never leave a live shadow locked as a reason. Physical arena compaction is incompatible in the first experiment."
+exercise = "Require at least one shadow, one unit or conflict trigger, one eligible finalization, one reactivation, and one untriggered expiry on a nontrivial real instance."
+
+[promotion_gate]
+development_solved_minimum = 5
+qualifying_improvement = "Either treatment solves more development cases than control, or equal coverage accompanies at least a five-percent improvement in the frozen jointly solved aggregate."
+jointly_solved_improvement_percent_minimum_if_tied = 5
+development_repeated_max_regression_percent = 20
+endpoint_max_regression_percent = 20
+easy_overhead_max_percent = 5
+trigger_required = true
+reactivation_required = true
+untriggered_expiry_required = true
+pre_reactivation_noncausality_required = true
+disabled_trajectory_exact_required = true
+deterministic_treatment_reproducibility_required = true
+sat_model_validation_required = true
+proof_validation_required = true
+next_step = "If every gate passes, retain the mode as an opt-in candidate, broaden the prior-art and source audit, and construct a new license-compatible outcome-blind family-stratified corpus before any default or research claim. If rejected, preserve the preregistration and result and do not tune this shadow policy on revealed families."
+
+[results]
+summary = "Rejected unchanged. Counterfactual observation worked and gave exact noncausal evidence, but delayed reactivation was harmful on the only development family where it affected search. Treatment lost the two-second Break_12_50 solve, regressed the repeated jointly solved aggregate 11.418580 percent, regressed gm24 28.787681 percent from observation overhead alone, and regressed the Break endpoint 250.078711 percent after five reactivations drove conflicts from 37717 to 100740. Easy overhead was only 0.649638 percent, every emitted SAT model validated, the disabled path was exact, deterministic counters repeated exactly, and an exercised pigeonhole proof independently verified. The designated proof gate still failed because neither completed UNSAT development instance exercised a trigger and reactivation."
+conclusion = "Do not promote, tune, or evaluate this frozen shadow policy on another revealed corpus. Preserve the implementation behind --shadow-reactivation as a negative causal diagnostic: the experiment shows that would-propagate evidence is real but is not by itself evidence that restoring the clause improves the future search."
+
+[results.artifacts]
+development = "/private/tmp/sat-baselines-20260723/shadow-reactivation-development-2s.jsonl"
+development_sha256 = "a424fa56275cb65aae50bc521f7e8fb4d87f7f3beeb3fb7af044c69da7474b03"
+development_rows = 16
+jointly_solved = "/private/tmp/sat-baselines-20260723/shadow-reactivation-development-jointly-solved-repeat7.jsonl"
+jointly_solved_sha256 = "cec4192b0ee0e53f324e4ab94e65b6738e8a7f12fafe216082c3b506e8b17b31"
+jointly_solved_rows = 56
+endpoints = "/private/tmp/sat-baselines-20260723/shadow-reactivation-endpoints-repeat3.jsonl"
+endpoints_sha256 = "44a7a068af35a28023fce9ccb9c4f83c89759f937a1552404bca695c078f7a4e"
+endpoints_rows = 12
+easy = "/private/tmp/sat-baselines-20260723/shadow-reactivation-easy-repeat11.jsonl"
+easy_sha256 = "2dff91fac788943a495553ff67d127af698743c3e04de83e7e3892da40b7e1a9"
+easy_rows = 220
+bubble_diagnostic = "/private/tmp/sat-baselines-20260723/shadow-reactivation-bubble-diagnostic.jsonl"
+bubble_diagnostic_sha256 = "99c485fb8eaed605b3482c50e39af5541f5369a1e8fd2e97c62408a33afc8012"
+
+[results.development]
+control_solved = 5
+treatment_solved = 4
+control_sat = 3
+control_unsat = 2
+treatment_sat = 2
+treatment_unsat = 2
+lost_case = "Break_12_50.xml.cnf: control SAT in 1.330696125 seconds; treatment timed out at two seconds"
+jointly_solved = ["gm24sparrc", "Break_triple_04_06", "6s268r_Iter94", "6s299b685_Iter22"]
+sat_model_validation = "valid for every completed SAT run"
+
+[results.jointly_solved]
+control_sum_of_medians_seconds = 1.587973708
+treatment_sum_of_medians_seconds = 1.769297750
+treatment_change_percent = 11.418580
+
+[results.jointly_solved.gm24sparrc]
+control_median_seconds = 0.444715833
+treatment_median_seconds = 0.572739208
+treatment_change_percent = 28.787681
+
+[results.jointly_solved.Break_triple_04_06]
+control_median_seconds = 0.003175500
+treatment_median_seconds = 0.003542375
+treatment_change_percent = 11.553299
+
+[results.jointly_solved.s6_268]
+control_median_seconds = 0.717496000
+treatment_median_seconds = 0.767156625
+treatment_change_percent = 6.921380
+
+[results.jointly_solved.s6_299]
+control_median_seconds = 0.422586375
+treatment_median_seconds = 0.425859542
+treatment_change_percent = 0.774556
+
+[results.endpoints.Break_12_50]
+control_median_seconds = 1.293581875
+treatment_median_seconds = 4.528554750
+treatment_change_percent = 250.078711
+control_status = "SAT"
+treatment_status = "SAT"
+models = "all six endpoint models valid"
+
+[results.endpoints.s6_268]
+control_median_seconds = 0.620544958
+treatment_median_seconds = 0.650017250
+treatment_change_percent = 4.749421
+control_status = "UNSAT"
+treatment_status = "UNSAT"
+
+[results.easy]
+control_sum_of_medians_seconds = 0.019029999909
+treatment_sum_of_medians_seconds = 0.019153625995
+treatment_overhead_percent = 0.649638
+statuses = "all 220 runs agreed; all 22 SAT models valid"
+
+[results.mechanism.Break_12_50]
+control_decisions = 210071
+treatment_decisions = 464857
+control_propagations = 20630050
+treatment_propagations = 60810541
+control_conflicts = 37717
+treatment_conflicts = 100740
+control_restarts = 125
+treatment_restarts = 254
+control_learned_clauses = 37717
+treatment_learned_clauses = 100740
+control_learned_literals = 5397124
+treatment_learned_literals = 17440389
+shadow_clauses_started = 1600
+shadow_active_peak = 64
+shadow_watch_visits = 104729
+shadow_literal_checks = 444486
+shadow_unit_triggers = 6
+shadow_conflict_triggers = 0
+shadow_reactivated_clauses = 5
+shadow_expired_clauses = 1531
+shadow_live_at_completion = 64
+shadow_capacity_skips = 72830
+shadow_effective_removals = 74430
+shadow_observation_conflicts = 1396736
+
+[results.mechanism.gm24sparrc]
+logical_trajectory = "exact: both variants had 233 decisions, 4252492 propagations, 147 conflicts, 1 restart, 140 learned clauses, and no reduction"
+shadow_clauses_started = 0
+shadow_metadata_bytes = 2740428
+interpretation = "The repeated 28.787681 percent regression came from enabled-path state allocation and hot watch-path checks, not changed search."
+
+[results.mechanism.s6_268]
+logical_trajectory = "exact: both variants had 42363 decisions, 5893854 propagations, 5551 conflicts, 28 restarts, 5517 learned clauses, 52491 learned literals, and 4 reductions"
+shadow_clauses_started = 128
+shadow_watch_visits = 53
+shadow_literal_checks = 160
+shadow_unit_triggers = 0
+shadow_conflict_triggers = 0
+shadow_reactivated_clauses = 0
+shadow_expired_clauses = 64
+shadow_live_at_completion = 64
+shadow_capacity_skips = 1449
+shadow_effective_removals = 1577
+shadow_observation_conflicts = 18304
+shadow_metadata_bytes = 7044668
+
+[results.correctness]
+make_check = "passed after implementation"
+differential = "passed all 2000 generated formulas with original-formula SAT model validation"
+disabled_equivalence = "passed: UNSAT and all 99 shared deterministic counters exact on 6s268; all 14 new counters zero"
+determinism = "passed: two pigeonhole-8-7 runs and two 6s268 runs each matched status and all 140 non-time counters exactly"
+real_noncausality_formula = "pigeonhole 8 into 7 plus root unit -32; generated as the standard 372-clause formula followed by -32 0, with header p cnf 56 373"
+real_noncausality_formula_sha256 = "5d0e39b5a3901628ca1d9ffc926853b66508436fda285c9fea0567e62dca73f3"
+real_noncausality = "passed before any eligible finalization: control and treatment both completed UNSAT with 4066 decisions, 48195 propagations, 3643 conflicts, 18 restarts, 3638 learned clauses, 58249 learned literals, and 3 reductions; all 97 comparable pre-existing non-accounting counters were exact. Treatment observed 10 shadows, 1226 shadow watch visits, 5038 literal checks, and 2 unit triggers, with zero reactivations and expiries. As preregistered, permanent-deletion accounting differed by 10 and optional metadata differed."
+
+[results.correctness.proof]
+designated_development_gate = "failed: gm24 completed with zero reductions and zero shadows; 6s268 completed with 128 shadows but zero triggers and zero reactivations; BubbleVsPancake timed out in a 60-second diagnostic. No completed UNSAT development case exercised both a trigger and reactivation."
+substitute_instance = "pigeonhole 8 into 7; exercises one unit trigger, one reactivation, and five expiries"
+formula = "/private/tmp/sat-baselines-20260723/pigeonhole-8-7.cnf"
+formula_sha256 = "0b574cad05abea81c485773a9db2c5bb6c76f0065a3992df4f49a00beee022b3"
+proof = "/private/tmp/sat-shadow-reactivation-pigeonhole-8-7.drat"
+proof_sha256 = "fecb24ff6db88c89ff3b99d3d98afe618f9b484a30aa86bb26a6d7a935b6f52b"
+proof_bytes = 240386
+proof_lines = 5022
+checker = "/private/tmp/sat-baselines-20260723/drat-trim/drat-trim"
+checker_sha256 = "5f4364b92e251e141bb7e70465389565168251865698ee45644cc1f1aa95957c"
+checker_commit = "2e5e29cb3f9ebe8636a3e173ad3475583712ec20"
+command = "drat-trim pigeonhole-8-7.cnf sat-shadow-reactivation-pigeonhole-8-7.drat -f -W"
+result = "s VERIFIED; 4898 of 5023 lemmas in core, 78026 resolution steps, 0 RAT lemmas; strict forward verification in 0.093 seconds"
+
+[results.gates]
+development_solved_minimum = "failed: 4 < 5"
+qualifying_improvement = "failed: coverage fell and the repeated aggregate regressed 11.418580 percent"
+development_repeated_max_regression = "failed: gm24 regressed 28.787681 percent > 20 percent"
+endpoint_max_regression = "failed: Break_12_50 regressed 250.078711 percent > 20 percent"
+easy_overhead = "passed: 0.649638 percent < 5 percent"
+trigger = "passed on the declared development treatment through Break_12_50"
+reactivation = "passed on the declared development treatment through Break_12_50"
+untriggered_expiry = "passed"
+pre_reactivation_noncausality = "passed"
+disabled_trajectory = "passed"
+determinism = "passed"
+sat_models = "passed"
+proof_validation = "failed as designated; substitute exercised proof independently verified"
+overall = "rejected unchanged"

@@ -1,0 +1,165 @@
+[experiment]
+id = "2026-07-23-binary-resolution-minimization"
+owner = "Codex"
+status = "complete"
+worktree_revision = "uncommitted initial worktree"
+
+[hypothesis]
+mechanism = "After ordinary recursive first-UIP minimization, an active binary clause containing the asserting literal can resolve away the complementary learned literal. Scanning only that asserting literal's packed watch list gives a cheap one-hop binary-implication-graph minimizer without another propagation pass."
+prediction = "On the frozen development slice, one-hop binary resolution will remove at least one additional learned literal, preserve the two-second solved count, and avoid a greater-than-ten-percent repeated median regression on every nontrivial jointly solved development instance and both hard endpoints."
+falsification = "Reject default promotion unchanged if no binary-resolution literal is removed, the two-second solved count falls, any repeated nontrivial jointly solved development case or hard endpoint regresses by more than ten percent, easy pooled overhead exceeds five percent, a SAT model is invalid, or an emitted UNSAT proof fails DRAT-trim. Do not tune eligibility or consume held-out data after outcomes are observed."
+
+[prior_art]
+checked = [
+  "MapleCOMSPS_LRB core/Solver.cc binResMinimize, as preserved at https://github.com/hjwdzh/QuadriFlow/blob/master/3rd/MapleCOMSPS_LRB/core/Solver.cc",
+  "Clause vivification by unit propagation in CDCL SAT solvers, Li et al., Artificial Intelligence 279 (2020), https://home.mis.u-picardie.fr/~cli/clauseVivificationPublishedVersion.pdf",
+  "Minimizing Learned Clauses, Sörensson and Biere, SAT 2009",
+  "CaDiCaL 3.0.1 src/minimize.cpp and Kissat 4.0.4 src/minimize.c at the pinned local revisions",
+]
+established = "Recursive implication-graph minimization and the additional one-hop binary-resolution pass on short low-LBD learned clauses are established SAT techniques."
+distinction = "The existing solver already performs recursive reason-graph minimization. This experiment adds only the separate Glucose/Maple-style direct binary-resolution pass; it does not add transitive binary reachability, clause vivification, hyper-binary resolution, or repeated inprocessing."
+novelty_status = "Baseline engineering only. No novelty claim."
+
+[policy]
+name = "one-hop asserting-literal binary-resolution minimization"
+schedule = "Run after recursive learned-clause minimization and before backtrack-level selection for every first-UIP clause."
+eligibility = "Only learned clauses of length 2 through 30 whose post-recursive-minimization LBD is at most 6."
+marking = "Mark the variables in learned positions 1 onward for one epoch; the asserting literal at position 0 is never removable."
+scan = "Traverse the current packed watch list of the asserting literal exactly once. Ignore deleted clauses and non-binary watches. For every active binary clause (asserting OR q), remove learned literal not-q if present. Deduplicate removals by clearing its epoch mark."
+proof = "Log only the final learned clause. Resolving the first-UIP clause successively with the participating binary clauses preserves RUP; no proof deletion is needed."
+reachability = "No transitive closure, recursive binary DFS, newly generated binary clauses, or retry after the first scan."
+default = "disabled until the promotion gate passes"
+
+[variants]
+control = "target/release/sat --no-binary-minimize --no-subsume --no-vivify --no-probe"
+treatment = "target/release/sat --binary-minimize --no-subsume --no-vivify --no-probe"
+compiler = "rustc stable with -C target-cpu=native and release fat LTO"
+
+[corpus]
+manifest = "benchmarks/manifests/satcomp-2025-development.json"
+role = "development"
+deduplication = "sha256"
+heldout_use = "none"
+
+[protocol]
+full_slice_timeout_seconds = 2
+full_slice_repetitions = 1
+jointly_solved_repetitions = 7
+jointly_solved_selection = "After the frozen full-slice run, repeat every development instance that either variant solves and whose control or treatment wall time is at least 0.1 seconds. Apply the per-instance ceiling to each repeated median; do not select by treatment direction."
+endpoint_instances = ["Break_12_50.xml.cnf", "6s268r_Iter94.cnf"]
+endpoint_timeout_seconds = 25
+endpoint_repetitions = 3
+easy_overhead_repetitions = 11
+threads = 1
+order_seed = 20251001
+primary_metric = "validated solved count on the frozen eight-instance development slice at two seconds"
+secondary_metrics = [
+  "eligible learned clauses",
+  "binary watch entries inspected",
+  "binary-resolution literals removed",
+  "final learned literals and LBD",
+  "deterministic conflicts",
+  "paired wall time",
+]
+stopping_rule = "Implement the frozen policy once, run correctness and proof checks, then execute the declared development comparisons. Do not inspect held-out data or change the policy after observing results."
+
+[correctness]
+unit_tests = "Exercise one and multiple removals, both polarities, unit production, nonmatching complements, deleted and non-binary watches, duplicate binary reasons, and the size/LBD eligibility boundary."
+differential = "Add binary-resolution minimization to deterministic brute-force differential testing and validate every SAT model against the original clauses."
+unsat_proof = "Retain a proof whose search removes at least one literal by binary resolution and require independent DRAT-trim verification on a crafted case plus a real development UNSAT case if the mechanism triggers there."
+storage = "Use an epoch-mark vector sized with the variable arrays; allocate no per-conflict set or graph."
+disabled_overhead = "The disabled path is one configuration branch after recursive minimization and performs no mark or watch scan."
+
+[promotion_gate]
+development_solved_delta_minimum = 0
+development_binary_literals_removed_minimum = 1
+jointly_solved_max_regression_percent = 10
+endpoint_max_regression_percent = 10
+easy_overhead_max_percent = 5
+proof_required_if_triggered = true
+next_step = "If promoted, make the one-hop pass the default and separately preregister bounded transitive binary reachability. If rejected, retain the switch and move to another independently gated baseline gap such as physical arena compaction or variable elimination."
+
+[results]
+solver_binary_sha256 = "9ef09dadeae2b10f93dc7ce15c9821a70b2bc9d7e24a9ea5965ed1642ef1af83"
+full_slice_jsonl = "/private/tmp/sat-baselines-20260723/binary-resolution-minimization-full-2s.jsonl"
+full_slice_jsonl_sha256 = "225d675774cb5779c4072b3bfa45880b5c8d6834dbe8e5d7517f23a64d7c1987"
+jointly_solved_jsonl = "/private/tmp/sat-baselines-20260723/binary-resolution-minimization-jointly-solved-repeat7.jsonl"
+jointly_solved_jsonl_sha256 = "be7dd84670b7a1125b47fa106d6b524f3b3c22f9ba7cdd61a3c5fb38a4a8860e"
+endpoint_jsonl = "/private/tmp/sat-baselines-20260723/binary-resolution-minimization-endpoints-repeat3.jsonl"
+endpoint_jsonl_sha256 = "58cfd4c45b2a1d16d24203c9952d8c1e4ac2d6daacc94134c0d21925495b3f47"
+easy_jsonl = "/private/tmp/sat-baselines-20260723/binary-resolution-minimization-easy-repeat11.jsonl"
+easy_jsonl_sha256 = "a04cca201b10adce11543f94460f7b03b87526e8a329f47e5b20ad1b6afdd2cd"
+summary = "The direct binary-resolution pass preserved the 3/8 two-second solved count, validated every SAT model, removed learned literals on real instances, passed both repeated jointly-solved cases, stayed below the easy-overhead ceiling, and emitted independently verified proofs. It improved 6s299 by 14.5 percent and moved gm24 by only 1.0 percent. It nevertheless failed both preregistered hard endpoints: 69 removals increased Break from 3.320 to 4.435 seconds, and 6,263 removals increased 6s268 from a 5.365-second control median to three 25-second timeouts."
+conclusion = "Rejected unchanged as the default because both hard endpoints exceeded the frozen ten-percent regression ceiling. Retain --binary-minimize as a proof-checked baseline capability. This established one-hop Glucose/Maple mechanism is useful on 6s299 but catastrophically changes the deterministic 6s268 trajectory, raising conflicts from 78,479 to 484,878 in the completed direct run. Do not tune the length/LBD gate or inspect held-out data; move to a separately gated baseline gap."
+
+[results.full_slice]
+control_solved = 3
+treatment_solved = 3
+sat_models = "all valid"
+status_disagreements = 0
+
+[results.jointly_solved.gm24sparrc]
+control_median_seconds = 0.306656
+treatment_median_seconds = 0.309821
+treatment_regression_percent = 1.03
+control_conflicts = 147
+treatment_conflicts = 147
+treatment_eligible_clauses = 52
+treatment_watch_visits = 4122
+treatment_binary_minimized_literals = 0
+
+[results.jointly_solved.sixs299]
+control_median_seconds = 0.308561
+treatment_median_seconds = 0.263798
+treatment_improvement_percent = 14.51
+control_conflicts = 3205
+treatment_conflicts = 3242
+treatment_eligible_clauses = 2534
+treatment_watch_visits = 186477
+treatment_binary_minimized_literals = 29
+
+[results.endpoints.break12]
+control_median_seconds = 3.320217
+treatment_median_seconds = 4.434869
+treatment_regression_percent = 33.57
+control_conflicts = 118557
+treatment_conflicts = 147185
+treatment_eligible_clauses = 14539
+treatment_watch_visits = 182413
+treatment_binary_minimized_literals = 69
+
+[results.endpoints.sixs268]
+control_median_seconds = 5.364950
+control_status = "UNSAT in all three runs"
+treatment_status = "TIMEOUT in all three 25-second runs"
+control_conflicts = 78479
+treatment_completed_direct_seconds = 29.243862
+treatment_completed_direct_conflicts = 484878
+treatment_eligible_clauses = 316704
+treatment_watch_visits = 12065100
+treatment_binary_minimized_literals = 6263
+
+[results.easy_overhead]
+control_pooled_median_seconds = 0.001898500
+treatment_pooled_median_seconds = 0.001914833
+delta_percent = 0.86
+worst_instance_delta_percent = 3.19
+interpretation = "process-launch noise dominates; below the preregistered ceiling"
+
+[results.drat.sixs268]
+instance = "0e36fa2e12f32cde67937803299fb57b-6s268r_Iter94.cnf"
+first_changed_line = 231
+control_lemma = "-906 892 899 897 0"
+treatment_binary_minimized_lemma = "-906 892 899 0"
+proof_sha256 = "5d3278c9f893dc6675cca4a04ee5b4c26edab934f7cad8d54626620a4b72ee2a"
+proof_bytes = 64025240
+checker = "DRAT-trim v05.22.2023"
+checker_result = "VERIFIED"
+
+[results.drat.smoke]
+instance = "benchmarks/smoke/binary-minimize-unsat.cnf"
+binary_minimized_lemma = "-8 0"
+proof_sha256 = "8e95182fa0ca04ec9151276926713170f413723be3e15ce4d825e210bbaa194c"
+proof_bytes = 42
+checker = "DRAT-trim v05.22.2023"
+checker_result = "VERIFIED"

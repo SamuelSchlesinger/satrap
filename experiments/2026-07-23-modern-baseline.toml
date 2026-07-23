@@ -1,0 +1,436 @@
+[experiment]
+id = "2026-07-23-modern-baseline"
+status = "running"
+worktree_revision = "uncommitted initial worktree"
+host = "Apple arm64, Darwin 25.5.0"
+compiler = "rustc stable with -C target-cpu=native and release fat LTO"
+
+[references.kissat]
+version = "4.0.4"
+commit = "8af8e56f174b778aef3aa45af9f739b2a5f492c2"
+configuration = "build-time ./configure --competition; no runtime option"
+binary_sha256 = "ecb61070a85590cac90be85e32ea119e41cfd80102399782f4c2922a05d4cad4"
+
+[references.cadical]
+version = "3.0.1"
+commit = "c60730422e758ef1cebe7aeddf2dda31c996bf04"
+configuration = "build-time ./configure --competition; no runtime option"
+binary_sha256 = "627553c691100f66f4cb78496dfd6837369aa33288d6b1bce5994d2510b8146e"
+
+[corpus]
+manifest = "benchmarks/manifests/satcomp-2025-development.json"
+role = "development"
+instances = 8
+representative = false
+
+[corpus.heldout]
+selection_manifest = "benchmarks/manifests/satcomp-2025-heldout-selection.json"
+selection_manifest_sha256 = "ee7cd97bd59d2e0eadd76ea868253dbdba42c4b5f2a5cba79f0bfc79ad58a2c1"
+manifest = "benchmarks/manifests/satcomp-2025-heldout.json"
+manifest_sha256 = "873a2a52ac229372e4b08b183cad409a8b2ad45b6332da2c00c1cdfc934e3f57"
+metadata_sha256 = "2473ccd69f917b13a7f8b15e4b702eea53da901b487a7ef74069312dec053f8a"
+role = "held-out"
+instances = 16
+families = 16
+development_family_overlap = 0
+composition = "6 SAT, 6 UNSAT, 4 database-UNKNOWN"
+representative = false
+selection = "fixed-seed SHA-256 rank, one instance per family, frozen before solver execution"
+
+[protocol.full_slice]
+timeout_seconds = 2
+repetitions = 1
+purpose = "short-limit gap and status measurement only"
+
+[protocol.solved_subset]
+timeout_seconds = 2
+repetitions = 7
+instances = 3
+purpose = "low-cost directional ablation; not a performance claim"
+
+[protocol.heldout_gate]
+timeout_seconds = 5
+repetitions = 1
+order_seed = 20250723
+valid_result_sha256 = "552446485e2a3dd9663ec8774c8e6858cd7ee37311e157f9b2e96385213dfbfb"
+discarded_result_sha256 = "3b2d1b3b7a5b5d494ba6c2b5e928c1add4928a4c92f8e5097ed29860355cbdfe"
+discard_reason = "Kissat and CaDiCaL were mistakenly given the build-time --competition flag as a runtime option and exited 1; benchmark.py was hardened to classify this as INVALID before rerunning all solvers."
+result = "Kissat solved 3/16. CaDiCaL, EVSIDS/Luby, and focused-probe EVSIDS each solved 2/16. All completed SAT models validated and there were no status disagreements."
+
+[protocol.heldout_confirmation]
+timeout_seconds = 5
+repetitions = 3
+order_seed = 20250724
+instances = 3
+result_sha256 = "7fa2ad88b83683f6026f875afae9190bb8a075e00b3589a4f142048a4237f508"
+purpose = "repeat-only confirmation on cases revealed as solved in the fixed gate; not heuristic tuning"
+result = "On GP_300_140_20, medians were Kissat 2.045 s, EVSIDS 2.450 s, CaDiCaL 2.752 s, and focused-probe 3.080 s. Kissat alone solved REGRandom in all three runs (1.593 s median)."
+
+[protocol.break12_gap]
+timeout_seconds = 15
+repetitions = 1
+result_sha256 = "253dad06aea65f52d0a07c22a71a799e0757431d3d2de78671a1653aa3fe3cf1"
+observation = "All three solved with valid models: ours 9.99 s, CaDiCaL 8.28 s, Kissat 1.17 s. This single run quantifies a large remaining scheduling-family gap but is not a stable ranking."
+
+[protocol.post_propagation_break12_gap]
+timeout_seconds = 15
+repetitions = 5
+result_sha256 = "f6872953be343cbddd41e6e6b6969516a609bd231a73da3457902fb4d9cd676"
+observation = "After chronological backtracking and the retained propagation-layout changes, all models validated and medians were Kissat 1.149 s, ours 3.571 s, and CaDiCaL 8.396 s. This is one development family, not a leaderboard claim."
+
+[mechanisms.clause_minimization]
+hypothesis = "Recursive reason closure will reduce learned-clause size enough to improve propagation on implication-heavy instances."
+switch = "--no-minimize"
+full_slice_result_sha256 = "3eaee073f838a482ce95177fcc216f94d0f093e988ee5c93a3afd1743e5815cb"
+repeat7_result_sha256 = "3f1cb09de23b4888f21ca7b70f1ae55e75600e059777f1c45d1fdee75798806e"
+observation = "Mixed: 48,713 literals removed on gm24sparrc; repeat-7 median improved about 4.4 percent on 6s299b685_Iter22 and regressed about 2.2 percent on gm24sparrc. Retain as ablatable default pending a larger corpus."
+
+[mechanisms.binary_fast_path]
+hypothesis = "Direct binary implication will reduce watch-path work on binary-heavy formulas."
+switch = "--no-binary-fast-path"
+full_slice_result_sha256 = "39f222dca3bde6a5bfee24f2ccda440803769915940f8c6f48b5ec1ef9ba160e"
+repeat7_result_sha256 = "fdc926529f2a47e89906b7ae35640286300688ef3a0d914a6956023336c596eb"
+observation = "Directional: repeat-7 median improved about 7.4 percent on binary-heavy 6s299b685_Iter22, where 2,545,471 binary watch visits were observed; multiplier results were noisy and mixed. Retain pending broader measurement."
+
+[mechanisms.dynamic_lbd_restarts]
+hypothesis = "Recent learned-clause LBD degradation can identify unproductive search earlier than the static Luby schedule."
+switch = "--restart=lbd; --no-block-restarts ablates the deep-trail guard"
+source = "Audemard and Simon dynamic and blocking restart rules; Glucose 4.2.1 official source"
+repeat7_result_sha256 = "b765332e4d8b000ab34848e5d1b82d20cb0ca77b0f4b494a1448cef875e7aff8"
+break12_repeat3_result_sha256 = "dde3a9cdf5202a7b130f935703a28a477a7ecb7b4c91f4223c94eae1d8fb6951"
+blocking_smoke_result_sha256 = "087a12805501e22eb64d4e2a95a1844a25e70c3b7a0c437bdd093bc2e01f9ae4"
+observation = "Rejected as the default. LBD improved the 6s299b685_Iter22 repeat-7 median by about 29 percent and regressed gm24sparrc by about 3.7 percent. More importantly, all three unblocked LBD runs timed out at 15 seconds on Break_12_50 while all Luby runs solved (9.54 second median); the documented deep-trail blocking rule also timed out in a one-run smoke. Retain only as an experimental mode and pursue focused/stable scheduling."
+
+[mechanisms.focused_stable_search]
+hypothesis = "VMTF branching with LBD-EMA focused restarts, alternated with EVSIDS and reluctant stable restarts, can combine complementary strengths that neither VMTF nor dynamic restarts exhibits alone."
+switch = "--search=focused-stable; axis controls are --search=vmtf and --search=focused"
+repeat7_result_sha256 = "5ca92a5b5682423e7cc6bb261c59480c9124b08e645e7569fc4d4084f7f8389c"
+axis_repeat7_result_sha256 = "dbf89a5cc0adca6e061b8298612805847687b85f3d7c705534ab2fad253b73e9"
+break12_repeat3_result_sha256 = "f00ca2517012df2f6dcf401ed29cb7d8d8681ed905e97b11ed6398943fc388bd"
+observation = "Strong non-additive development signal: focused VMTF/EMA cut gm24sparrc from about 0.51 s to 0.13 s while pure VMTF/Luby regressed it to 1.33 s. Focused search regressed the hardware case; focused/stable recovered part of that loss and was neutral on Break_12_50. This motivated a bounded focused probe rather than default promotion."
+
+[mechanisms.focused_probe]
+hypothesis = "A bounded focused phase can acquire high-value VMTF/LBD-EMA clauses and warm EVSIDS without paying the long-run family regressions of permanently focused search."
+switch = "--search=probe-evsids; --search=probe-vmtf isolates the post-probe branching choice"
+cutoff_conflicts = 100
+cutoff_rationale = "one base Luby interval and approximately three fast LBD-EMA windows"
+development_repeat7_result_sha256 = "e4feb0b7e649f58835bd37079d7c8e5c7911e4d62a5c6ef28e6ca573dbf44e57"
+development_break12_repeat3_result_sha256 = "78aa2aaf5afeb095d9eba9a9cd8f39fc33f40e4198290abbd31b3e9e8e4daa87"
+development_reference_repeat7_result_sha256 = "68e5d4c04620ae605abebb5f31e6ea1913ff9cc2e22e90079addf14f9e750b0c"
+development_full_slice_result_sha256 = "a39ec8bcc35d39290821782c5da9b7c095cead3f018e7f75b7ae6f2316dae3f6"
+heldout_result_sha256 = "552446485e2a3dd9663ec8774c8e6858cd7ee37311e157f9b2e96385213dfbfb"
+heldout_confirmation_result_sha256 = "7fa2ad88b83683f6026f875afae9190bb8a075e00b3589a4f142048a4237f508"
+observation = "Rejected for default promotion. Development results were large, including an 8.4x Break_12_50 median gain and 4/8 solved at 2 s versus 3/8 for each reference. On the outcome-blind family-disjoint gate, probe and EVSIDS both solved 2/16 while Kissat solved 3/16. On the nontrivial jointly solved held-out SAT instance, the repeat-3 probe median was 3.080 s versus 2.450 s for EVSIDS. Keep as an ablatable negative result and do not tune the cutoff on revealed held-out families."
+
+[mechanisms.tiered_clause_retention]
+hypothesis = "Usage-aged LBD tiers will preserve repeatedly useful glue clauses without allowing stale middle-tier clauses to grow the active database indefinitely."
+switch = "--tiers; --no-lbd-promotion isolates dynamic LBD improvement"
+source = "Kissat 4.0.4 reduce.c, deduce.c, and options.h; fixed initial LBD limits 2/6 and three-step usage age"
+solver_binary_sha256 = "f273541b1ebc1830f6f99a4af63e9a4c579a680785ed102499adf1ce93e824d2"
+full_slice_result_sha256 = "9fcb7993bbebe37abd31ea79e2ce56537e59126616357447bb20aae096617839"
+break12_result_sha256 = "00a8ef7f918d4479a325f2a4c93b82004d3038d73e7d7f90bef1a25bd7064fb1"
+observation = "Rejected as the default. All policies solved the same 3/8 development instances at 2 s. On Break_12_50, identical-input deterministic searches took 198,354 conflicts and 9.249 s untiered, 449,708 conflicts and 22.044 s with tiers and LBD promotion, and 720,558 conflicts and 38.382 s with tiers but fixed LBD. The mechanism remains available for future pressure-aware research, but defaults off."
+
+[mechanisms.contiguous_clause_arena]
+hypothesis = "One append-only literal arena with stable offset/length metadata will improve propagation locality and remove per-clause allocator overhead without changing the search trajectory."
+switch = "structural before/after comparison; before binary retained in the artifact directory"
+before_binary_sha256 = "f273541b1ebc1830f6f99a4af63e9a4c579a680785ed102499adf1ce93e824d2"
+after_binary_sha256 = "5bdae9d5b50983a037fd1d9126554172c92747a28d67e72d4e09364d60840359"
+full_slice_result_sha256 = "98364fd7cd0af19e515aefcfcba321d095b66a7e55f32b3d840e9d0e914d72be"
+repeat7_result_sha256 = "0288c341901ed541e7b15f72a08b7cac5d992a80d5b80f18423450ca12d0a1a6"
+break12_repeat5_result_sha256 = "6284b90604c773548e4f6b1e19719116df7be63b88ab66440798ebb81f25ab1a"
+observation = "Retained. Search counters were exactly identical before and after. Repeat-7 medians improved 12.3 percent on gm24sparrc (0.509 to 0.446 s) and 3.4 percent on 6s299b685_Iter22 (0.505 to 0.488 s); the 3 ms easy case was noise-level. Break_12_50 repeat-5 median improved 2.0 percent (9.341 to 9.152 s), with a narrower after range."
+
+[mechanisms.chronological_backtracking]
+hypothesis = "Retaining intermediate assignments after exceptionally long first-UIP jumps will avoid rebuilding productive trail regions."
+switch = "--no-chrono; --chrono explicitly selects the promoted policy"
+source = "Kissat 4.0.4 learn.c/options.h and CaDiCaL 3.0.1 chronological-backtracking options; strict threshold of 100 skipped levels"
+solver_binary_sha256 = "faa0b47b8f28e5082ab64e165bd9282d813cb4f0ef3b6242bc01d75373368486"
+full_slice_result_sha256 = "6e959f62ef13bb4444d99e0bd16d94593b1a8d7ab732e4443e9ef84f57292d89"
+repeat7_result_sha256 = "236ad061a413a095775b657d4bb097024655b595f1853678a422a421b0a298c7"
+break12_repeat5_result_sha256 = "a1f177f498276e0344a5d36273b0170cf9d6587497526c93f5ed64ca1f0557e2"
+observation = "Promoted to the default. Both policies solved the same 3/8 instances at the 2 s development cutoff. Break_12_50 repeat-5 median improved 42.2 percent, from 9.177 to 5.304 s, with 198,354 versus 118,557 conflicts in the direct deterministic runs. The repeat-7 medians were neutral on gm24sparrc, noise-level on the 3 ms case, and improved 6.8 percent on 6s299b685_Iter22. No held-out data was reused."
+
+[mechanisms.in_place_watch_compaction]
+hypothesis = "Reusing each detached watch list's allocation during propagation will remove allocator traffic without changing watch order or search decisions."
+switch = "structural before/after comparison; before binary retained in the artifact directory"
+before_binary_sha256 = "a46f50ab2e91158a1980e72f9450cfd72c39aee4cbb50158e0f35d62ac2f9762"
+after_binary_sha256 = "0796a01e3ab93704650d5cc6eb17935bb6fedcc0fb02fbbfae17db658466bb21"
+full_slice_result_sha256 = "1520aaeb2c8a23826394f319b4b9b773423ccff1ec1c97ada9384ade6b2a0b0d"
+repeat7_result_sha256 = "3e55c183986ff64de455bc532974875a942f977847f4f429e4ca2cd507440feb"
+break12_repeat5_result_sha256 = "f3aaf36ae9d8734da1cc894f3e381cccc060f704e948d182e269a8c4ec7a9de1"
+observation = "Retained. Search counters and proof bytes stayed exactly identical. The same 3/8 instances were solved at 2 s. Repeat-7 medians improved 16.3 percent on gm24sparrc and 17.3 percent on 6s299b685_Iter22; the 3 ms case improved 2.1 percent at noise scale. Break_12_50 repeat-5 median improved 31.4 percent, from 5.189 to 3.561 s, and every SAT model validated."
+
+[mechanisms.packed_watch_entries]
+hypothesis = "Halving each hot watch entry from 16 to 8 bytes will reduce propagation bandwidth and cache pressure enough to outweigh field-unpacking instructions."
+switch = "structural before/after comparison; before binary retained in the artifact directory"
+clause_reference_bits = 31
+before_binary_sha256 = "0796a01e3ab93704650d5cc6eb17935bb6fedcc0fb02fbbfae17db658466bb21"
+after_binary_sha256 = "7c4be54f3b143c99ea9f4956d7a2cb721df7110fdfcb076eae5afdaf436ed9d7"
+full_slice_result_sha256 = "9354ea3f77acd8f9b1e8e146efccc945a9ed5efeaf9096ead0807de644f0154a"
+repeat7_result_sha256 = "db08adc703121b44da6d6a21300a448fd4959eca3eb8ff6b5d3f99365294c955"
+break12_repeat5_result_sha256 = "ed9a8383c6c00be7bd0e97091c5e57860bdf13a99fdfaace1c9af0e03c5a744d"
+observation = "Retained. The layout test confirms eight bytes and round-trips the maximum packed clause index and literal. Search counters and the verified proof stayed byte-identical, with the same 3/8 cutoff coverage. Repeat-7 medians improved 9.3 percent on gm24sparrc and 7.4 percent on 6s299b685_Iter22; the 3 ms case moved 1.3 percent at noise scale. Break_12_50 repeat-5 median improved 3.6 percent, from 3.683 to 3.550 s, with every SAT model valid."
+
+[mechanisms.binary_metadata_bypass]
+hypothesis = "Skipping the deletion-metadata load for permanent binary clauses will accelerate the specialized binary propagation path."
+switch = "temporary structural before/after comparison; reverted after ablation"
+before_binary_sha256 = "7c4be54f3b143c99ea9f4956d7a2cb721df7110fdfcb076eae5afdaf436ed9d7"
+experiment_binary_sha256 = "174534a0acf2adf6bdc9adcd416ab5c01e5ac8d64c6dbb4941dc7bbcfd98020e"
+break12_repeat5_result_sha256 = "a432ceae18e80eaf53a986b7d11a878737ecd492467e17be15a6340190498544"
+observation = "Rejected and reverted. Despite 139,421,770 binary visits and exactly identical search counters, the Break_12_50 repeat-5 median regressed 1.8 percent, from 3.557 to 3.620 s. The explicit test that learned binary clauses survive reduction remains as an invariant check."
+
+[mechanisms.systematic_rephasing]
+hypothesis = "Periodically replacing phase saving with phases from the deepest trail, the inverted initial phase, and the original phase will escape unproductive search regions."
+switch = "--rephase; --no-rephase is the default"
+source = "Kissat 4.0.4 rephase.c, phases.c, backtrack.c, kimits.c, and kimits.h"
+schedule = "best, inverted, best, original; intentionally excludes unimplemented local-walk phases"
+initial_conflicts = 1000
+interval_scaling = "1000 * count * log10(count + 9)^3"
+full_slice_binary_sha256 = "901ac6cfad26f07fd3351e1ce398a30b2b65394732112d413c375fd0b21195d2"
+final_binary_sha256 = "f665299a724145fb5c5692af9a2ecacdae694293b6ccca753499a8f87b59fe5c"
+full_slice_result_sha256 = "65bf7c5813e166c35e01c951285e6633849533a8cb1cc364a4a9be9d596c2470"
+repeat7_result_sha256 = "6c0ff47637177a4811962de12738611b7c843bd3320b72b94b158a97734d1372"
+break12_repeat3_result_sha256 = "7f02dadf672a6ad9af92789a2297c1177bdeae4d7cbafb9d32a865b5697768ac"
+observation = "Rejected as the default. Both policies solved the same 3/8 instances at 2 s. On triggered cases, the repeat-7 6s299b685_Iter22 median regressed 34 percent (0.332 to 0.445 s), and the final Break_12_50 repeat-3 median regressed 58 percent (3.521 to 5.577 s). The disabled final binary was within 0.6 percent of the pre-feature median on Break, inside the observed run spread. Keep the mechanism for future local-walk or context-sensitive phase research; do not tune this fixed schedule on held-out data."
+
+[mechanisms.restart_trail_reuse]
+hypothesis = "At restarts, preserving the longest EVSIDS decision prefix that still outranks the best unassigned variable will avoid rebuilding productive trail regions."
+switch = "--reuse-trail; --no-reuse-trail is the default"
+source = "van der Tak, Ramos, and Heule (2011) ReusedTrail rule; CaDiCaL 3.0.1 restart.cpp/decide.cpp and Kissat 4.0.4 restart.c implementations"
+scope = "EVSIDS only; VMTF reuse is intentionally not approximated"
+solver_binary_sha256 = "e877d9b3567a3714b3ae747759788680ced382717386f7f33bbb80c5ec0dd0df"
+full_slice_result_sha256 = "632e3f9cedb1a55ffd9209f1eb104edd325f8ca2efbe652a50339b272febce6e"
+sixs268_reference_repeat3_result_sha256 = "e07ee46340f217e887c287370e8e649cce7c9a774a69129742cfc0ef0dcbcb8b"
+break12_repeat3_result_sha256 = "61543f854a7d615749ad6ec03507bad6cecae80ce2dd5784117edc4e25b71396"
+disabled_repeat3_result_sha256 = "817de158825d458fc6b11f9fd9aa8ec041a71d2282d1062b9e0960915e7eab68"
+observation = "Retained as a complementary mode, not promoted globally. It increased 2 s development coverage from 3/8 to 4/8 by solving 6s268r_Iter94. On that instance, repeat-3 medians were 0.634 s with reuse and 5.536 s with root restarts, while pinned Kissat 4.0.4 and CaDiCaL 3.0.1 timed out in all three 10 s runs; the independently checked proof verifies UNSAT. Conversely, Break_12_50 regressed from 3.611 to 19.389 s (5.37x). The disabled binary showed no measurable penalty versus the pre-feature binary. This complementarity motivates a preregistered contextual selector rather than held-out tuning or default promotion."
+
+[mechanisms.restart_retention_interaction]
+hypothesis = "The ReusedTrail family split may be caused by compounding restart retention with 100-level chronological backtracking."
+preregistration = "experiments/2026-07-23-restart-retention-interaction.toml"
+solver_binary_sha256 = "61548a86f5da15ffe70577a14d1be7e56a7bcd123fbc4ca607d92bfc361a8d43"
+break12_result_sha256 = "396abe9593d349e5f52e7cac875bfa2854e907fab7e5a0a7feb836f2fbb735aa"
+sixs268_result_sha256 = "3179bff86c891cfb5a9da75a726d0b7bcd627f4e2599435e1c4e8e7894975f69"
+observation = "Rejected. Disabling chronology made both reuse variants slower. Reuse still reduced 6s268 conflicts from 105,373 to 67,497 without chronology, but increased Break conflicts from 198,354 to 701,515. Chronological backtracking is synergistic on 6s268 and independently valuable on Break; it does not cause the family split."
+
+[mechanisms.adaptive_trail_reuse]
+hypothesis = "Recent action-conditioned conflict yield, normalized by propagation work and learned-clause LBD, can select root versus score-valid reused restarts online."
+switch = "--reuse-trail=adaptive"
+preregistration = "experiments/2026-07-23-online-trail-reuse-gate.toml"
+policy = "latest root/reuse epoch quality conflicts^2/(propagations*LBD-sum), with reuse probes on eligible events 1,2,4,8,..."
+solver_binary_sha256 = "813df04c24b41cd20b51d7b4f77262ef00b72952c67e1a1609da9810740c67b1"
+endpoint_result_sha256 = "0e685ecdbdb37102c61d8d817cb50b9a6e75193fa2cdc2319f84bf2bcd0737c5"
+full_slice_result_sha256 = "41dcfc46469f5e3dd40e68bad620da39c2f675b007d9f88bd0950d70782d53cd"
+observation = "Rejected unchanged. It exactly matched always-reuse on 6s268 (0.609 s median, two reuse probes) but timed out in all three 25 s Break runs. A direct Break run solved in 26.11 s after 835,182 conflicts: the gate accepted 20 reuse actions by quality, rejected 30, and forced 6 probes among 56 eligible events. At 2 s it matched always-reuse coverage (4/8 versus root 3/8), but failed the preregistered Break endpoint and was not tested on held-out data."
+
+[mechanisms.bounded_failed_literal_probing]
+hypothesis = "A one-pass, propagation-bounded failed-literal preprocessor can derive useful root units without unbounded startup cost."
+switch = "--probe; --no-probe is the default"
+preregistration = "experiments/2026-07-23-bounded-failed-literal-probing.toml"
+policy = "ascending variables, saved polarity then opposite, min(100000, 2*variables) propagated-trail budget, one round"
+solver_binary_sha256 = "c7df0740a5484e992f1709db1f3d211dfbfaf0e10fcfe99a745733c39d3edff1"
+full_slice_result_sha256 = "d80e766b47790fc505c248374fa6ee94cb19cdabb722baf80010be6bef75f5d1"
+endpoint_result_sha256 = "0287dac91b97f0e88da7c0725bb91ce5dd484f6d1e67293ee069d38621d5804f"
+easy_result_sha256 = "5f8c16374a2c3fdfb34f77973f1f16a195c4c26d1e9deae2ede635e2a336fb3b"
+observation = "Rejected as the default. It tied 3/8 solved at 2 s and had no measurable smoke overhead. Break improved from a 3.294 s repeat-3 median to 2.243 s, but no failed literal was found there, so the gain was an incidental watch-order perturbation. On 6s268, 14 units increased the median from 5.566 s to 8.055 s and conflicts to 150,046. On gm24sparrc, two units increased conflicts from 147 to 1,280. Keep the proof-checked mechanism as an opt-in preprocessing foundation; do not tune this budget or use held-out data."
+
+[mechanisms.bounded_root_vivification]
+hypothesis = "Conservative root-level clause vivification can explicitly shorten original clauses by RUP and improve propagation without relying on unsuccessful-probe side effects."
+switch = "--vivify; --no-vivify is the default"
+preregistration = "experiments/2026-07-23-bounded-root-vivification.toml"
+policy = "one root round, at most 5000 shortest original clauses, current literal order, candidate ignored, min(1000000, initial arena literals) propagated-trail budget"
+solver_binary_sha256 = "c1866aec28f5420541627047ea312aecdc232777805df9198c92305b958c3ddc"
+full_slice_result_sha256 = "9b13f290b86188bee74dd314478d2664fd7b5496b4abe951f7622149f60330fe"
+endpoint_result_sha256 = "c55448e8302b8561dd10f644ec3a371e64a763f5cfafb72ea08d976b071871fc"
+easy_result_sha256 = "f0d2c0c75f5a425ecf02dc115731cb8debb9cb884849a62241d0ce3f518b270b"
+observation = "Rejected unchanged as the default after failing its preregistered endpoint gate. It tied 3/8 solved at 2 s, had no measurable smoke overhead, reduced gm24sparrc from 0.307 s and 147 search conflicts to 0.043 s and zero search conflicts, and improved 6s268 from 5.352 s to 4.880 s. But Break regressed from 3.278 s to 13.051 s and 118,557 to 438,808 conflicts after one literal was removed. Preserve the proof-safe fresh-clause replacement path and opt-in mode; do not tune on revealed families."
+
+[mechanisms.bounded_short_subsumption_ssr]
+hypothesis = "A sparse occurrence-indexed pass over short original clauses can remove explicit supersets and complementary pivots with bounded work and less trajectory disruption than propagation-based simplification."
+switch = "--subsume; --no-subsume is the default"
+preregistration = "experiments/2026-07-23-bounded-short-subsumption-ssr.toml"
+policy = "one root round, at most 5000 original subsumers of length 2 through 8, original targets of length at most 64, sparse literal occurrence index, min(5000000, active original nonunit literals) pair-touch budget"
+solver_binary_sha256 = "28696d1e83aba5529162b2d257daf7af23d9d6952379e82f4c9eac5bc116fcb8"
+full_slice_result_sha256 = "6975b7d1fbd5ac673b4ec0454ab61328feefa0d16f3639a59abbecc97313bb8c"
+endpoint_result_sha256 = "2caa649e464a5c672856c450d56744ff2dde4eeac731373c6d10c724ff65dc78"
+easy_result_sha256 = "f96cf0d912b5709e1d10cfc45b5fcad2b9ed4b98f905a4a459ea31959be8c2ab"
+observation = "Retained as an opt-in proof-checked baseline. Every explicit minimum gate passed: 3/8 solved was preserved, Break improved 1.45 percent, 6s268 regressed 1.10 percent, easy overhead was noise-level, and crafted plus real SSR proofs verified. The gate was nevertheless insufficient for default promotion because it did not bound every jointly solved case: 6s299 regressed 57 percent, from 0.314 to 0.493 seconds, after 6 subsumptions and 2950 SSR strengthenings increased conflicts from 3205 to 3600. Do not invent a post-hoc threshold or tune this schedule on revealed data."
+
+[mechanisms.binary_resolution_minimization]
+hypothesis = "A one-hop packed-watch scan can cheaply resolve additional complements from short low-LBD first-UIP clauses after recursive minimization."
+switch = "--binary-minimize; --no-binary-minimize is the default"
+preregistration = "experiments/2026-07-23-binary-resolution-minimization.toml"
+policy = "after recursive minimization, clauses of length 2 through 30 and LBD at most 6 scan the asserting literal watch list once and resolve learned not-q with each active binary clause asserting-or-q"
+solver_binary_sha256 = "9ef09dadeae2b10f93dc7ce15c9821a70b2bc9d7e24a9ea5965ed1642ef1af83"
+full_slice_result_sha256 = "225d675774cb5779c4072b3bfa45880b5c8d6834dbe8e5d7517f23a64d7c1987"
+jointly_solved_result_sha256 = "be7dd84670b7a1125b47fa106d6b524f3b3c22f9ba7cdd61a3c5fb38a4a8860e"
+endpoint_result_sha256 = "58cfd4c45b2a1d16d24203c9952d8c1e4ac2d6daacc94134c0d21925495b3f47"
+easy_result_sha256 = "a04cca201b10adce11543f94460f7b03b87526e8a329f47e5b20ad1b6afdd2cd"
+observation = "Rejected unchanged as the default after failing both hard-endpoint gates. It tied 3/8 at 2 seconds, improved the repeat-7 6s299 median by 14.5 percent, regressed gm24 by only 1.0 percent, and added 0.9 percent pooled easy overhead. But 69 removals regressed Break by 33.6 percent, while 6263 removals raised 6s268 from 78479 to 484878 conflicts and converted three 5.365-second control solves into three 25-second timeouts. Crafted and real proofs verified; retain only as an ablatable baseline and do not tune on revealed families."
+
+[mechanisms.clause_arena_compaction]
+hypothesis = "Sliding live literal payloads after each productive database reduction will bound logical arena growth and improve locality without changing stable clause references or search."
+switch = "--compact-arena; --no-compact-arena is the default"
+preregistration = "experiments/2026-07-23-clause-arena-compaction.toml"
+policy = "after each productive reduction, preserve the prefix before the earliest new deletion, pack the live suffix in stable ClauseRef and literal order, update only Clause.start, truncate logical length, and retain capacity"
+solver_binary_sha256 = "0872a788e07750ae4b242e23547f8af462a12b0a5da46affa8fb115b042c692b"
+full_slice_result_sha256 = "cbb106d696fbdf71a7ecbc07bfa26bb85c06ad966222616a68c774e39cd041c1"
+jointly_solved_result_sha256 = "8d32d383f2b661fe8d0cba87414024a42500645728c10aea47bd1bf8603ed388"
+endpoint_result_sha256 = "0139fb47a12f8dcc327bc352e2ed3d4415cdf44597567de4c833988092590c2f"
+easy_result_sha256 = "d5505d717c8085fdda8155a7273ae9033b6f60e2ad601f1461af6f3481d8a9b3"
+observation = "Rejected unchanged as the default because the only triggered repeat-7 jointly solved case, 6s299, regressed 0.18 percent instead of meeting the preregistered 2 percent improvement floor. Coverage stayed 3/8, every inspected deterministic counter matched, easy overhead was below noise, Break improved 0.88 percent, and 6s268 regressed 1.45 percent. The pass reclaimed 17,833,046 literal slots on Break and 1,112,725 on 6s268; retain it as an opt-in logical-memory control and do not tune a garbage threshold on revealed data."
+
+[validation]
+sat_models = "checked by tools/benchmark.py"
+unsat_proofs = "textual DRAT implemented after timing runs; smoke and gm24sparrc proofs independently verified by DRAT-trim"
+solver_disagreements = 0
+
+[validation.drat]
+checker = "DRAT-trim v05.22.2023"
+checker_commit = "2e5e29cb0019d5cfd547d4208dca1b3ec290349f"
+checker_binary_sha256 = "5f4364c0dc84fe7694b6e7380017a8e693504fbd29d090ae8af32e8734e191b3"
+smoke_proof_sha256 = "d047fbee3d1473aa70ec3900d826169af8d7a52fe5f8c660190f9770c97e4796"
+gm24sparrc_proof_sha256 = "051d3d255db348a2d16b0ce913956ed8243060bec299caa710ed447b5fda9cc1"
+gm24sparrc_proof_bytes = 7980
+result = "both VERIFIED"
+
+[validation.heldout_drat]
+instance = "a0bcdaffb0ea36b678899fd86bdc7f18-arles_thres10_p10_r8186.cnf"
+strategy = "probe-evsids"
+proof_sha256 = "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+proof_bytes = 2
+checker = "DRAT-trim v05.22.2023"
+result = "VERIFIED; the input is UNSAT by unit propagation"
+
+[validation.kissat_regn_drat]
+instance = "46355da785714f239393e7630020cae3-REGRandom-K4-L1-Seed40.sanitized.cnf"
+database_status = "UNKNOWN"
+solver = "Kissat 4.0.4"
+proof_sha256 = "5ad39ff5ddd550587f74f0142d5efffbb3d4098d943dbe1c7bec92e8e847fa9f"
+proof_bytes = 10823201
+checker = "DRAT-trim v05.22.2023"
+checker_seconds = 167.228
+result = "VERIFIED UNSAT; database UNKNOWN is not a previously-unsolved claim"
+
+[validation.clause_arena_drat]
+instance = "03e852aa864cfe6eb49c264b462b8157-gm24sparrc.cnf"
+default_proof_sha256 = "051d3d255db348a2d16b0ce913956ed8243060bec299caa710ed447b5fda9cc1"
+tiered_proof_sha256 = "051d3d255db348a2d16b0ce913956ed8243060bec299caa710ed447b5fda9cc1"
+proof_bytes = 7980
+checker = "DRAT-trim v05.22.2023"
+result = "both VERIFIED"
+
+[validation.chronological_backtracking_drat]
+instance = "benchmarks/smoke/chrono-unsat.cnf"
+instance_sha256 = "18058f488b2f3162f4c3e508d6101394db59b6c387180a51b9011bda3ee51c93"
+chronological_backtracks = 10
+chronological_levels_preserved = 1055
+proof_sha256 = "be3eaa4e3b0c383a258bd18f00f3d8460f486a429100ffed20b39e0d3580a28a"
+proof_bytes = 119
+checker = "DRAT-trim v05.22.2023"
+result = "VERIFIED"
+
+[validation.in_place_watch_compaction_drat]
+instance = "03e852aa864cfe6eb49c264b462b8157-gm24sparrc.cnf"
+proof_sha256 = "051d3d255db348a2d16b0ce913956ed8243060bec299caa710ed447b5fda9cc1"
+proof_bytes = 7980
+checker = "DRAT-trim v05.22.2023"
+result = "VERIFIED; byte-identical to the pre-change proof"
+
+[validation.packed_watch_entries_drat]
+instance = "03e852aa864cfe6eb49c264b462b8157-gm24sparrc.cnf"
+proof_sha256 = "051d3d255db348a2d16b0ce913956ed8243060bec299caa710ed447b5fda9cc1"
+proof_bytes = 7980
+checker = "DRAT-trim v05.22.2023"
+result = "VERIFIED; byte-identical to the pre-change proof"
+
+[validation.systematic_rephasing_drat]
+instance = "pigeonhole 8 pigeons into 7 holes, generated by tools/generate_pigeonhole.py"
+instance_sha256 = "0b574cad05abea81c485773a9db2c5bb6c76f0065a3992df4f49a00beee022b3"
+rephases = 3
+proof_sha256 = "503d37ce2ee477ab3ca8f3eda357fd199a1dd04b410f311aa68b5b6287bdd5d7"
+proof_bytes = 275754
+checker = "DRAT-trim v05.22.2023"
+result = "VERIFIED"
+
+[validation.restart_trail_reuse_drat]
+instance = "0e36fa2e12f32cde67937803299fb57b-6s268r_Iter94.cnf"
+instance_sha256 = "d487719bbab2977de4fbaaa815e12027190e29cb344a1020f089f853b2bf87b8"
+trail_reuse_restarts = 2
+trail_reuse_levels = 20
+proof_sha256 = "7e33f8ee95c0c501934cc6fb68fc47594e59cdffa75ebd47e9a4cae7765b7487"
+proof_bytes = 638473
+checker = "DRAT-trim v05.22.2023"
+result = "VERIFIED"
+
+[validation.restart_retention_no_chrono_drat]
+instance = "0e36fa2e12f32cde67937803299fb57b-6s268r_Iter94.cnf"
+strategy = "--reuse-trail --no-chrono"
+proof_sha256 = "9517c5f23d06f32c41228bf7e6b183c50b774aedd77da0c11a137b7b8d26cd34"
+proof_bytes = 6825650
+checker = "DRAT-trim v05.22.2023"
+result = "VERIFIED"
+
+[validation.adaptive_trail_reuse_drat]
+sixs268_proof_sha256 = "7e33f8ee95c0c501934cc6fb68fc47594e59cdffa75ebd47e9a4cae7765b7487"
+sixs268_proof_bytes = 638473
+gm24sparrc_proof_sha256 = "cc54b3df80a2cfd9ab080972dd70ab5229588fda3add762eedd357c4909b30e7"
+gm24sparrc_proof_bytes = 18552
+checker = "DRAT-trim v05.22.2023"
+result = "both VERIFIED"
+
+[validation.bounded_failed_literal_probing_drat]
+smoke_instance = "benchmarks/smoke/probe-unsat.cnf"
+smoke_proof_sha256 = "d047fbee3d1473aa70ec3900d826169af8d7a52fe5f8c660190f9770c97e4796"
+smoke_proof_bytes = 7
+gm24sparrc_proof_sha256 = "433273d53a66421fa85fde5c3d07119dea2daefc4dcef2bea72ce27fd96d71e0"
+gm24sparrc_proof_bytes = 143017
+gm24sparrc_first_lemmas = ["1 0", "2 0"]
+checker = "DRAT-trim v05.22.2023"
+result = "both VERIFIED"
+
+[validation.bounded_root_vivification_drat]
+smoke_instance = "benchmarks/smoke/vivify-unsat.cnf"
+smoke_first_lemma = "1 2 0"
+smoke_proof_sha256 = "ac7cc0755d2475a6f55020d832263eac09f8b08c7bfd36cf697227d408f62100"
+smoke_proof_bytes = 26
+gm24sparrc_proof_sha256 = "7bdc2fa1325bc03f99be61d9ee77199beb114c53bf728664bf9a21bb4ad3d7c2"
+gm24sparrc_proof_bytes = 194
+checker = "DRAT-trim v05.22.2023"
+result = "both VERIFIED"
+
+[validation.bounded_short_subsumption_ssr_drat]
+smoke_instance = "benchmarks/smoke/ssr-unsat.cnf"
+smoke_first_lemma = "2 0"
+smoke_proof_sha256 = "efeda76d1642d33bf3293614b796456512f3952e094d6e5e61908f8caa071e03"
+smoke_proof_bytes = 6
+sixs268_first_lemma = "687 -1577 1758 1759 0"
+sixs268_proof_sha256 = "c65815838482b5c48b208fb5b59fc146dd42576a18641f4ea33da7342ec2b467"
+sixs268_proof_bytes = 7984710
+checker = "DRAT-trim v05.22.2023"
+result = "both VERIFIED"
+
+[validation.binary_resolution_minimization_drat]
+smoke_instance = "benchmarks/smoke/binary-minimize-unsat.cnf"
+smoke_binary_minimized_lemma = "-8 0"
+smoke_proof_sha256 = "8e95182fa0ca04ec9151276926713170f413723be3e15ce4d825e210bbaa194c"
+smoke_proof_bytes = 42
+sixs268_binary_minimized_lemma = "-906 892 899 0"
+sixs268_proof_sha256 = "5d3278c9f893dc6675cca4a04ee5b4c26edab934f7cad8d54626620a4b72ee2a"
+sixs268_proof_bytes = 64025240
+checker = "DRAT-trim v05.22.2023"
+result = "both VERIFIED"
+
+[validation.clause_arena_compaction_drat]
+instance = "0e36fa2e12f32cde67937803299fb57b-6s268r_Iter94.cnf"
+control_proof_sha256 = "a787ce78cf16cde3e314ad9b490908a5cbf5271b8560506862489aa8f993ae64"
+treatment_proof_sha256 = "a787ce78cf16cde3e314ad9b490908a5cbf5271b8560506862489aa8f993ae64"
+proof_bytes = 7984674
+checker = "DRAT-trim v05.22.2023"
+result = "VERIFIED; control and treatment proofs are byte-identical"
+
+[artifacts]
+location = "/private/tmp/sat-baselines-20260723"
+note = "Raw JSONL is local and content-addressed above; move to durable artifact storage before making any external claim."
+solver_binary_sha256 = "0872a788e07750ae4b242e23547f8af462a12b0a5da46affa8fb115b042c692b"

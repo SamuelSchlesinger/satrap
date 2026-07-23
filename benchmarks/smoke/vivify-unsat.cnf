@@ -1,0 +1,9 @@
+c vivification strengthens the first clause to 1 2 before search proves UNSAT
+p cnf 6 7
+1 2 3 0
+1 2 4 0
+1 2 -4 0
+-1 5 0
+-1 -5 0
+-2 6 0
+-2 -6 0

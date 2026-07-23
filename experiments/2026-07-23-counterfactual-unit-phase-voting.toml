@@ -1,0 +1,291 @@
+[experiment]
+id = "2026-07-23-counterfactual-unit-phase-voting"
+owner = "Codex"
+status = "complete; rejected unchanged; retained as a reproducible negative result"
+worktree_revision = "uncommitted worktree after counterfactual shadow-reactivation"
+frozen_preregistration = "/private/tmp/sat-baselines-20260723/counterfactual-unit-phase-voting-prereg.toml"
+frozen_preregistration_sha256 = "2f869a711924049dcc27bf482a3ac516dee4379182fdcb76e8821623a8ad3e0c"
+frozen_preregistration_bytes = 15176
+
+[implementation]
+treatment_binary = "/private/tmp/sat-baselines-20260723/sat-counterfactual-unit-phase-voting"
+treatment_binary_sha256 = "2235741f31c2da810da75de1deeec789bd55bb8c0d1baa003b0eaa132ca40d15"
+treatment_binary_bytes = 766048
+control_binary_sha256 = "ff29d62f9f74f5923905f465988d01e4a14651a42bcc6e4a09c4deb9669d1232"
+solver_source_sha256 = "24074cbfc7666dccb401811c83dd396f0888affbddfe6c6ffdc76701439b29b4"
+main_source_sha256 = "7ec3c21e1ee302484fb5d9ad0b657de6280fff047e59c0d02777ea02dc3f3374"
+differential_test_sha256 = "c3985d850408c71245bdbf7cc88a09d96cdc852665133be330c5d7e0696e96b4"
+cli_test_sha256 = "5e6a523e088a2277406a5b6683d69ecb645894d052b1ddac8aee2cdd5b420461"
+compiler = "rustc 1.97.0 (2d8144b78 2026-07-07), aarch64-apple-darwin, LLVM 22.1.6"
+checks = "make check passed: rustfmt, clippy -D warnings, 110 library tests, 20 CLI-parser tests, 17 process-level CLI tests, 8 integration tests including 2000-formula differential coverage, and 7 Python tests"
+disabled_equivalence = "Passed on 6s268 against the pinned promoted control: UNSAT status and all 99 common deterministic counters were exact. Both had 42363 decisions, 5893854 propagations, 5551 conflicts, 28 restarts, 52491 learned literals, and 4 reductions. Every new counterfactual-phase counter was zero when disabled."
+enabled_determinism = "Two enabled 6s268 executions matched on all 159 non-time statistic fields and UNSAT status."
+real_noncausality = "Passed on 6s268 through completion because no phase write occurred: all 99 pre-existing non-time fields matched the control exactly while treatment offered 1577 deletions, admitted 436 samples including 308 replacements, scanned 128 clauses and 1181 literals at 28 restart snapshots, classified 2 satisfied and 126 open clauses, and produced zero unit votes."
+real_exercise = "Failed. No completed declared development instance produced a unit vote or phase write. Pigeonhole 8 into 7 offered 6 deletions and classified all 6 sampled clauses satisfied. The bounded larger pigeonhole 9 into 8 diagnostic offered 10363 deletions, scanned 464 sampled clauses at 72 snapshots, classified 445 satisfied and 19 open, and also produced zero unit votes."
+
+[boundary]
+training_derived = true
+statement = "The SAT Competition development corpus and every existing local held-out slice have already been revealed. They may falsify this mechanism and qualify it for a later new outcome-blind corpus, but they cannot establish generalization, novelty, priority, state-of-the-art performance, or a previously-unsolved claim."
+heldout_use = "none"
+default_promotion = "not authorized from this experiment"
+
+[hypothesis]
+mechanism = "A learned clause selected for deletion may later be unit under the search state reached without it. Restoring such clauses was harmful in the frozen shadow-reactivation experiment, but the unique would-be propagated literal is still a constraint-directed polarity observation. At an already-scheduled root restart, inspect a bounded priority sample of clauses that the promoted control actually deleted. Unanimous would-unit votes update saved phases after the root backtrack without restoring any clause. This may preserve useful directional information while retaining the control's propagation database and avoiding an observer branch in ordinary BCP."
+prediction = "At least one sampled deleted clause will be unit at a pre-restart snapshot and produce an effective saved-phase change on a nontrivial real instance. The treatment will preserve the promoted solver's 5/8 two-second development coverage and either add a solve or improve the repeated sum of jointly solved per-instance medians by at least five percent, while staying within the frozen per-case, endpoint, easy-overhead, correctness, and determinism ceilings."
+falsification = "Reject the frozen treatment if no deleted clause is sampled; no sampled clause is unit at a restart snapshot; no effective phase change occurs; development coverage falls; it neither adds a development solve nor improves the qualifying repeated aggregate by five percent; any repeated development or endpoint case regresses more than twenty percent; easy overhead exceeds five percent; deletion sampling changes the logical search before the first phase application; or any model, proof, differential, accounting, reference-stability, or determinism check fails. Do not tune capacity, rank, snapshot timing, vote aggregation, phase application, reducer, schedule, or thresholds after observing results."
+
+[prior_art]
+phase_saving = "Pipatsrisawat and Darwiche, A Lightweight Component Caching Scheme for Satisfiability Solvers, SAT 2007, https://doi.org/10.1007/978-3-540-72788-0_20"
+dynamic_phase = "Chen, A Dynamic Phase Selection Strategy for Satisfiability Solvers, 2012, https://arxiv.org/abs/1208.1613"
+dynamic_phase_mechanism = "Chen computes phase preferences from literals implied by trial BCP. Propagation-informed phase selection and implication-weighted polarity are established."
+lsids = "Shaw and Meel, Designing New Phase Selection Heuristics, SAT 2020, https://arxiv.org/abs/2005.04850"
+lsids_mechanism = "DPS and LSIDS use recent assignments, learned-clause literals, additive bumping, and decay to choose polarity. Literal-history and learned-clause-informed phase scores are established."
+freezing = "Audemard, Lagniez, Mazure, and Sais, On Freezing and Reactivating Learnt Clauses, SAT 2011, pages 188-200, https://doi.org/10.1007/978-3-642-21581-0_14"
+triggered_import = "Prevot, Soos, and Meel, Leveraging GPUs for Effective Clause Sharing in Parallel SAT Solving, SAT 2021, https://arxiv.org/abs/2012.03119"
+triggered_import_mechanism = "GpuShareSat tests absent remote clauses against assignment snapshots and imports clauses that would propagate or conflict. Snapshot would-unit and would-conflict tests are established."
+deletion_branching = "Wang, Xu, and Wu, Branching Heuristic Strategy Based on Learnt Clauses Deletion Strategy for SAT Solver, Computer Science 48(11), 2021, https://doi.org/10.11896/jsjkx.201000142"
+deletion_branching_mechanism = "VDALCD reduces activities of variables occurring in a learned clause when that clause is deleted. Feeding deletion events into branching scores is established."
+causal_analysis = "Yang, Shaw, Baluta, Soos, and Meel, Explaining SAT Solving Using Causal Reasoning, SAT 2023, https://doi.org/10.4230/LIPIcs.SAT.2023.28"
+established = "Phase saving, implication-weighted phase selection, literal polarity scores, learned-clause-informed polarity, clause freezing/reactivation, snapshot would-propagate tests, deletion-conditioned variable activity, and offline causal utility analysis are established and are not claimed here."
+distinction = "The proposed treatment performs no trial BCP, does not score all literals or variables, does not restore or import a clause, and does not alter variable priority. It takes a bounded deterministic priority sample only from this sequential solver's actual control-selected deletions, leaves those clauses deleted, tests their exact status only under the actual pre-restart assignment, aggregates unique would-unit literals by variable, and writes only unanimous polarities after the existing root backtrack. A targeted primary-source search found no exact collision for this deletion-regret-to-phase loop."
+novelty_status = "Provisional candidate contribution only. The ingredients have close prior art and their combination may be obvious or implemented elsewhere. No novelty or priority claim is authorized without a broader scholarly and solver-source audit plus successful untouched evaluation."
+
+[policy]
+name = "counterfactual unit phase voting"
+flag = "--counterfactual-phase"
+disable_flag = "--no-counterfactual-phase"
+default = "disabled"
+requires = "the promoted LBD-free clause-management policy, stable long-clause references, root restarts, and phase saving"
+incompatible = "--scan-debt-reduction, --nonregular-retention, --shadow-reactivation, --compact-arena, any non-root trail-reuse policy, and systematic rephasing in the declared comparison"
+capacity = 64
+selection = "At each LBD-free reduction, first compute the exact promoted locks, positive-score protections, zero-score deletion order, schedule, and quota. Every control-selected clause is permanently deleted immediately and active-learned accounting changes exactly as in the control. Offer each such long ClauseRef to a deterministic priority reservoir spanning the interval until the next root restart. Rank clause reference c in one-indexed reduction r by SplitMix64(c xor (r shifted left 32)), breaking ties by r and c. Retain the 64 lexicographically lowest rank tuples seen in that interval; replacement changes only the observer reservoir."
+storage = "Only when enabled, allocate a vector of at most 64 records containing rank, reduction, and a stable reference to an already-deleted long clause. Do not copy clause literals and do not expand Clause, binary storage, Watch, reason, literal, variable, or per-clause side records. Physical arena compaction is incompatible because it may invalidate or remove sampled references."
+snapshot = "When an existing restart will backtrack to level zero, but before canceling the current assignment, take the current reservoir and scan each sampled deleted clause once. Classify it as satisfied if any literal is true, open if no literal is true and at least two are unassigned, unit if exactly one is unassigned and all others are false, or conflict if all literals are false. A unit clause contributes its unique unassigned literal as one polarity vote. The scan cannot enqueue, conflict, become a reason, change activity, change clause usage, or alter any pre-existing search statistic."
+aggregation = "Sort unit votes by variable. If all votes for a variable have the same polarity, retain one unanimous suggestion; if both polarities occur, record a disagreement and retain no suggestion. Vote multiplicity does not weight or rank variables."
+application = "After the ordinary restart backtracks to level zero, write each unanimous suggestion into the existing saved-phase entry only if that variable is root-unassigned. Count both writes and effective changes from the prior saved phase. The normal search may overwrite that saved phase on any later assignment. Do not change variable order, activity, restart timing, decision count, propagation, or the formula."
+lifetime = "Every sample is one-shot: it is discarded after the first subsequent root-restart snapshot whether satisfied, open, unit, or conflicting. If the solver finishes before another restart, the sample never affects search. A new interval starts with an empty reservoir."
+noncausality = "Before the post-backtrack phase writes, sampling retains only references to clauses already deleted by the control and scans them read-only at an existing boundary. Therefore it may consume time and update new diagnostics but must not change assignments, active watch order, decisions, propagations, conflicts, learned clauses, restarts, reductions, deletions, or any pre-existing deterministic counter."
+proof = "The treatment never changes the formula or proof log: sampled clauses remain deleted and phase choice affects only search order. Existing DRAT emission is therefore sufficient. Independently verify a treatment UNSAT proof against the original CNF."
+diagnostics = "Report deletion offers, reservoir insertions, replacements, peak and live samples, snapshots, sampled clauses scanned, literal checks, satisfied/open/unit/conflict classifications, raw unit votes, unanimous variables, disagreeing variables, root-assigned skips, saved-phase writes, and effective saved-phase changes."
+everything_else = "Keep the promoted usage-score initialization and increments, 2048-conflict decay, reduction schedule and fractions, EVSIDS, Luby root restarts, chronological backtracking, phase saving, proof logging, model reconstruction, minimization, propagation, preprocessing defaults, and every unrelated policy unchanged."
+
+[variants]
+control = "/private/tmp/sat-baselines-20260723/sat-promoted-lbd-free-clause-management --search=evsids --restart=luby --reuse-trail=never --no-rephase --no-tiers --no-eliminate --no-compact-arena --no-binary-minimize --no-subsume --no-vivify --no-probe"
+control_sha256 = "ff29d62f9f74f5923905f465988d01e4a14651a42bcc6e4a09c4deb9669d1232"
+treatment = "/private/tmp/sat-baselines-20260723/sat-counterfactual-unit-phase-voting --counterfactual-phase --search=evsids --restart=luby --reuse-trail=never --no-rephase --no-tiers --no-eliminate --no-compact-arena --no-binary-minimize --no-subsume --no-vivify --no-probe --no-factor"
+compiler = "rustc stable with -C target-cpu=native and release fat LTO"
+
+[corpus.development]
+manifest = "benchmarks/manifests/satcomp-2025-development.json"
+role = "revealed development and mechanism falsification"
+instances = 8
+
+[corpus.easy]
+directory = "benchmarks/smoke"
+role = "overhead and correctness smoke corpus"
+instances_at_preregistration = 10
+
+[protocol]
+development_timeout_seconds = 2
+development_repetitions = 1
+jointly_solved_repetitions = 7
+jointly_solved_selection = "Freeze every case solved by both variants in the first declared pass before repeats; do not select on treatment speedup."
+endpoint_instances = ["Break_12_50.xml.cnf", "6s268r_Iter94.cnf"]
+endpoint_timeout_seconds = 25
+endpoint_repetitions = 3
+easy_repetitions = 11
+threads = 1
+order_seed = 2026072309
+primary_metric = "validated development solved count, then sum of repeated per-instance medians over the frozen jointly solved set"
+secondary_metrics = [
+  "per-instance medians and endpoint medians",
+  "decisions, propagations, conflicts, restarts, learned literals, reductions, and deletions",
+  "all counterfactual sample, snapshot, vote, and phase-effect counters",
+  "easy aggregate overhead",
+]
+stopping_rule = "Freeze this preregistration before implementation, implement the mechanism once, complete unit and differential checks, freeze the binary, and execute every declared comparison. Do not consume any existing heldout manifest, change constants, or tune from treatment results."
+
+[correctness]
+unit = "Test priority-reservoir fill, ordering, replacement, tie breaks, and restart clearing; exact promoted deletion quota and accounting; sampled references remain deleted and readable; satisfied/open/unit/conflict classification; unanimous and disagreeing votes; root-assigned skip; saved-phase write and effective-change accounting; one-shot lifetime; no enqueue/conflict/reason/activity/usage side effects; optional allocation; and rejection of incompatible configurations."
+differential = "Extend the deterministic 2000-formula brute-force suite with --counterfactual-phase and every supported combination, requiring exact SAT/UNSAT agreement and original-formula model validation."
+models = "Independently validate every SAT model emitted in all benchmark passes."
+proof = "Emit a treatment DRAT proof for a real completed UNSAT development instance that exercises at least one effective phase change, and require independent strict forward DRAT-trim verification against the original CNF."
+disabled_equivalence = "The modified binary with --no-counterfactual-phase must reproduce the frozen promoted deterministic trajectory and all existing counters on 6s268."
+determinism = "Repeated treatment executions must have identical result, search counters, and counterfactual-phase counters after excluding solve_seconds."
+noncausality = "A unit harness and at least one real diagnostic must compare treatment against control before the first effective phase write; every pre-existing logical/search counter and learned clause must match exactly."
+reference_stability = "Sampled references must remain valid, long, learned, and deleted until their snapshot. Physical arena compaction is rejected while the feature is enabled."
+exercise = "Require at least one sample insertion, one restart snapshot, one unit vote, one unanimous variable, and one effective saved-phase change on a nontrivial real instance."
+
+[promotion_gate]
+development_solved_minimum = 5
+qualifying_improvement = "Either treatment solves more development cases than control, or equal coverage accompanies at least a five-percent improvement in the frozen jointly solved aggregate."
+jointly_solved_improvement_percent_minimum_if_tied = 5
+development_repeated_max_regression_percent = 20
+endpoint_max_regression_percent = 20
+easy_overhead_max_percent = 5
+sample_required = true
+unit_vote_required = true
+effective_phase_change_required = true
+pre_application_noncausality_required = true
+disabled_trajectory_exact_required = true
+deterministic_treatment_reproducibility_required = true
+sat_model_validation_required = true
+proof_validation_required = true
+next_step = "If every gate passes, retain the mode as an opt-in candidate, broaden the prior-art and source audit, and construct a new license-compatible outcome-blind family-stratified corpus before any default or research claim. If rejected, preserve the preregistration and result and do not tune this phase-voting policy on revealed families."
+
+[results]
+summary = "Rejected unchanged. Treatment coverage fell from 5/8 to 4/8 at two seconds, losing Break_12_50 only to observer overhead: its endpoint search trajectory was exact and its treatment median regressed 5.247166 percent. The four jointly solved repeated medians all regressed and their sum rose 4.693941 percent. Easy overhead was 1.384741 percent. Most importantly, no completed development case produced a unit vote or phase write. Break scanned 768 sampled deletions, classifying 677 satisfied and 91 open; 6s268 scanned 128, classifying 2 satisfied and 126 open. The root-restart snapshot therefore missed the transient would-unit events that inline shadow observation had previously exposed."
+conclusion = "Do not promote, tune, or evaluate this frozen phase-voting policy on another revealed corpus. Preserve the implementation behind --counterfactual-phase as a low-overhead negative diagnostic. Detaching sampled deletions and scanning them only at conflict-triggered root restarts repairs the shadow observer's hot-path cost and preserves exact control trajectories, but the boundary is too coarse to observe the signal. A successor must ask a different counterfactual question or capture transient evidence without restoring clauses and without branching in ordinary BCP."
+
+[results.artifacts]
+development = "/private/tmp/sat-baselines-20260723/counterfactual-unit-phase-development-2s.jsonl"
+development_sha256 = "f2d7a1b9e6a6492abcff9144cf7e5ef84bcfc3dec561d4e827c2845598afbae3"
+development_rows = 16
+jointly_solved = "/private/tmp/sat-baselines-20260723/counterfactual-unit-phase-development-jointly-solved-repeat7.jsonl"
+jointly_solved_sha256 = "5ea1a8603d4c869ac9e23bf84d71ce1110a09ad17e96a985636bf94208caa57f"
+jointly_solved_rows = 56
+endpoints = "/private/tmp/sat-baselines-20260723/counterfactual-unit-phase-endpoints-repeat3.jsonl"
+endpoints_sha256 = "e3d2f6707d3869d4b6b8417bb93dfe57efbd9ab1c3f3d6eb5cc487d6cc6f3669"
+endpoints_rows = 12
+easy = "/private/tmp/sat-baselines-20260723/counterfactual-unit-phase-easy-repeat11.jsonl"
+easy_sha256 = "1c6aedefcc44c9280d96cee2ba339d8cd783d794fea9eff3871e4379076516ac"
+easy_rows = 220
+
+[results.development]
+control_solved = 5
+treatment_solved = 4
+control_sat = 3
+control_unsat = 2
+treatment_sat = 2
+treatment_unsat = 2
+lost_case = "Break_12_50.xml.cnf: control SAT in 1.720446667 seconds; treatment timed out at two seconds"
+jointly_solved = ["gm24sparrc", "Break_triple_04_06", "6s268r_Iter94", "6s299b685_Iter22"]
+sat_model_validation = "valid for every completed SAT run"
+
+[results.jointly_solved]
+control_sum_of_medians_seconds = 2.608284625952
+treatment_sum_of_medians_seconds = 2.730715957034
+treatment_change_percent = 4.693941
+
+[results.jointly_solved.gm24sparrc]
+control_median_seconds = 1.117495166982
+treatment_median_seconds = 1.153127291007
+treatment_change_percent = 3.188571
+observer = "zero reductions, deletion offers, samples, clauses scanned, unit votes, and phase writes; logical trajectory exact"
+
+[results.jointly_solved.Break_triple_04_06]
+control_median_seconds = 0.004126791988
+treatment_median_seconds = 0.004345833004
+treatment_change_percent = 5.307779
+observer = "zero reductions, deletion offers, samples, clauses scanned, unit votes, and phase writes; logical trajectory exact"
+
+[results.jointly_solved.six_s268]
+control_median_seconds = 0.946387957985
+treatment_median_seconds = 0.991157250013
+treatment_change_percent = 4.730543
+observer = "1577 deletion offers, 436 sample insertions, 308 replacements, peak 64, 128 clauses and 1181 literals scanned, 2 satisfied, 126 open, zero unit votes and phase writes; all 99 pre-existing non-time counters exact"
+
+[results.jointly_solved.six_s299]
+control_median_seconds = 0.540274708997
+treatment_median_seconds = 0.582085583010
+treatment_change_percent = 7.738818
+observer = "two reductions but zero deletion offers, samples, clauses scanned, unit votes, and phase writes; logical trajectory exact"
+
+[results.endpoints.Break_12_50]
+control_median_seconds = 1.701464665995
+treatment_median_seconds = 1.790743333986
+treatment_change_percent = 5.247166
+control_decisions = 210071
+treatment_decisions = 210071
+control_propagations = 20630050
+treatment_propagations = 20630050
+control_conflicts = 37717
+treatment_conflicts = 37717
+control_learned_literals = 5397124
+treatment_learned_literals = 5397124
+deletion_offers = 23202
+sample_insertions = 3462
+sample_replacements = 2630
+sample_peak = 64
+live_samples_at_completion = 64
+restart_snapshots = 125
+sampled_clauses_scanned = 768
+sampled_literal_checks = 20461
+satisfied_clauses = 677
+open_clauses = 91
+unit_clauses = 0
+conflict_clauses = 0
+phase_writes = 0
+metadata_bytes_peak = 1536
+
+[results.endpoints.six_s268]
+control_median_seconds = 0.949917082995
+treatment_median_seconds = 0.978861541022
+treatment_change_percent = 3.047051
+control_decisions = 42363
+treatment_decisions = 42363
+control_propagations = 5893854
+treatment_propagations = 5893854
+control_conflicts = 5551
+treatment_conflicts = 5551
+control_learned_literals = 52491
+treatment_learned_literals = 52491
+deletion_offers = 1577
+sample_insertions = 436
+sample_replacements = 308
+sample_peak = 64
+live_samples_at_completion = 0
+restart_snapshots = 28
+sampled_clauses_scanned = 128
+sampled_literal_checks = 1181
+satisfied_clauses = 2
+open_clauses = 126
+unit_clauses = 0
+conflict_clauses = 0
+phase_writes = 0
+metadata_bytes_peak = 1536
+
+[results.easy]
+control_sum_of_per_instance_medians_seconds = 0.031675583072
+treatment_sum_of_per_instance_medians_seconds = 0.032114207948
+treatment_change_percent = 1.384741
+statuses = "all 220 runs agreed; every SAT model validated"
+
+[results.exercise.pigeonhole_8_7]
+formula = "/private/tmp/sat-baselines-20260723/pigeonhole-8-7.cnf"
+formula_sha256 = "0b574cad05abea81c485773a9db2c5bb6c76f0065a3992df4f49a00beee022b3"
+result = "UNSAT with 5599 decisions, 68797 propagations, 5022 conflicts, 27 restarts, 6 deletion offers and samples, 6 satisfied classifications, and zero unit votes or phase writes"
+
+[results.exercise.pigeonhole_9_8]
+formula = "/private/tmp/sat-counterfactual-unit-phase-pigeonhole-9-8.cnf"
+formula_sha256 = "7759d70d2f1b04aa0c896739ecb757d19759ab38ca2cb58bc171dfe8eb9d26b7"
+formula_bytes = 5546
+result = "UNSAT with 23362 decisions, 309808 propagations, 20694 conflicts, 72 restarts, 10363 deletion offers, 1782 sample insertions, 1318 replacements, 464 clauses and 3574 literals scanned, 445 satisfied, 19 open, and zero unit votes or phase writes"
+
+[results.proof]
+designated_gate = "failed: no completed real development instance exercised an effective phase change, so the required exercised treatment proof could not exist"
+substitute_formula = "/private/tmp/sat-baselines-20260723/pigeonhole-8-7.cnf"
+substitute_formula_sha256 = "0b574cad05abea81c485773a9db2c5bb6c76f0065a3992df4f49a00beee022b3"
+substitute_proof = "/private/tmp/sat-counterfactual-unit-phase-pigeonhole-8-7.drat"
+substitute_proof_sha256 = "fecb24ff6db88c89ff3b99d3d98afe618f9b484a30aa86bb26a6d7a935b6f52b"
+substitute_proof_bytes = 240386
+substitute_proof_lines = 5022
+checker = "/private/tmp/sat-baselines-20260723/drat-trim/drat-trim"
+checker_sha256 = "5f4364c0dc84fe7694b6e7380017a8e693504fbd29d090ae8af32e8734e191b3"
+command = "drat-trim pigeonhole-8-7.cnf sat-counterfactual-unit-phase-pigeonhole-8-7.drat -f -W"
+result = "VERIFIED in strict forward mode: 4898 of 5023 lemmas in core, 78026 resolution steps, 0 RAT lemmas, 0 redundant literals, 0.093 seconds"
+
+[results.gates]
+development_coverage = "failed: 4/8 < 5/8"
+qualifying_improvement = "failed: no added solve and repeated aggregate regressed 4.693941 percent"
+development_per_case_ceiling = "passed on the four repeatedly jointly solved cases; maximum regression 7.738818 percent"
+endpoint_ceiling = "passed; maximum regression 5.247166 percent"
+easy_overhead = "passed at 1.384741 percent"
+sample = "passed"
+unit_vote = "failed: zero on all completed declared development cases and both pigeonhole diagnostics"
+effective_phase_change = "failed: zero"
+pre_application_noncausality = "passed: all 99 pre-existing non-time counters exact on enabled 6s268"
+disabled_trajectory = "passed: all 99 common counters exact and all new counters zero"
+determinism = "passed: all 159 enabled non-time fields exact across repeated 6s268 runs"
+sat_models = "passed"
+proof = "substitute correctness proof passed, designated exercised-proof gate failed"

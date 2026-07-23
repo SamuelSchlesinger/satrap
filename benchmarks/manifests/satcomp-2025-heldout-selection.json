@@ -1,0 +1,148 @@
+{
+  "schema": 1,
+  "name": "satcomp-2025-heldout-selection",
+  "role": "held-out",
+  "source": "https://benchmark-database.de/?context=cnf&track=main_2025",
+  "metadata_sha256": "2473ccd69f917b13a7f8b15e4b702eea53da901b487a7ef74069312dec053f8a",
+  "track": "main_2025",
+  "seed": "sat-rs-main-2025-heldout-v1",
+  "selection_rule": "Sort by SHA-256(seed NUL database_id NUL family NUL status); greedily fill the SAT, UNSAT, and UNKNOWN quotas while using each family once and excluding IDs and families in the supplied manifests.",
+  "excluded_manifests": [
+    "benchmarks/manifests/satcomp-2025-development.json"
+  ],
+  "requested": {
+    "SAT": 6,
+    "UNSAT": 6,
+    "UNKNOWN": 4
+  },
+  "instances": [
+    {
+      "database_id": "062f58e44eb73f9274b57af5092cad90",
+      "family": "rooks",
+      "expected_status": "UNSAT",
+      "source_name": "rook-51-0-0.cnf.xz",
+      "selection_sha256": "00d424679b2877f8433444ac3b0a42bb7db0940a1bbc6275d105f9a3531a05e6",
+      "url": "https://benchmark-database.de/file/062f58e44eb73f9274b57af5092cad90"
+    },
+    {
+      "database_id": "09befe1ffd4e02a988cadecd0a012261",
+      "family": "graceful-production",
+      "expected_status": "SAT",
+      "source_name": "GP_300_140_20.cnf.xz",
+      "selection_sha256": "11e07bad9136e403a9c530972a372baaa4a36a6da6ab0aa780071887c520c63a",
+      "url": "https://benchmark-database.de/file/09befe1ffd4e02a988cadecd0a012261"
+    },
+    {
+      "database_id": "292bedf65cee7cc38fe8b2725eb50868",
+      "family": "coloring-clique",
+      "expected_status": "UNSAT",
+      "source_name": "cliquecoloring_n32_k5_c4.cnf.xz",
+      "selection_sha256": "110274c2ab81f9c35c30d66ea13d18e45aa1743c6041a2fc5af341e409438df3",
+      "url": "https://benchmark-database.de/file/292bedf65cee7cc38fe8b2725eb50868"
+    },
+    {
+      "database_id": "321732c1a401ff109b2f2b447e3dbe5e",
+      "family": "multiplier-equivalence-checking",
+      "expected_status": "UNSAT",
+      "source_name": "16_16_booth_wallace_mapped_and_default_origin_bit28.cnf.xz",
+      "selection_sha256": "0804a29d3e58bdfe1e30f1a8ce921b7756f1566b7291af56ece775c4b4cabe43",
+      "url": "https://benchmark-database.de/file/321732c1a401ff109b2f2b447e3dbe5e"
+    },
+    {
+      "database_id": "35b9091b90bd28a492c9556d6fc4348d",
+      "family": "belpyramid-puzzle",
+      "expected_status": "SAT",
+      "source_name": "bp4_TCO_CSO_ZR.normalised.cnf.xz",
+      "selection_sha256": "02d6e908bda4bb0f1f36f928716838c291acab4833f57d88567dcaaf9a8653fd",
+      "url": "https://benchmark-database.de/file/35b9091b90bd28a492c9556d6fc4348d"
+    },
+    {
+      "database_id": "42f1311ce504db8cc0cb590a568da20a",
+      "family": "tseitin-formulas",
+      "expected_status": "UNKNOWN",
+      "source_name": "tseitin_n188_d3.cnf.xz",
+      "selection_sha256": "0c1997856b63f50a28bb3dbf2be571138601874a80da4f2000d584c990bb8c18",
+      "url": "https://benchmark-database.de/file/42f1311ce504db8cc0cb590a568da20a"
+    },
+    {
+      "database_id": "46355da785714f239393e7630020cae3",
+      "family": "reg-n",
+      "expected_status": "UNKNOWN",
+      "source_name": "REGRandom-K4-L1-Seed40.sanitized.cnf.xz",
+      "selection_sha256": "16492b0c9cf06dbbc592d497263656b221c3526d245a4bac3cb8ced377ced30d",
+      "url": "https://benchmark-database.de/file/46355da785714f239393e7630020cae3"
+    },
+    {
+      "database_id": "57b478982ee9aba245ba792452b18fe3",
+      "family": "waerden",
+      "expected_status": "SAT",
+      "source_name": "VanDerWaerden_pd_2-3-22_462.cnf.xz",
+      "selection_sha256": "0ddfb66f6ebd77d12aa7c819097649c73321322e80c277d2be2f36dca8a78dac",
+      "url": "https://benchmark-database.de/file/57b478982ee9aba245ba792452b18fe3"
+    },
+    {
+      "database_id": "5aed29ce52192a55ffbd2a6f340017e7",
+      "family": "risc-instruction-removal-subrv",
+      "expected_status": "UNKNOWN",
+      "source_name": "oisc-subrv-and-nested-12.cnf.xz",
+      "selection_sha256": "057e3ddaa4ade49da1460e3e1dabb7aa684b11861cd156f21f1b1045e898b669",
+      "url": "https://benchmark-database.de/file/5aed29ce52192a55ffbd2a6f340017e7"
+    },
+    {
+      "database_id": "95abe8aeebbe88fcb0503b13109593b3",
+      "family": "independent-set-reconfiguration",
+      "expected_status": "SAT",
+      "source_name": "reconf10_68_queen14_1.cnf.xz",
+      "selection_sha256": "06857e3bf15d65a6829d0ab256d3f88993d96cea3bf98d88f1db7122c072b2bc",
+      "url": "https://benchmark-database.de/file/95abe8aeebbe88fcb0503b13109593b3"
+    },
+    {
+      "database_id": "9b5f767eb5c14eb888d51acf70e045c8",
+      "family": "bitvector",
+      "expected_status": "UNSAT",
+      "source_name": "uniqinv40prop.cnf.xz",
+      "selection_sha256": "10e95f90fd02a85ee5a9f699d6fbcbc02f30f35cbf93a15ab50e9d00eea35260",
+      "url": "https://benchmark-database.de/file/9b5f767eb5c14eb888d51acf70e045c8"
+    },
+    {
+      "database_id": "a0bcdaffb0ea36b678899fd86bdc7f18",
+      "family": "p-center",
+      "expected_status": "UNSAT",
+      "source_name": "arles_thres10_p10_r8186.cnf.xz",
+      "selection_sha256": "1242aa34874ddf229840b74094042a3090e2feceabd7e9dff0a754f787a44e5c",
+      "url": "https://benchmark-database.de/file/a0bcdaffb0ea36b678899fd86bdc7f18"
+    },
+    {
+      "database_id": "ac51df6b340190cd1182c06ff2955afa",
+      "family": "argumentation",
+      "expected_status": "SAT",
+      "source_name": "WS_500_16_90_70.apx_1_DC-ST.cnf.xz",
+      "selection_sha256": "0638bbfc6bf33ba524a27f720b279710ea16078796c3cad9c44126c7b107a007",
+      "url": "https://benchmark-database.de/file/ac51df6b340190cd1182c06ff2955afa"
+    },
+    {
+      "database_id": "b655faa69774192a80d9e2a2bc602ce4",
+      "family": "hypertree-decomposition",
+      "expected_status": "SAT",
+      "source_name": "Kakuro-easy-115-ext.xml.hg_5.cnf.xz",
+      "selection_sha256": "0a7e13824d67b8bef2529a768f558efde8d83accdcbafb0aff757eec62d9b938",
+      "url": "https://benchmark-database.de/file/b655faa69774192a80d9e2a2bc602ce4"
+    },
+    {
+      "database_id": "bea83d274b1c57b2171b380e34fd645d",
+      "family": "xor_op",
+      "expected_status": "UNKNOWN",
+      "source_name": "xor_op_n36_d3.cnf.xz",
+      "selection_sha256": "1b764372156f7d8bc467946b53b6a3d7ebf8ff21796fbbd22e72bb410d4233a8",
+      "url": "https://benchmark-database.de/file/bea83d274b1c57b2171b380e34fd645d"
+    },
+    {
+      "database_id": "e442248e155eb81a811edd1deca8a2cd",
+      "family": "sudoku",
+      "expected_status": "UNSAT",
+      "source_name": "sudoku-N30-23.cnf.xz",
+      "selection_sha256": "0ecb40adeac476949840c7f74d76ca99890c16273fad6d9ba5a1086045c26f4f",
+      "url": "https://benchmark-database.de/file/e442248e155eb81a811edd1deca8a2cd"
+    }
+  ]
+}

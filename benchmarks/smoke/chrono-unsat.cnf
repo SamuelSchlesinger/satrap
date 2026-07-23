@@ -1,0 +1,11 @@
+c unsatisfiable gated contradictions behind 110 otherwise free variables
+c with positive phase and ascending tie-breaking this exercises a >100-level backjump
+p cnf 115 8
+-1 112 113 0
+-1 112 -113 0
+-1 -112 113 0
+-1 -112 -113 0
+1 114 115 0
+1 114 -115 0
+1 -114 115 0
+1 -114 -115 0

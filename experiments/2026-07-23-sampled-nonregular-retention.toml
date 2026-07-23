@@ -1,0 +1,304 @@
+[experiment]
+id = "2026-07-23-sampled-nonregular-retention"
+owner = "Codex"
+status = "complete; performance-rejected; Seed35 proof verified"
+worktree_revision = "uncommitted worktree after dense macro BVA"
+preregistration_sha256 = "03fcce2098da238a97a7012f2f1670b70f6c1001b0ae45fbd57c84290d070a88"
+treatment_binary = "/private/tmp/sat-baselines-20260723/sat-sampled-nonregular-retention"
+treatment_binary_sha256 = "6a06258525de8217f77a031a5a597a4b37ec0edabf8d7f90d1bf3049f00b5a67"
+
+[boundary]
+training_derived = true
+statement = "The REGN and SAT Competition development corpora have already been revealed by earlier experiments. They may falsify this mechanism and qualify it for a later untouched gate, but they cannot establish generalization, priority, or a state-of-the-art claim."
+heldout_use = "none"
+default_promotion = "not authorized from this experiment"
+
+[hypothesis]
+mechanism = "Each first-UIP conflict-resolution chain is regular, but clauses reused as parents connect those chains into a resolution DAG that may resolve the same pivot more than once along an ancestry path. On formulas separating general from regular resolution, a learned clause carrying an exact sampled witness of such a nonregular derivation may encode proof reuse that length and recent-use counts cannot see. Giving that clause priority among otherwise deletable zero-use clauses may preserve the useful general-resolution structure."
+prediction = "The sampled-witness treatment will exercise true repeated-pivot ancestry, alter at least one fixed-quota deletion set, retain the promoted solver's 5/8 development and 1/6 no-factor REGN coverage, and retain dense macro BVA's 5/6 REGN coverage. It qualifies only if it also adds a REGN solve or improves the repeated pooled median of jointly solved macro-REGN cases by at least five percent without violating the frozen regression and correctness ceilings."
+falsification = "Reject the frozen treatment as a performance candidate if no exact sampled repeated-pivot witness occurs; no deletion set changes; development, no-factor REGN, or macro-REGN coverage falls; it neither adds a macro-REGN solve nor improves the qualifying macro pooled median by five percent; any selected macro case regresses more than twenty-five percent; any repeated development case regresses more than twenty percent; easy overhead exceeds ten percent; or any model, proof, determinism, metadata, disabled-equivalence, or differential check fails. Do not tune sample size, hash, propagation rule, comparator direction, schedule, quota, or thresholds after observing results."
+
+[prior_art]
+regn = "Li et al., Simplified and Randomized Formula REGN, Proceedings of SAT Competition 2024, pages 44-45, https://helda.helsinki.fi/server/api/core/bitstreams/3f1f286b-3def-49e9-98ba-f887b1bc250e/content"
+first_uip_regularity = "Gurfinkel and Rollini et al., Labelled Interpolation Systems for Hyper-Resolution, Clausal, and Local Proofs, 2018, https://pmc.ncbi.nlm.nih.gov/articles/PMC6109788/"
+proof_regularization = "Bar-Ilan et al., Reducing the Size of Resolution Proofs in Linear Time, STTT 2011, https://ofers.dds.technion.ac.il/publications/sttt10.pdf"
+improved_pivot_recycling = "Gupta, Ganai, and Wang, Improved Single Pass Algorithms for Resolution Proof Reduction, ATVA 2012, https://www.cse.iitb.ac.in/~akg/papers/resProof-atva12.pdf"
+proof_analysis = "Kokkala and Nordstrom, Using Resolution Proofs to Analyse CDCL Solvers, CP 2020, https://jakobnordstrom.se/docs/publications/UsingProofs_CP.pdf"
+clause_management = "Cai, Zhang, Shi, Tao, and Xu, Rethinking Clause Management for CDCL SAT Solvers, arXiv:2602.20829v2, https://arxiv.org/pdf/2602.20829"
+recent_collision_exclusions = "Dual Implication Points dynamically introduce extensions from conflict implication graphs, and CaDiCaL-FX factors learned and original clauses into XOR, ITE, and OR gates. Neither direction is claimed here."
+established = "Regular versus general resolution, first-UIP learning, proof ancestry, repeated-pivot proof regularization, proof trimming, clause length, LBD, activity, and dynamic BCP/analysis usage are established."
+distinction = "The treatment does not rewrite or compress a completed proof, predict final-core membership offline, introduce extension variables, factor clauses, or rename clause length as lineage. During live search it propagates a bounded exact sample of pivot variables through learned-clause parents, records only sound repeated-pivot witnesses, and uses the inherited witness as a new deletion tie-breaker under the published usage policy's unchanged schedule and quota."
+novelty_status = "Provisional candidate contribution. A targeted primary-source and source-oriented search found no prior use of sampled transitive resolution-pivot ancestry as an online learned-clause retention signal. This is not a proof of novelty or priority, and no such claim is authorized without a broader scholarly review and successful untouched evaluation."
+
+[policy]
+name = "sampled nonregular-derivation retention"
+flag = "--nonregular-retention"
+disable_flag = "--no-nonregular-retention"
+default = "disabled"
+requires = "the promoted LBD-free clause-management policy"
+sample_capacity = 4
+sample_semantics = "For each clause, retain the four distinct pivot variable IDs with smallest deterministic ranks among the subset of first-UIP resolution pivots represented by its tracked ancestry. The sample is exact: membership has no false positives, while omitted pivots can cause false negatives."
+rank = "Rank variable v by SplitMix64(v): add 0x9e3779b97f4a7c15; xor-shift 30 and multiply by 0xbf58476d1ce4e5b9; xor-shift 27 and multiply by 0x94d049bb133111eb; xor-shift 31. Break rank ties by raw variable ID."
+storage = "Only when enabled, allocate a [u32;4] sample and one u8 state entry aligned with every long and binary ClauseRef. State stores sample count zero through four plus an inherited nonregular bit. Original clauses start empty and regular. Learned binaries remain deletion-permanent but carry metadata because they can be proof parents. Do not expand Clause, binary literals, Watch, or reason records."
+analysis = "Initialize the accumulator from the conflict clause. For every non-UIP resolution pivot p and its reason R, first inherit R's nonregular bit. Before inserting p, set the bit if p occurs in either the accumulated sample or R's sample. Merge R's bottom-four sample into the accumulator, insert p, and retain the bottom four by the frozen rank. Attach the accumulator to the final learned non-unit clause after minimization. Learned units retain no metadata because they are enqueued without a clause reason."
+soundness_scope = "Recursive and optional binary learned-clause minimization may add resolution steps after the tracked first-UIP chain. Omitting those extra pivots can only miss witnesses: every retained sampled pivot and every reported repeat still belongs to the learned clause's derivation ancestry."
+inheritance = "Once a clause has a sampled repeated-pivot witness, every learned descendant that uses it as a first-UIP parent inherits the nonregular bit."
+quota = "Compute locks, positive-score protections, the unlocked zero-score candidate pool, the one-indexed reduction number, and floor((0.90-0.40/log10(r+9))*pool_size) deletion count exactly as the promoted LBD-free reducer."
+ordering = "Within the zero-score pool, delete regular clauses before witnessed-nonregular clauses. Within each class use the promoted length-descending, ClauseRef-ascending order. Delete exactly the frozen quota. When all witness bits are false, the complete deletion order and set are identical to the promoted policy."
+diagnostics = "Report tracked resolution pivots, exact sampled repeat events, learned non-unit clauses born or inherited nonregular, nonregular zero-score candidates, deletion-set displacements relative to the promoted comparator at the same state, witnessed clauses rescued, witnessed clauses deleted after the regular pool is exhausted, and logical metadata bytes."
+everything_else = "Keep score initialization, BCP and analysis increments, 2048-conflict decay, first reduction at conflict 1000, square-root reduction intervals, deletion fractions, branching, restarts, chronological backtracking, phase saving, proof logging, model reconstruction, minimization, propagation, preprocessing, and all unrelated defaults unchanged."
+
+[variants]
+promoted_control = "/private/tmp/sat-baselines-20260723/sat-promoted-lbd-free-clause-management"
+promoted_control_sha256 = "ff29d62f9f74f5923905f465988d01e4a14651a42bcc6e4a09c4deb9669d1232"
+macro_control = "/private/tmp/sat-baselines-20260723/sat-dense-macro-bva --factor-macro"
+macro_control_sha256 = "fe5944637999c1ffd103bc8217399e6ddacbcb5203ea3ad32f3f75204f1b75b7"
+no_factor_treatment = "target/release/sat --nonregular-retention --no-factor"
+macro_treatment = "target/release/sat --nonregular-retention --factor-macro"
+compiler = "rustc stable with -C target-cpu=native and release fat LTO"
+
+[corpus.regn]
+manifest = "benchmarks/manifests/reg-n-training.json"
+role = "revealed family-specific training and mechanism falsification"
+instances = 6
+
+[corpus.development]
+manifest = "benchmarks/manifests/satcomp-2025-development.json"
+role = "revealed cross-family regression screen"
+instances = 8
+
+[corpus.easy]
+directory = "benchmarks/smoke"
+role = "overhead and correctness smoke corpus"
+instances_at_preregistration = 10
+
+[protocol]
+regn_timeout_seconds = 5
+regn_repetitions = 3
+development_timeout_seconds = 2
+development_repetitions = 1
+jointly_solved_macro_repetitions = 7
+jointly_solved_development_repetitions = 7
+jointly_solved_selection = "Freeze cases jointly solved by the paired variants in the first declared pass before repeats; do not select on treatment speedup."
+easy_repetitions = 11
+threads = 1
+order_seed = 2026072307
+primary_metric = "validated macro-REGN solved count, then pooled median wall time over frozen jointly solved macro-REGN cases"
+secondary_metrics = [
+  "no-factor REGN and development solved counts",
+  "per-instance medians",
+  "decisions, propagations, conflicts, restarts, learned literals, reductions, and deletions",
+  "tracked pivots, sampled repeats, inherited nonregular clauses, zero-score witness candidates, deletion displacements, rescues, witnessed deletions, and metadata bytes",
+  "easy pooled overhead",
+]
+stopping_rule = "Implement the frozen mechanism once, complete unit and differential checks, freeze the binary, and execute all declared comparisons. Do not consume the existing heldout manifest or retune any treatment detail from these results."
+
+[correctness]
+unit = "Test SplitMix rank constants; bottom-four ordering, deduplication, merge, and truncation; exact repeat detection; witness inheritance; empty original metadata; learned binary parent propagation; optional storage; fixed deletion quota; regular-first ordering; lock and positive-score protection; witnessed displacement; witnessed deletion when the regular pool is exhausted; and all-regular exact equivalence."
+differential = "Extend the deterministic 2000-formula brute-force suite to --nonregular-retention and supported combinations, requiring exact SAT/UNSAT agreement and original-formula model validation."
+models = "Independently validate every SAT model emitted in all benchmark passes."
+proof = "Emit a treatment DRAT proof for a real solved REGN instance and require independent DRAT-trim verification against the original CNF."
+disabled_equivalence = "The modified binary with --no-nonregular-retention must reproduce the frozen promoted deterministic trajectory and all existing counters on 6s268."
+determinism = "Repeated treatment executions must have identical result, search counters, and regularity counters after excluding solve_seconds."
+metadata = "Enabled sample/state arrays must remain aligned with stable long and binary ClauseRefs through allocation, lazy deletion, preprocessing, and optional compaction; they must remain empty when disabled."
+exercise = "Require nonzero tracked pivots, at least one exact sampled repeat, at least one witnessed learned clause, at least one witnessed zero-score candidate, and at least one deletion-set displacement."
+
+[promotion_gate]
+development_solved_minimum = 5
+no_factor_regn_solved_minimum = 1
+macro_regn_solved_minimum = 5
+qualifying_improvement = "Either macro treatment solves more REGN cases than macro control, or equal coverage accompanies at least a five-percent improvement in the frozen jointly solved macro pooled median."
+macro_jointly_solved_pooled_improvement_percent_minimum_if_tied = 5
+macro_per_case_max_regression_percent = 25
+development_repeated_max_regression_percent = 20
+easy_overhead_max_percent = 10
+sampled_repeat_required = true
+selection_displacement_required = true
+disabled_trajectory_exact_required = true
+deterministic_treatment_reproducibility_required = true
+sat_model_validation_required = true
+proof_validation_required = true
+next_step = "If every gate passes, retain the mode as an opt-in candidate, broaden the prior-art audit, and construct a new license-compatible outcome-blind family-stratified corpus before any default, novelty, or state-of-the-art claim. If rejected, preserve this preregistration and the negative result and do not tune the same signal on revealed families."
+
+[results]
+no_factor_regn_jsonl = "/private/tmp/sat-baselines-20260723/sampled-nonregular-regn-no-factor-repeat3.jsonl"
+no_factor_regn_jsonl_sha256 = "bc9b44b6c85d33c5740efb99e42d8a59ff6a45b24e1df8aab15202468b3b3f64"
+macro_regn_jsonl = "/private/tmp/sat-baselines-20260723/sampled-nonregular-regn-macro-repeat3.jsonl"
+macro_regn_jsonl_sha256 = "68ff627f13ec964c1aa8844cd55e513664de8ab55e5501176fafa683642dfba2"
+macro_jointly_solved_jsonl = "/private/tmp/sat-baselines-20260723/sampled-nonregular-regn-macro-jointly-solved-repeat7.jsonl"
+macro_jointly_solved_jsonl_sha256 = "a3f7c2c94b4fc1868dd1de8ebb8fdd01e99df7f084011bcf6aa34c2e71efcda3"
+development_jsonl = "/private/tmp/sat-baselines-20260723/sampled-nonregular-development-2s.jsonl"
+development_jsonl_sha256 = "6d592515ee0978a49a0186b9e8c5053b2195873e881bf91174d8ee5129df1055"
+development_jointly_solved_jsonl = "/private/tmp/sat-baselines-20260723/sampled-nonregular-development-jointly-solved-repeat7.jsonl"
+development_jointly_solved_jsonl_sha256 = "0578f6320a6ca01e101e0d624e1e10eb5729af47e922615c3a6462161ee92113"
+easy_jsonl = "/private/tmp/sat-baselines-20260723/sampled-nonregular-easy-repeat11.jsonl"
+easy_jsonl_sha256 = "f4dde9e8a1cc780328cf0f6233adc2f1d4473f0270c7a6a4e602f07778d5649c"
+summary = "The frozen treatment found a real, deterministic family-specific gain but failed the unconditional performance gate. With dense macro BVA it solved all 6/6 REGN cases at five seconds versus 5/6 for the frozen macro control, adding K4-L2-Seed35 at a 3.273549-second median. It simultaneously fell from 1/6 to 0/6 without factoring and from 5/8 to 4/8 on the development screen. On repeated jointly solved cases, K4-L2-Seed20 regressed 27.544 percent and gm24 regressed 29.425 percent, exceeding the frozen 25 and 20 percent ceilings. Easy pooled time improved 0.979 percent. The signal is therefore mixed and strongly conditional on formula structure; it is not authorized for default promotion, held-out evaluation, a novelty claim, or a claim that Seed35 was globally previously unsolved."
+conclusion = "Reject the unchanged policy as a general performance candidate and retain it disabled behind --nonregular-retention as a diagnostic, proof-capable research result. The exact sampled ancestry signal is exercised and changes fixed-quota deletion sets, but preserving every witnessed clause is not robust across the revealed families. Do not tune sample size, rank, inheritance, comparator, quota, or activation on these results."
+
+[results.scope_correction]
+invalid_artifact = "/private/tmp/sat-baselines-20260723/sampled-nonregular-regn-no-factor-repeat3.invalid-extra-corpus.jsonl"
+reason = "The first invocation accidentally pointed at a seven-file directory containing K4-L4-Seed10 in addition to the six manifest cases. It was interrupted, renamed invalid immediately, and excluded from every result. All declared REGN artifacts use the exact six-case manifest-backed directory."
+
+[results.no_factor_regn]
+control_covered_instances = 1
+treatment_covered_instances = 0
+instances = 6
+control_completed_runs = 2
+treatment_completed_runs = 0
+gate = "failed: treatment coverage 0/6 is below the frozen minimum 1/6"
+
+[results.macro_regn]
+control_covered_instances = 5
+treatment_covered_instances = 6
+instances = 6
+control_completed_runs = 15
+treatment_completed_runs = 18
+new_treatment_case = "REGRandom-K4-L2-Seed35"
+new_treatment_case_median_seconds = 3.273548625
+new_treatment_case_scope = "Solved against the pinned frozen control at the declared cutoff. No broader current-solver or historical audit was performed, so this is not a globally previously-unsolved claim."
+coverage_gate = "passed"
+
+[results.macro_jointly_solved]
+instances = [
+  "REGRandom-K3-L1-Seed20",
+  "REGRandom-K4-L1-Seed30",
+  "REGRandom-K3-L3-Seed25",
+  "REGRandom-K4-L2-Seed20",
+  "REGRandom-K3-L3-Seed30",
+]
+control_sum_of_instance_medians_seconds = 4.921646459
+treatment_sum_of_instance_medians_seconds = 5.685390542
+change_percent = 15.518061
+qualification = "Coverage improvement would satisfy the primary alternative, but the per-case regression ceiling is independently mandatory."
+
+[results.macro_jointly_solved.k3_l1_seed20]
+control_median_seconds = 0.015518750
+treatment_median_seconds = 0.015789917
+change_percent = 1.747351
+
+[results.macro_jointly_solved.k4_l1_seed30]
+control_median_seconds = 0.575440833
+treatment_median_seconds = 0.518125375
+change_percent = -9.960270
+
+[results.macro_jointly_solved.k3_l3_seed25]
+control_median_seconds = 0.485942459
+treatment_median_seconds = 0.380620709
+change_percent = -21.673708
+
+[results.macro_jointly_solved.k4_l2_seed20]
+control_median_seconds = 3.483270542
+treatment_median_seconds = 4.442715583
+change_percent = 27.544373
+gate = "failed: regression exceeds the frozen 25 percent ceiling"
+
+[results.macro_jointly_solved.k3_l3_seed30]
+control_median_seconds = 0.361473875
+treatment_median_seconds = 0.328138958
+change_percent = -9.221944
+
+[results.development]
+control_solved = 5
+treatment_solved = 4
+instances = 8
+control_sat = 3
+control_unsat = 2
+treatment_sat = 2
+treatment_unsat = 2
+sat_models = "all 5 emitted models in the first pass and all 28 emitted models in repeat-7 validation were valid against the original CNFs"
+lost_case = "Break_12_50.xml.cnf"
+gate = "failed: treatment coverage 4/8 is below the frozen minimum 5/8"
+
+[results.development_jointly_solved]
+instances = [
+  "gm24sparrc.cnf",
+  "Break_triple_04_06.xml.cnf",
+  "6s268r_Iter94.cnf",
+  "6s299b685_Iter22.cnf",
+]
+control_sum_of_instance_medians_seconds = 1.435464417
+treatment_sum_of_instance_medians_seconds = 1.604312874
+change_percent = 11.762636
+
+[results.development_jointly_solved.gm24sparrc]
+control_median_seconds = 0.417924834
+treatment_median_seconds = 0.540897792
+change_percent = 29.424659
+gate = "failed: regression exceeds the frozen 20 percent ceiling"
+
+[results.development_jointly_solved.break_triple]
+control_median_seconds = 0.003470958
+treatment_median_seconds = 0.003408541
+change_percent = -1.798264
+
+[results.development_jointly_solved.sixs268]
+control_median_seconds = 0.642898458
+treatment_median_seconds = 0.669654916
+change_percent = 4.161848
+
+[results.development_jointly_solved.sixs299]
+control_median_seconds = 0.371170167
+treatment_median_seconds = 0.390351625
+change_percent = 5.167834
+
+[results.easy]
+control_sum_of_instance_medians_seconds = 0.021181250049266964
+treatment_sum_of_instance_medians_seconds = 0.02097383394720964
+change_percent = -0.979243914192407
+status_disagreements = 0
+sat_models = "all valid"
+gate = "passed"
+
+[results.exercise.seed35]
+stats_run_1 = "/private/tmp/sat-baselines-20260723/sampled-nonregular-regn-k4l2-seed35-run1.stats"
+stats_run_1_sha256 = "2f3b3ead2ddbff45cb2c3d9401bb003b3cd190b1720f7771e09e6cafa6e1831c"
+stats_run_2 = "/private/tmp/sat-baselines-20260723/sampled-nonregular-regn-k4l2-seed35-run2.stats"
+stats_run_2_sha256 = "b2b50fbb466aa45ba900a21232c0895c96ed6731b0461976dafa844ad7fab48e"
+decisions = 1595565
+propagations = 3374185
+conflicts = 164886
+restarts = 444
+reductions = 39
+tracked_resolution_pivots = 159605
+sampled_repeat_witnesses = 841
+nonregular_learned_clauses = 31071
+nonregular_zero_candidates = 107497
+selection_displacements = 36232
+nonregular_rescues = 36232
+nonregular_deletions = 25090
+logical_metadata_bytes = 62604064
+determinism = "The two complete runs have identical SAT status and byte-identical output after excluding the single solve_seconds line."
+gate = "passed: all preregistered mechanism-exercise counters are nonzero"
+
+[results.correctness]
+tests = "136 Rust tests and 7 Python tests passed; rustfmt and clippy -D warnings clean"
+differential = "2000 deterministic brute-force formulas passed with --nonregular-retention enabled, including original-formula SAT-model validation"
+disabled_trajectory = "Exact against the frozen promoted 6s268 trajectory: 42363 decisions, 5893854 propagations, 5551 conflicts, 28 restarts, 5517 learned clauses, 52491 learned literals, 20581 minimized literals, 1577 deletions, 4 reductions, 8879848 binary visits, and all usage counters."
+metadata = "Unit tests cover optional allocation, long/binary ClauseRef alignment, deletion and compaction stability, all-regular exact deletion equivalence, fixed-quota displacement, and deletion after exhausting the regular pool."
+source_solver_sha256 = "6f9bc0b66bf0ac02847342c783140d9c6593ffbc4e24478f41b925bb46766c82"
+source_main_sha256 = "5e4c9b29f08b562d7a46af3086d641f3841e35c36ec1a0cfc7832466b82bf7ba"
+source_solver_correctness_test_sha256 = "5f4d45b8b2bc9123fb48b02f603b09368686f8b924f69790d03884484f27a666"
+source_cli_test_sha256 = "ed6c2231015a364a87592cff8b5c59bf71e80902c187058c8bed4ac8fb9cf7ac"
+
+[results.proofs.k3_l1_seed20]
+formula_sha256 = "f18cff9f2e604985fc7f480f722c429e4464352d9a316d9964c140d78b471d73"
+proof = "/private/tmp/sat-sampled-nonregular-k3l1-seed20.drat"
+proof_sha256 = "fe90e4fee147fa35084300648687d803c41187767315fc2cafd44b969b817405"
+proof_bytes = 250058
+proof_lines = 4018
+checker = "DRAT-trim v05.22.2023 commit 2e5e29cb0019d5cfd547d4208dca1b3ec290349f"
+checker_binary_sha256 = "5f4364c0dc84fe7694b6e7380017a8e693504fbd29d090ae8af32e8734e191b3"
+command_mode = "strict forward verification with -f -W"
+result = "VERIFIED: 3538 of 4019 lemmas in core, 57322 resolution steps, and 3206 RAT lemmas in core"
+
+[results.proofs.k4_l2_seed35]
+formula_sha256 = "68e652b2af5a58e56cc27a421d2e6d08a265fbbf8f42e5ef229abdb96a79d17c"
+proof = "/private/tmp/sat-sampled-nonregular-k4l2-seed35.drat"
+proof_sha256 = "132a75868c7999c50e2d023085b1a096f71bc70feb397bf42b1537913da80055"
+proof_bytes = 261458395
+proof_lines = 376357
+checker = "DRAT-trim v05.22.2023 commit 2e5e29cb0019d5cfd547d4208dca1b3ec290349f"
+checker_binary_sha256 = "5f4364c0dc84fe7694b6e7380017a8e693504fbd29d090ae8af32e8734e191b3"
+command_mode = "standard backward verification with -W"
+result = "VERIFIED: all 3306240 input clauses and 222971 of 376358 proof lemmas were in the backward core, using 4468616 resolution steps; 211468 RAT lemmas and 4499 redundant literals were in the core; verification took 6149.682 seconds"

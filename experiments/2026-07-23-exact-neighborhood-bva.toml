@@ -1,0 +1,276 @@
+[experiment]
+id = "2026-07-23-exact-neighborhood-bva"
+owner = "Codex"
+status = "complete; rejected default; retained opt-in"
+worktree_revision = "uncommitted initial worktree"
+
+[diagnosis]
+gap = "On six disjoint REGN training instances at five seconds, pinned Kissat 4.0.4 solved 4/6, the promoted Rust solver solved 1/6, and CaDiCaL 3.0.1 solved 0/6."
+reference_ablation = "On REGRandom-K4-L1-Seed30, instrumented Kissat solved in 1.95 seconds with 318 factored extension variables and 6038 conflicts. --factor=false timed out at five seconds after 312527 conflicts; --sweep=false reproduced the default 6038-conflict trajectory."
+benchmark_structure = "The SAT Competition 2024 REGN description says these shuffled formulas have polynomial unrestricted-resolution proofs, were intended to stress variable ordering, and were proposed to study bounded-variable-elimination cooperation with CDCL."
+
+[hypothesis]
+mechanism = "Exact Cartesian products of short original clauses can be represented by a fresh extension variable. Replacing every clause f_i OR Q_j in an m-by-n product by m clauses x OR f_i and n clauses not-x OR Q_j preserves satisfiability while reducing clause count from m*n to m+n and exposing an extended-resolution proof structure."
+prediction = "A deterministic exact-neighborhood bounded-variable-addition pass will reduce at least one REGN formula, improve the five-second REGN training solved count from 1/6 to at least 3/6, and preserve the promoted solver's 5/8 two-second development solved count."
+falsification = "Reject default promotion unchanged if the REGN solved count is below 3/6, development coverage falls, any SAT projection is invalid, the crafted or real UNSAT proof fails DRAT-trim, a jointly solved development case regresses by more than ten percent, or pooled easy overhead exceeds five percent. Do not tune limits after observing results."
+
+[prior_art]
+checked = [
+  "Manthey, Heule, and Biere, Automated Reencoding of Boolean Formulas, Hardware and Software: Verification and Testing 2012",
+  "Jarvisalo, Heule, and Biere, Inprocessing Rules, IJCAR 2012",
+  "Kissat 4.0.4 commit 8af8e56f174b778aef3aa45af9f739b2a5f492c2 src/factor.c",
+  "Li et al., Simplified and Randomized Formula REGN, Proceedings of SAT Competition 2024, pages 44-45",
+]
+established = "Bounded variable addition, formula factoring, and extension-variable proof steps are established SAT preprocessing. Kissat greedily factors exact clause products and is the direct reference implementation for the missing capability."
+distinction = "This Rust baseline groups literals only when their complete active short-clause quotient neighborhoods are exactly equal. It uses whole-round snapshots and no partial-overlap, structural-hop, or learned-clause factoring."
+novelty_status = "Baseline engineering only; no novelty or priority claim."
+
+[policy]
+name = "exact short-clause quotient-neighborhood BVA"
+switch = "--factor; --no-factor is the default"
+schedule = "At level zero, after all other enabled root simplifiers and zero-growth BVE, run at most eight whole-snapshot rounds before the first CDCL decision."
+candidates = "Active non-learned clauses whose root-simplified canonical length is between two and five. Skip root-satisfied clauses and remove root-false literals."
+neighborhood = "For every candidate literal f, define its quotient neighborhood as the sorted unique set of candidate clauses with f removed. Group factor literals only when these complete quotient neighborhoods are byte-for-byte equal and contain at least two quotients."
+selection = "For every exact group with at least two factors, compute reduction m*n-m-n. Sort groups by descending reduction, then lexicographically by factors and quotients. Accept only strict clause-count reductions and skip a group if any matrix clause was removed by an earlier group in the same round."
+rewrite = "Allocate one fresh internal variable x. Proof-log and install every divider x OR f_i, then every quotient clause not-x OR Q_j while all matrix clauses remain present. Lazily delete the m*n matrix clauses only after all replacements are installed."
+rounds = 8
+maximum_candidate_clause_length = 5
+effort = "Charge root-simplified candidate literals and quotient-materialization literals. Stop before exceeding max(1000000, min(100000000, 16 times the first-round candidate-literal count))."
+model = "Fresh variables are existential extensions. A satisfying assignment of the transformed formula restricted to the original variables satisfies every removed matrix clause; emitted models omit extension variables."
+proof = "Divider clauses are RAT on fresh x because not-x is absent. Each quotient clause is RAT on not-x because every resolvent against a divider is one of the still-present matrix clauses. Proof deletions remain omitted."
+default = "disabled until the full promotion gate passes"
+
+[variants]
+control = "/private/tmp/sat-baselines-20260723/sat-promoted-lbd-free-clause-management --no-factor"
+treatment = "target/release/sat --factor"
+compiler = "rustc stable with -C target-cpu=native and release fat LTO"
+
+[corpus.training]
+manifest = "benchmarks/manifests/reg-n-training.json"
+role = "training"
+instances = 6
+family = "reg-n"
+deduplication = "sha256"
+revealed_2025_case = "46355da785714f239393e7630020cae3-REGRandom-K4-L1-Seed40.sanitized.cnf is excluded from implementation and gate decisions."
+
+[corpus.development]
+manifest = "benchmarks/manifests/satcomp-2025-development.json"
+role = "revealed development"
+instances = 8
+
+[protocol]
+regn_timeout_seconds = 5
+regn_repetitions = 1
+development_timeout_seconds = 2
+development_repetitions = 1
+jointly_solved_repetitions = 7
+endpoint_instances = ["Break_12_50.xml.cnf", "6s268r_Iter94.cnf"]
+endpoint_repetitions = 3
+endpoint_timeout_seconds = 25
+easy_overhead_repetitions = 11
+threads = 1
+order_seed = 2026072305
+primary_metric = "validated solved count on the six-instance REGN training corpus at five seconds"
+secondary_metrics = [
+  "extension variables introduced",
+  "candidate clauses and literal touches",
+  "matrix clauses removed and replacement clauses installed",
+  "clause-count reduction",
+  "factor and quotient widths",
+  "conflicts and propagations",
+  "paired wall time",
+]
+stopping_rule = "Implement the frozen policy once, complete correctness and proof checks, then execute the declared comparisons. Do not alter the neighborhood definition, limits, round count, or selector after observing results."
+
+[correctness]
+unit_tests = "Exercise exact binary and ternary products, non-products, partial overlaps, root simplification, duplicate clauses, same-round overlap, multiple rounds, effort exhaustion, deterministic tie breaking, fresh-variable growth, and model projection."
+differential = "Add --factor to deterministic brute-force differential testing and require every SAT model to have exactly the original variable count and satisfy the original clauses."
+sat_model = "Retain a crafted satisfiable product whose internal extension variable is projected out."
+unsat_proof = "Require DRAT-trim verification on a crafted factorization and REGRandom-K3-L1-Seed20 if the treatment solves it."
+disabled_equivalence = "The final binary with --no-factor must reproduce the promoted control's deterministic search counters on 6s268."
+
+[promotion_gate]
+regn_control_solved = 1
+regn_treatment_solved_minimum = 3
+development_control_solved = 5
+development_treatment_solved_minimum = 5
+jointly_solved_max_regression_percent = 10
+endpoint_max_regression_percent = 10
+easy_overhead_max_percent = 5
+sat_model_validation_required = true
+proof_required = true
+next_step = "If the capability gate passes, retain exact-neighborhood BVA and separately preregister a genuinely novel proof-regularity intervention. If it fails, preserve only the correctness foundation and diagnose which partial products Kissat factors."
+
+[artifacts]
+reference_jsonl = "/private/tmp/sat-baselines-20260723/reg-n-training-references-5s.jsonl"
+reference_jsonl_sha256 = "1dd25a59baf937467e00df236fb3922e179e1359b7f756ef0ea16fbdbf95c8bb"
+elimination_jsonl = "/private/tmp/sat-baselines-20260723/reg-n-training-eliminate-5s.jsonl"
+promoted_development_jsonl = "/private/tmp/sat-baselines-20260723/promoted-references-full-2s.jsonl"
+promoted_development_jsonl_sha256 = "a613044bcfff107cb57f81f5b902058d6f2a866f6f33cbd6efe56c3d585f4e6b"
+promoted_revealed_gate_jsonl = "/private/tmp/sat-baselines-20260723/promoted-revealed-heldout-diagnostic-5s.jsonl"
+promoted_revealed_gate_jsonl_sha256 = "03db2d0eba1b59f84e9279650137716d64d17be77c69e366adae19a8b66e9738"
+
+[results]
+decision = "Reject default promotion unchanged and retain the proof-checked exact-neighborhood implementation behind --factor. The primary REGN capability gate passed, but treatment development coverage fell from 5/8 to 4/8 and the declared runtime ceilings failed."
+preregistered_policy_sha256 = "0e09ec7c583128e52eb8b2c6f614d24779b975dc23c611bd29bc30ce0bea4e6d"
+control_binary = "/private/tmp/sat-baselines-20260723/sat-promoted-lbd-free-clause-management"
+control_binary_sha256 = "ff29d62f9f74f5923905f465988d01e4a14651a42bcc6e4a09c4deb9669d1232"
+treatment_binary = "/private/tmp/sat-baselines-20260723/sat-exact-neighborhood-bva"
+treatment_binary_sha256 = "62fa56cfc13a443f9e9ec9a07fb25a45a3b0a9f710425f4f892a4aa51b743f5e"
+regn_jsonl = "/private/tmp/sat-baselines-20260723/exact-neighborhood-bva-regn-5s.jsonl"
+regn_jsonl_sha256 = "a0283e1068a87df1a96858d64cff5807c4d279e06869e6373c81d102cf4da06d"
+development_jsonl = "/private/tmp/sat-baselines-20260723/exact-neighborhood-bva-development-2s.jsonl"
+development_jsonl_sha256 = "86747cae1ad899787876bf04873aebd4f37af2ead2b6dc471bb29c2648c1c5e4"
+jointly_solved_jsonl = "/private/tmp/sat-baselines-20260723/exact-neighborhood-bva-jointly-solved-repeat7-models.jsonl"
+jointly_solved_jsonl_sha256 = "6257f911271fefa1955d54828791ad6aaffc6704f35b843d00c753771826b399"
+endpoint_jsonl = "/private/tmp/sat-baselines-20260723/exact-neighborhood-bva-endpoints-repeat3.jsonl"
+endpoint_jsonl_sha256 = "e83dffe5e325115c18dc0ff2a79b19ff5970afdcaa8f04fcc0b1de0024485aa1"
+easy_jsonl = "/private/tmp/sat-baselines-20260723/exact-neighborhood-bva-easy-repeat11.jsonl"
+easy_jsonl_sha256 = "99a9eda53cfa10b8f868c094eb3dc8a2a0fd7dc503cd4509bf4e8a3a52379966"
+summary = "At five seconds, treatment raised REGN coverage from 1/6 to 4/6 and solved the same four cases as pinned Kissat 4.0.4. At two seconds on the unchanged development slice, it lost Break_12_50 and fell from 5/8 to 4/8. Exact products on Break changed the deterministic trajectory from 37717 to 131742 conflicts; even cases with no accepted product paid a substantial full-snapshot scan cost. The mechanism is a major family-specific capability but is not safe as an unconditional default."
+
+[results.regn]
+control_solved = 1
+treatment_solved = 4
+control_unsat = 1
+treatment_unsat = 4
+status_disagreements = 0
+gate = "passed: treatment exceeded the preregistered 3/6 minimum"
+
+[results.regn.k3_l1_seed20]
+control_seconds = 4.4517592919874005
+treatment_seconds = 0.015113125002244487
+treatment_decisions = 8793
+treatment_propagations = 24514
+treatment_conflicts = 1046
+factored_variables = 54
+clauses_removed = 32576
+clauses_added = 4231
+clause_reduction = 28345
+peak_factors = 64
+peak_quotients = 256
+
+[results.regn.k4_l1_seed30]
+control = "timeout at 5 seconds"
+treatment_seconds = 0.527659625018714
+treatment_decisions = 254911
+treatment_propagations = 550298
+treatment_conflicts = 32008
+factored_variables = 206
+clauses_removed = 883200
+clauses_added = 64271
+clause_reduction = 818929
+peak_factors = 256
+peak_quotients = 2048
+
+[results.regn.k3_l3_seed25]
+control = "timeout at 5 seconds"
+treatment_seconds = 0.31806595899979584
+treatment_conflicts = 19205
+factored_variables = 198
+clauses_removed = 523520
+clauses_added = 54791
+clause_reduction = 468729
+peak_factors = 256
+peak_quotients = 1024
+
+[results.regn.k3_l3_seed30]
+control = "timeout at 5 seconds"
+treatment_seconds = 0.34478508299798705
+treatment_conflicts = 27802
+factored_variables = 198
+clauses_removed = 523520
+clauses_added = 54791
+clause_reduction = 468729
+peak_factors = 256
+peak_quotients = 1024
+
+[results.development]
+control_solved = 5
+treatment_solved = 4
+control_sat = 3
+treatment_sat = 2
+control_unsat = 2
+treatment_unsat = 2
+lost_solve = "Break_12_50.xml.cnf"
+sat_models = "all emitted models valid"
+status_disagreements = 0
+gate = "failed: treatment coverage fell below 5/8"
+
+[results.jointly_solved]
+control_pooled_median_seconds = 0.32891989550262224
+treatment_pooled_median_seconds = 0.4497081040026387
+change_percent = 36.722682377
+gate = "failed: 6s268 and 6s299 exceeded the 10 percent per-case ceiling"
+
+[results.jointly_solved.gm24sparrc]
+control_median_seconds = 0.3397828339948319
+treatment_median_seconds = 0.36700354199274443
+change_percent = 8.011207534
+factored_variables = 0
+
+[results.jointly_solved.break_triple]
+control_median_seconds = 0.0030957080016378313
+treatment_median_seconds = 0.0033666669914964586
+change_percent = 8.752730869
+factored_variables = 24
+
+[results.jointly_solved.six268]
+control_median_seconds = 0.5662589999847114
+treatment_median_seconds = 0.8598082500102464
+change_percent = 51.840103210
+factored_variables = 0
+
+[results.jointly_solved.six299]
+control_median_seconds = 0.3212727500067558
+treatment_median_seconds = 0.5300038330024108
+change_percent = 64.970055192
+factored_variables = 3
+
+[results.endpoints]
+control_pooled_median_seconds = 0.8902566455071792
+treatment_pooled_median_seconds = 3.2869471250014612
+change_percent = 269.213433181
+gate = "failed"
+
+[results.endpoints.break12]
+control_median_seconds = 1.2088672500103712
+treatment_median_seconds = 5.708354166999925
+change_percent = 372.206866962
+control_conflicts = 37717
+treatment_conflicts = 131742
+factored_variables = 1056
+clauses_removed = 7920
+clauses_added = 5808
+clause_reduction = 2112
+peak_factors = 3
+peak_quotients = 3
+
+[results.endpoints.six268]
+control_median_seconds = 0.5754593340097927
+treatment_median_seconds = 0.8617903749982361
+change_percent = 49.756954847
+control_conflicts = 5551
+treatment_conflicts = 5551
+factored_variables = 0
+diagnosis = "The deterministic search trajectory is unchanged; the regression is preprocessing scan overhead."
+
+[results.easy]
+control_pooled_median_seconds = 0.0018368749879300594
+treatment_pooled_median_seconds = 0.0018248750129714608
+change_percent = -0.653282071
+gate = "passed"
+corpus = "the eight smoke instances that existed at preregistration time"
+
+[results.correctness]
+tests = "121 Rust tests passed; rustfmt and clippy -D warnings clean"
+differential = "2000 deterministic brute-force formulas passed with exact-neighborhood BVA enabled; every SAT projection had exactly the input variable count and satisfied the original formula"
+crafted_proof = "/private/tmp/sat-factor-smoke-pivoted.drat"
+crafted_proof_sha256 = "7f2a0ca19c172364dcc69a7ccb268671f1df41dc263671e39f1a6c3895569ce6"
+crafted_proof_result = "DRAT-trim forward verification succeeded with -W; all six extension clauses were RAT lemmas in the core"
+regn_proof = "/private/tmp/sat-regn-k3l1-factor.drat"
+regn_proof_sha256 = "0fdd161a352b7dd6e0b17493730590bf58562027e3726b5276f4aea5c981559f"
+regn_proof_bytes = 319185
+regn_proof_result = "DRAT-trim forward verification succeeded; 4573 of 5278 lemmas were in the core, including 4230 RAT lemmas, using 64818 resolution steps"
+drat_trim_sha256 = "5f4364c0dc84fe7694b6e7380017a8e693504fbd29d090ae8af32e8734e191b3"
+disabled_trajectory = "exact against the frozen promoted control on 6s268: 42363 decisions, 5893854 propagations, 5551 conflicts, 28 restarts, 5517 learned clauses, 52491 learned literals, and 1577 deletions"

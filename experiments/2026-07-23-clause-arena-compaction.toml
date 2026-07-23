@@ -1,0 +1,174 @@
+[experiment]
+id = "2026-07-23-clause-arena-compaction"
+owner = "Codex"
+status = "complete"
+worktree_revision = "uncommitted initial worktree"
+
+[hypothesis]
+mechanism = "Database reduction leaves holes in the append-only literal arena. Packing the live suffix in stable clause-reference order immediately after each productive reduction should improve locality and bound logical arena growth without changing any search decision."
+prediction = "The treatment will preserve the frozen two-second solved count and every deterministic search counter, reclaim at least one literal slot on a development instance, and improve the pooled repeated median of triggered nontrivial development cases by at least two percent without regressing any such case or hard endpoint by more than five percent."
+falsification = "Reject default promotion unchanged if the two-second solved count falls, no development run compacts, any deterministic search counter or completed result differs, any SAT model is invalid, the control and treatment DRAT streams differ, pooled triggered-case improvement is below two percent, a nontrivial jointly solved development case or hard endpoint regresses by more than five percent, or easy pooled overhead exceeds five percent. Do not alter scheduling or inspect held-out data after outcomes are observed."
+
+[prior_art]
+checked = [
+  "CaDiCaL 3.0.1 c60730422e758ef1cebe7aeddf2dda31c996bf04 src/collect.cpp copying garbage collector",
+  "Kissat 4.0.4 8af8e56f174b778aef3aa45af9f739b2a5f492c2 src/reduce.c and src/collect.c sparse arena collection",
+  "MiniSat 2.2 Solver::garbageCollect and relocAll copying collection",
+]
+established = "Copying or sliding garbage collection for learned-clause storage is established SAT-solver engineering. CaDiCaL additionally documents that preserving relative order already provides locality benefits, while Kissat collects arena garbage as part of reduction."
+distinction = "This solver stores literals separately from stable clause metadata. The experiment can therefore slide only literal payloads in place and update metadata offsets; watches and reasons retain their ClauseRef values and require no relocation or rebuild."
+novelty_status = "Baseline engineering only. No novelty claim."
+
+[policy]
+name = "reduction-synchronous stable-reference clause-arena compaction"
+schedule = "Run once immediately after every learned-clause database reduction that newly deletes at least one arena-backed clause."
+start = "Remember the minimum ClauseRef and arena offset among clauses newly deleted since the preceding compaction. Preserve the complete prefix before that offset."
+order = "Visit metadata from the minimum newly deleted ClauseRef onward in stable ClauseRef order. Skip every deleted clause and copy each live clause's literal range downward with Vec::copy_within, preserving its literal order, then update only Clause.start."
+reclamation = "Truncate the Vec to the final live write offset. Do not shrink capacity: later learned clauses reuse the allocation without an allocator round trip."
+references = "Do not rewrite ClauseRef values in watch entries or reasons. Clause metadata objects remain at their original indices."
+scope = "Collect original or learned payloads if another opt-in mechanism deleted them, but the frozen benchmark variants disable probing, vivification, subsumption, and binary-resolution minimization."
+default = "disabled until the promotion gate passes"
+
+[variants]
+control = "target/release/sat --no-compact-arena --no-binary-minimize --no-subsume --no-vivify --no-probe"
+treatment = "target/release/sat --compact-arena --no-binary-minimize --no-subsume --no-vivify --no-probe"
+compiler = "rustc stable with -C target-cpu=native and release fat LTO"
+
+[corpus]
+manifest = "benchmarks/manifests/satcomp-2025-development.json"
+role = "development"
+deduplication = "sha256"
+heldout_use = "none"
+
+[protocol]
+full_slice_timeout_seconds = 2
+full_slice_repetitions = 1
+jointly_solved_repetitions = 7
+jointly_solved_selection = "After the frozen full-slice run, repeat every development instance that either variant solves and whose control or treatment wall time is at least 0.1 seconds. Apply the per-instance ceiling to every selected case. Compute the pooled treatment change from the sum of per-instance medians over only selected cases whose treatment reports at least one compaction."
+endpoint_instances = ["Break_12_50.xml.cnf", "6s268r_Iter94.cnf"]
+endpoint_timeout_seconds = 15
+endpoint_repetitions = 3
+easy_overhead_repetitions = 11
+threads = 1
+order_seed = 20251001
+primary_metric = "validated solved count on the frozen eight-instance development slice at two seconds"
+secondary_metrics = [
+  "arena compactions",
+  "literal slots moved and reclaimed",
+  "peak and final logical arena length",
+  "deterministic conflicts, decisions, propagations, restarts, learned clauses, learned literals, deletions, and reductions",
+  "paired wall time",
+]
+stopping_rule = "Implement the frozen policy once, run structural and proof checks, then execute the declared development comparisons. Do not inspect held-out data or add a garbage-ratio threshold after observing results."
+
+[correctness]
+unit_tests = "Construct interleaved active and deleted clauses, compact from a nonzero prefix, and assert stable ClauseRefs, exact literal payloads, updated starts, unchanged watch/reason references, capacity retention, and idempotence when no new garbage exists."
+differential = "Add arena compaction to deterministic brute-force differential testing and validate every SAT model against the original clauses."
+trajectory = "For every completed paired benchmark, require identical status and deterministic search counters. Arena-only counters may differ."
+unsat_proof = "On a real development UNSAT instance that triggers compaction, require byte-identical control and treatment DRAT streams and independent DRAT-trim verification."
+disabled_overhead = "The disabled path adds one predictable configuration branch per clause deletion and after each reduction. It performs no garbage accounting, payload copy, metadata scan, or stats update."
+
+[promotion_gate]
+development_solved_delta_minimum = 0
+development_reclaimed_literals_minimum = 1
+deterministic_counter_mismatches_maximum = 0
+triggered_pooled_improvement_percent_minimum = 2
+jointly_solved_max_regression_percent = 5
+endpoint_max_regression_percent = 5
+easy_overhead_max_percent = 5
+byte_identical_proof_required = true
+next_step = "If promoted, make compaction the default and separately investigate clause ordering during collection. If rejected, retain the switch only if it remains correctness-useful, then move to proof-safe bounded variable elimination or separate packed binary storage."
+
+[results]
+solver_binary_sha256 = "0872a788e07750ae4b242e23547f8af462a12b0a5da46affa8fb115b042c692b"
+full_slice_jsonl = "/private/tmp/sat-baselines-20260723/clause-arena-compaction-full-2s.jsonl"
+full_slice_jsonl_sha256 = "cbb106d696fbdf71a7ecbc07bfa26bb85c06ad966222616a68c774e39cd041c1"
+jointly_solved_jsonl = "/private/tmp/sat-baselines-20260723/clause-arena-compaction-jointly-solved-repeat7.jsonl"
+jointly_solved_jsonl_sha256 = "8d32d383f2b661fe8d0cba87414024a42500645728c10aea47bd1bf8603ed388"
+endpoint_jsonl = "/private/tmp/sat-baselines-20260723/clause-arena-compaction-endpoints-repeat3.jsonl"
+endpoint_jsonl_sha256 = "0139fb47a12f8dcc327bc352e2ed3d4415cdf44597567de4c833988092590c2f"
+easy_jsonl = "/private/tmp/sat-baselines-20260723/clause-arena-compaction-easy-repeat11.jsonl"
+easy_jsonl_sha256 = "d5505d717c8085fdda8155a7273ae9033b6f60e2ad601f1461af6f3481d8a9b3"
+summary = "Compaction tied the control at 3/8 two-second development solves, validated every SAT model, preserved all inspected deterministic counters exactly, emitted a byte-identical independently verified proof, and stayed within every per-instance and easy-overhead ceiling. It reclaimed 14,145 literal slots on 6s299, 17,833,046 on Break, and 1,112,725 on 6s268. Runtime was nevertheless flat: the only jointly solved nontrivial case that triggered collection, 6s299, regressed 0.18 percent rather than improving by the required two percent."
+conclusion = "Rejected unchanged as the default because it failed the preregistered triggered-case improvement floor. Retain --compact-arena as a proof-checked memory-growth control: it bounds logical arena growth and permits later clauses to reuse capacity, but the present reduction-synchronous stable-order pass does not improve runtime on the frozen development slice. Do not add a garbage threshold or inspect held-out data; move to a separately gated baseline gap."
+
+[results.full_slice]
+control_solved = 3
+treatment_solved = 3
+sat_models = "all valid"
+status_disagreements = 0
+
+[results.trajectory]
+completed_cases_checked = [
+  "gm24sparrc",
+  "6s299b685_Iter22",
+  "Break_12_50",
+  "6s268r_Iter94",
+  "Break_triple_04_06",
+  "all seven smoke formulas",
+]
+deterministic_counter_mismatches = 0
+interpretation = "Decisions, propagations, conflicts, restarts, chronological backtracks, learned clauses and literals, minimization, binary watch visits, deletions, reductions, tier creation, and peak active learned clauses were identical in every checked pair. Only arena counters differ."
+
+[results.jointly_solved.gm24sparrc]
+control_median_seconds = 0.316587417
+treatment_median_seconds = 0.316852542
+treatment_regression_percent = 0.0837
+treatment_compactions = 0
+control_conflicts = 147
+treatment_conflicts = 147
+
+[results.jointly_solved.sixs299]
+control_median_seconds = 0.314913250
+treatment_median_seconds = 0.315476042
+treatment_regression_percent = 0.1787
+control_conflicts = 3205
+treatment_conflicts = 3205
+treatment_compactions = 1
+treatment_moved_literals = 5597
+treatment_reclaimed_literals = 14145
+treatment_peak_arena_literals = 2259934
+treatment_final_arena_literals = 2250518
+
+[results.endpoints.break12]
+control_median_seconds = 3.298710708
+treatment_median_seconds = 3.269577583
+treatment_improvement_percent = 0.8832
+control_conflicts = 118557
+treatment_conflicts = 118557
+treatment_compactions = 78
+treatment_moved_literals = 584317
+treatment_reclaimed_literals = 17833046
+treatment_peak_arena_literals = 758299
+treatment_final_arena_literals = 297253
+
+[results.endpoints.sixs268]
+control_median_seconds = 5.250906250
+treatment_median_seconds = 5.327176292
+treatment_regression_percent = 1.4525
+control_conflicts = 78479
+treatment_conflicts = 78479
+treatment_compactions = 51
+treatment_moved_literals = 587645
+treatment_reclaimed_literals = 1112725
+treatment_peak_arena_literals = 4383188
+treatment_final_arena_literals = 4352971
+
+[results.easy_overhead]
+control_pooled_median_seconds = 0.001878291
+treatment_pooled_median_seconds = 0.001873583
+treatment_improvement_percent = 0.2507
+worst_instance_regression_percent = 1.3960
+interpretation = "No smoke formula reaches database reduction, so this measures the disabled-work accounting branch and process noise."
+
+[results.drat.sixs268]
+instance = "0e36fa2e12f32cde67937803299fb57b-6s268r_Iter94.cnf"
+control_proof = "/private/tmp/sat-baselines-20260723/clause-arena-compaction-6s268-control.drat"
+treatment_proof = "/private/tmp/sat-baselines-20260723/clause-arena-compaction-6s268-treatment.drat"
+control_sha256 = "a787ce78cf16cde3e314ad9b490908a5cbf5271b8560506862489aa8f993ae64"
+treatment_sha256 = "a787ce78cf16cde3e314ad9b490908a5cbf5271b8560506862489aa8f993ae64"
+bytes = 7984674
+lemmas = 78479
+byte_identical = true
+checker = "drat-trim"
+checker_result = "VERIFIED"

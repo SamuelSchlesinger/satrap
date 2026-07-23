@@ -1,0 +1,185 @@
+[experiment]
+id = "2026-07-23-learning-rate-branching"
+owner = "Codex"
+status = "complete"
+worktree_revision = "uncommitted initial worktree"
+control_binary = "/private/tmp/sat-baselines-20260723/sat-promoted-sparse-binary-activity"
+control_sha256 = "d0e9d16c7407eac20c536e00f4624aee52aa923a73c8de49c689919c5ba0041e"
+
+[hypothesis]
+mechanism = "EVSIDS rewards variables that occur during the current conflict analysis, whereas Learning Rate Branching estimates each variable's average conflict participation over the complete interval in which it remains assigned. Adding reason-side rewards and lazy anti-exploration decay may prioritize variables whose assignments repeatedly contribute to learned clauses while discounting stale unassigned candidates."
+prediction = "A faithful opt-in LRB implementation will produce a distinct deterministic search trajectory, preserve all SAT/UNSAT correctness and proof obligations, solve at least as many two-second development instances as the promoted EVSIDS control, and either add a solve or improve pooled jointly solved median time by at least five percent without a catastrophic endpoint or easy-instance regression."
+falsification = "Do not promote LRB as the default if it loses a two-second development solve; neither adds a solve nor improves the frozen jointly solved pooled median by at least five percent; any selected or endpoint median regresses by more than twenty-five percent; endpoint pooled median regresses by more than ten percent; easy pooled overhead exceeds ten percent; any model or proof fails validation; or the implementation does not exercise unassignment rewards, reason-side rewards, and anti-exploration on nontrivial development instances. Do not tune the step size, decay, reward definition, restart policy, or promotion thresholds after observing treatment results."
+
+[prior_art]
+paper = "Jia Hui Liang, Vijay Ganesh, Pascal Poupart, and Krzysztof Czarnecki, Learning Rate Based Branching Heuristic for SAT Solvers, SAT 2016, https://cs.uwaterloo.ca/~ppoupart/publications/sat/learning-rate-branching-heuristic-SAT.pdf"
+implementation = "MapleSAT master Solver.cc e9fc4a36f44efde8f7c025a74eed8df40b48b5ac, Solver.h eeea7f16325095396f69d25a5eaec99e8625c23f, and SolverTypes.h 3c9836945ddbd0c39424f5fe7cc9e7ae8c975188, https://github.com/curtisbright/maplesat"
+established = "The treatment reproduces the published LRB reward, reason-side-rate extension, step-size schedule, and MapleSAT-style lazy anti-exploration policy. It is an established branching baseline, not an algorithmic novelty."
+distinction = "The host solver keeps its existing first-UIP analysis, recursive minimization, phase saving, chronological backtracking, Luby restarts, LBD reduction, packed clause representation, and proof logging. Only variable scoring and heap maintenance change under --search=lrb."
+novelty_status = "Established algorithmic baseline. No novelty claim."
+
+[policy]
+assignment = "When an unassigned variable is enqueued under LRB, lazily apply 0.95^(conflicts-canceled_at) anti-exploration decay to its score, record assigned_at=conflicts, and reset its participated and reasoned counters."
+participation = "For each non-root conflict, increment participated once for every distinct variable encountered by first-UIP conflict analysis before recursive learned-clause minimization."
+reason_side = "After final minimization, take the union of variables in the reason clauses of final learned-clause variables. Increment reasoned once for each distinct union member that is not itself in the final learned clause."
+unassignment = "When a variable leaves the trail after at least one conflict, compute reward=(participated+reasoned)/(conflicts-assigned_at) and update score=step_size*reward+(1-step_size)*score before returning it to the heap."
+step_size = "Initialize step_size to 0.4. After each analyzed conflict, subtract 0.000001 and clamp at 0.06."
+anti_exploration = "Before choosing the heap root, lazily decay stale unassigned roots by 0.95^(conflicts-canceled_at), repair the max heap, and repeat until the root is current. Apply the same lazy decay when a variable is assigned."
+heap = "Support both upward and downward repair because LRB rewards and lazy decay can increase or decrease a score. Preserve deterministic variable-index tie breaking."
+restarts = "Use the existing static Luby restart policy with restart-trail reuse disabled for both variants."
+everything_else = "Do not change clause scoring, reduction, learned-clause minimization, chronological backtracking, preprocessing, rephasing, proof logging, model reconstruction, storage, or any unrelated default."
+default = "Keep EVSIDS as the default unless the frozen promotion gate passes. Retain a correctness-passing --search=lrb mode as an explicit established comparison baseline even if default promotion fails."
+
+[variants]
+control = "/private/tmp/sat-baselines-20260723/sat-promoted-sparse-binary-activity --search=evsids --restart=luby --reuse-trail=never --no-rephase --no-tiers --no-eliminate --no-compact-arena --no-binary-minimize --no-subsume --no-vivify --no-probe"
+treatment = "target/release/sat --search=lrb --restart=luby --reuse-trail=never --no-rephase --no-tiers --no-eliminate --no-compact-arena --no-binary-minimize --no-subsume --no-vivify --no-probe"
+compiler = "rustc stable with -C target-cpu=native and release fat LTO"
+
+[corpus]
+manifest = "benchmarks/manifests/satcomp-2025-development.json"
+role = "development"
+deduplication = "sha256"
+heldout_use = "none"
+
+[protocol]
+full_slice_timeout_seconds = 2
+full_slice_repetitions = 1
+jointly_solved_repetitions = 7
+jointly_solved_selection = "After the frozen full-slice control/treatment run, repeat every development instance that both variants solve and whose control or treatment wall time is at least 0.1 seconds. Freeze this set before repeats."
+endpoint_instances = ["Break_12_50.xml.cnf", "6s268r_Iter94.cnf"]
+endpoint_timeout_seconds = 25
+endpoint_repetitions = 3
+easy_overhead_repetitions = 11
+proof_instance = "6s268r_Iter94.cnf"
+threads = 1
+order_seed = 20251103
+primary_metric = "validated two-second development solved count, then pooled median time on the frozen jointly solved set"
+secondary_metrics = [
+  "per-instance selected medians",
+  "pooled and per-instance endpoint medians",
+  "easy-instance pooled overhead",
+  "decisions, propagations, conflicts, restarts, learned literals, and LRB exercise counters",
+]
+stopping_rule = "Implement the frozen full LRB policy once, run correctness and proof checks, then execute the declared comparisons. Do not consume held-out data or add CHB, hybrid switching, LRB parameter tuning, restart tuning, or clause-management changes."
+
+[correctness]
+unit = "Test assignment timestamps and resets, interval reward arithmetic, reason-side set union and learned-variable exclusion, step-size clamping, lazy decay, bidirectional heap repair, and deterministic tie breaking."
+differential = "Extend the full deterministic brute-force differential suite to --search=lrb, including every optional-feature regression whose combination is semantically supported."
+models = "Independently validate every SAT model emitted in the development and endpoint runs."
+proof = "Emit a treatment DRAT proof for 6s268 under the endpoint timeout and require DRAT-trim verification. The proof need not match EVSIDS bytes because the treatment intentionally changes trajectory."
+trajectory = "Require repeat executions of LRB on gm24, 6s299, Break, and 6s268 to produce identical result and deterministic counters within the treatment; require at least one counter to differ from EVSIDS on a nontrivial instance."
+exercise = "Require positive lrb_unassign_updates, lrb_reason_side_rewards, and lrb_anti_exploration_decays on at least one nontrivial development or endpoint instance."
+
+[promotion_gate]
+development_solved_delta_minimum = 0
+qualifying_improvement = "Either treatment development solved count exceeds control, or counts tie and jointly solved pooled median improves by at least 5 percent."
+jointly_solved_pooled_improvement_percent_minimum_if_tied = 5
+jointly_solved_max_regression_percent = 25
+endpoint_pooled_max_regression_percent = 10
+endpoint_max_regression_percent = 25
+easy_overhead_max_percent = 10
+deterministic_treatment_reproducibility_required = true
+distinct_control_trajectory_required = true
+lrb_mechanisms_exercised_required = true
+sat_model_validation_required = true
+proof_validation_required = true
+next_step = "If promoted, make LRB the default and update the architecture/baseline documentation. If rejected, keep it opt-in as an established baseline only if correctness passes, record the negative result, and select an orthogonal algorithmic mechanism without parameter retuning."
+
+[results]
+treatment_binary = "/private/tmp/sat-baselines-20260723/sat-lrb-full"
+treatment_binary_sha256 = "b7e2bf18d3e5c90c1e4b546f8995f58c27d5182231d8c6e75e69bd95ac4a32d3"
+full_slice_jsonl = "/private/tmp/sat-baselines-20260723/learning-rate-branching-full-2s.jsonl"
+full_slice_jsonl_sha256 = "1d1a98030f42c47a6dd6ef7f11d568774f3c1500655b5dd707b1fd15d1ed9d60"
+jointly_solved_jsonl = "/private/tmp/sat-baselines-20260723/learning-rate-branching-jointly-solved-repeat7.jsonl"
+jointly_solved_jsonl_sha256 = "6375a1c0c97f8d5ee7f5cab77725dbdf1bafaf94a8a258f67021b28b08a663d3"
+endpoint_jsonl = "/private/tmp/sat-baselines-20260723/learning-rate-branching-endpoints-repeat3.jsonl"
+endpoint_jsonl_sha256 = "ebb4cda590bf7c823e70910f23915edeba3cb5ce714ca5c85e72606bdab3a664"
+easy_jsonl = "/private/tmp/sat-baselines-20260723/learning-rate-branching-easy-repeat11.jsonl"
+easy_jsonl_sha256 = "525bb611575d2b6091fd54a8b2fa08917ccd1fab1ff4fe0408c44d69852a8cfc"
+easy_corpus = "benchmarks/smoke, the standing easy-overhead corpus"
+proof = "/private/tmp/sat-baselines-20260723/lrb-6s268.drat"
+proof_sha256 = "51a74ed2b5db28b5b5169bb83968ff86e649a2b8a0436bd5e56d730325d573fa"
+summary = "LRB passed correctness, mechanism-exercise, deterministic-reproducibility, proof, development-solve, qualifying-improvement, selected-instance, and easy-overhead gates. It raised validated two-second solves from 3/8 to 4/8, improved the selected pooled median by 6.500351 percent, cut gm24 by 29.614224 percent, and cut 6s268 by 75.400037 percent. However, it was sharply complementary rather than robust: 6s299 regressed 18.310743 percent and all three Break_12_50 endpoint runs timed out at 25 seconds versus a 3.069429-second control median."
+conclusion = "Rejected as the default because the preregistered Break per-instance and endpoint-pooled ceilings failed by a wide margin. Retained behind --search=lrb as a correctness-checked established baseline. The result is strong evidence for complementary search regimes, but not for an unpreregistered parameter tweak or a novelty claim."
+
+[results.full_slice]
+control_solved = 3
+treatment_solved = 4
+solved_delta = 1
+control_sat = 2
+control_unsat = 1
+treatment_sat = 2
+treatment_unsat = 2
+sat_models = "all valid"
+status_disagreements = 0
+
+[results.jointly_solved]
+instances = ["gm24sparrc", "6s299b685_Iter22"]
+control_pooled_median_seconds = 0.625538667
+treatment_pooled_median_seconds = 0.584876458
+change_percent = -6.500351001
+
+[results.jointly_solved.gm24sparrc]
+control_median_seconds = 0.323845792
+treatment_median_seconds = 0.227941375
+change_percent = -29.614223612
+
+[results.jointly_solved.six299]
+control_median_seconds = 0.301692875
+treatment_median_seconds = 0.356935083
+change_percent = 18.310743335
+
+[results.endpoints]
+control_censored_pooled_median_seconds = 8.043494791
+treatment_censored_pooled_median_seconds = 26.230542417
+censored_change_percent = 226.108776080
+gate = "failed: Break treatment timed out in all three runs, so both per-instance and pooled endpoint ceilings failed"
+
+[results.endpoints.break12]
+control_median_seconds = 3.069428875
+treatment_censored_median_seconds = 25.006924042
+treatment_timeouts = 3
+censored_change_percent = 714.709350188
+uncensored_reproducibility_run_seconds = [51.706804, 53.289493]
+deterministic_conflicts = 870879
+deterministic_propagations = 639846844
+
+[results.endpoints.six268]
+control_median_seconds = 4.974065916
+treatment_median_seconds = 1.223618375
+change_percent = -75.400036999
+
+[results.easy]
+control_pooled_median_seconds = 0.016369583
+treatment_pooled_median_seconds = 0.016460419
+change_percent = 0.554907233
+
+[results.correctness]
+tests = "92 Rust tests and 7 Python tests passed; rustfmt and clippy -D warnings clean"
+differential = "2000 deterministic brute-force formulas passed under LRB"
+proof_bytes = 1551603
+proof_lines = 18362
+proof = "DRAT-trim VERIFIED the 6s268 treatment proof"
+deterministic_counter_cases = ["gm24sparrc", "6s299b685_Iter22", "Break_12_50", "6s268r_Iter94"]
+deterministic_counter_mismatches = 0
+distinct_from_control = "yes; every nontrivial inspected trajectory changed"
+
+[results.exercise.gm24sparrc]
+lrb_unassign_updates = 2004707
+lrb_reason_side_rewards = 24789
+lrb_anti_exploration_decays = 871507
+
+[results.exercise.six299]
+lrb_unassign_updates = 2103307
+lrb_reason_side_rewards = 40741
+lrb_anti_exploration_decays = 1637543
+
+[results.exercise.break12]
+lrb_unassign_updates = 679168825
+lrb_reason_side_rewards = 217935879
+lrb_anti_exploration_decays = 346500268
+
+[results.exercise.six268]
+lrb_unassign_updates = 9436036
+lrb_reason_side_rewards = 251518
+lrb_anti_exploration_decays = 5396263

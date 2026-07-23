@@ -1,0 +1,169 @@
+[experiment]
+id = "2026-07-23-separate-packed-binary-storage"
+owner = "Codex"
+status = "complete"
+worktree_revision = "uncommitted initial worktree"
+control_binary = "/private/tmp/sat-baselines-20260723/sat-before-separate-binary-storage"
+control_binary_sha256 = "7c567511f43213362ea18b821f6db4ebbc33b84e003ebd53b4ff2d1d11d1827f"
+
+[hypothesis]
+mechanism = "Binary clauses need neither variable-length arena metadata nor a long-clause literal slice. Moving their two literals, activity, and flags into separate compact arrays reduces cache footprint while a tagged 32-bit stable reference shrinks every per-variable reason. Keeping the existing packed watch order and binary fast path should preserve the deterministic CDCL trajectory."
+prediction = "The treatment will preserve validated two-second solved count, deterministic search counters, and a byte-identical verified proof; it will also either improve the pooled repeated median of nontrivial jointly solved development cases by at least two percent or reduce repeated peak resident memory on 6s268 by at least ten percent, without a greater-than-five-percent runtime regression on any selected case, hard endpoint, or pooled easy set."
+falsification = "Reject the representation unchanged if any result, model, proof byte, or deterministic search counter changes; development solved count falls; neither the runtime nor memory alternative succeeds; any selected or endpoint median regresses by more than five percent; or easy pooled overhead exceeds five percent. Do not change packing, reference tagging, or the promotion thresholds after observing treatment results."
+
+[prior_art]
+checked = [
+  "Kissat 4.0.4 8af8e56f174b778aef3aa45af9f739b2a5f492c2 src/watch.h, src/assign.h, and src/analyze.c",
+  "CaDiCaL 3.0.1 c60730422e758ef1cebe7aeddf2dda31c996bf04 src/clause.hpp, src/var.hpp, and src/analyze.cpp",
+]
+established = "Kissat stores a binary clause directly as a tagged other literal in each watch list and tags assignment reasons as binary literals, while large clauses use arena references. CaDiCaL instead keeps binary and large clauses as inline variable-sized Clause objects referenced by pointers. Specialized binary representation and compact tagged reasons are established implementation techniques."
+distinction = "This intermediate Rust design retains the existing uniform 8-byte packed watches and stable binary clause identity so lazy deletion, optional simplifiers, and textual proof behavior stay simple. It separates binary literals, activity, and learned/deleted flags into parallel arrays; long-clause metadata and the literal arena then contain only clauses of length at least three."
+novelty_status = "Baseline engineering only. No novelty claim."
+
+[policy]
+clause_reference = "Replace usize clause references with a NonZeroU32-backed tagged reference. The high packed bit selects binary versus long storage and the lower 31 bits select an index; reserving one packed value makes Option<ClauseRef> four bytes. Each storage class is capped below 2^31 entries."
+binary_literals = "Store exactly two packed Lit values per binary clause in Vec<[Lit; 2]>. Preserve allocation order within the binary class."
+binary_activity = "Store one f64 activity per binary clause and apply the same learned-clause bumps and global rescaling as the control, even though binary clauses are permanent under database reduction."
+binary_flags = "Store learned and deleted bits in one parallel u8 per binary clause. Original simplifiers may lazily delete binaries; learned binaries remain permanent exactly as in the control."
+long_storage = "Store only clauses of length at least three in Vec<Clause> and clause_arena. Preserve relative long-clause allocation order, literal order, watch order, reduction ordering, and stable references."
+watches = "Keep the existing 8-byte packed Watch and in-place scan. Its upper 32 bits contain the packed tagged ClauseRef, its lower 32 bits the blocker. Derive the binary fast-path tag from the reference rather than storing a separate constructor argument."
+reasons = "Keep Option<ClauseRef> semantics, but exploit NonZeroU32 so each per-variable reason occupies four bytes instead of the control's Option<usize>. Conflict analysis still resolves through the referenced two-literal record, preserving binary learned-clause activity behavior."
+preprocessing = "Adapt vivification, subsumption/SSR, bounded variable elimination, arena collection, deletion, and binary-resolution minimization to dispatch through tagged references. Do not alter any schedule, effort bound, clause order within a storage class, or default feature setting."
+proof = "No proof rule changes. With every non-layout policy frozen and watch order preserved, the default UNSAT proof is expected to be byte-identical to the control."
+default = "Treatment becomes the sole internal representation only if the gate passes; the exact pre-change native binary is retained as the control artifact."
+
+[variants]
+control = "/private/tmp/sat-baselines-20260723/sat-before-separate-binary-storage --no-eliminate --no-compact-arena --no-binary-minimize --no-subsume --no-vivify --no-probe"
+treatment = "target/release/sat --no-eliminate --no-compact-arena --no-binary-minimize --no-subsume --no-vivify --no-probe"
+compiler = "rustc stable with -C target-cpu=native and release fat LTO"
+
+[corpus]
+manifest = "benchmarks/manifests/satcomp-2025-development.json"
+role = "development"
+deduplication = "sha256"
+heldout_use = "none"
+observed_before_implementation = "The input binary-clause fractions are gm24 0.00%, Break_triple 83.15%, Break_12_50 91.21%, 6s268 52.72%, 6s299 24.56%, BubbleVsPancake 36.70%, xor_op 0.00%, and ITC2021 69.62%."
+
+[protocol]
+full_slice_timeout_seconds = 2
+full_slice_repetitions = 1
+jointly_solved_repetitions = 7
+jointly_solved_selection = "After the frozen full-slice run, repeat every development instance that either variant solves and whose control or treatment wall time is at least 0.1 seconds. Apply the per-instance ceiling to every selected case and pool the sum of their per-instance medians."
+endpoint_instances = ["Break_12_50.xml.cnf", "6s268r_Iter94.cnf"]
+endpoint_timeout_seconds = 25
+endpoint_repetitions = 3
+easy_overhead_repetitions = 11
+memory_instance = "6s268r_Iter94.cnf"
+memory_repetitions = 3
+memory_measurement = "/usr/bin/time -l maximum resident set size around --no-model runs; compare medians on an otherwise idle host"
+threads = 1
+order_seed = 20251103
+primary_metric = "validated solved count on the frozen eight-instance development slice at two seconds"
+secondary_metrics = [
+  "exact logical bytes in long metadata/arena, binary literals/activity/flags, and per-variable reasons",
+  "repeated maximum resident set size",
+  "deterministic decisions, propagations, conflicts, restarts, learned clauses/literals, deletions, reductions, and binary watch visits",
+  "paired wall time",
+]
+stopping_rule = "Implement the frozen representation once, run correctness and exact-trajectory checks, then execute the declared development comparisons. Do not inspect held-out data or combine this change with variable-width watches, direct-literal binary reasons, eager binary deletion, binary deduplication, or a heuristic change."
+
+[correctness]
+layout_tests = "Assert ClauseRef round trips both storage classes, Option<ClauseRef> is four bytes, binary arrays remain aligned in length, Watch remains eight bytes, and long arena allocation excludes binary literals."
+differential = "Run the existing deterministic brute-force differential suite across all feature configurations and validate emitted SAT models against the original clauses."
+optional_features = "Retain focused tests for probing, vivification, subsumption/SSR, bounded variable elimination, binary learned-clause minimization, database reduction, and arena compaction."
+trajectory = "On every completed frozen control/treatment pair, compare all deterministic search counters. Any mismatch rejects the representation regardless of runtime."
+proof = "Emit default control and treatment proofs for 6s268r_Iter94, require byte-identical SHA-256, and verify the treatment proof independently with DRAT-trim."
+
+[promotion_gate]
+development_solved_delta_minimum = 0
+deterministic_counter_mismatches_maximum = 0
+proof_bytes_must_match = true
+performance_alternative = "Either the pooled triggered repeated median improves by at least 2 percent or the repeated median maximum resident set size on 6s268 improves by at least 10 percent."
+triggered_pooled_improvement_percent_minimum = 2
+memory_improvement_percent_minimum = 10
+jointly_solved_max_regression_percent = 5
+endpoint_max_regression_percent = 5
+easy_overhead_max_percent = 5
+sat_model_validation_required = true
+proof_validation_required = true
+next_step = "If promoted, document the new internal representation and separately preregister variable-width 32-bit watches or direct-literal binary reasons. If rejected, restore the control representation and move to pressure-aware reduction or another independent gap."
+
+[results]
+treatment_binary_sha256 = "f1187eb0638d2d207773f11807bca4037860d301a2ec4e75aa8a7665945a5698"
+full_slice_jsonl = "/private/tmp/sat-baselines-20260723/separate-packed-binary-storage-full-2s.jsonl"
+full_slice_jsonl_sha256 = "69a60900f408bfc9527a1ad7665f99459987bb60279a81e6e2a20b8865a8ac51"
+jointly_solved_jsonl = "/private/tmp/sat-baselines-20260723/separate-packed-binary-storage-jointly-solved-repeat7.jsonl"
+jointly_solved_jsonl_sha256 = "9d26fb830a32f65d0e7571452f6dc4449f7e530ceabf825d4a752cd7d8c38fe5"
+endpoint_jsonl = "/private/tmp/sat-baselines-20260723/separate-packed-binary-storage-endpoints-repeat3.jsonl"
+endpoint_jsonl_sha256 = "5aac322e390d4bee6e2ea7cfc76950e62c7754d3e637b3f097b401e20bce4b18"
+easy_jsonl = "/private/tmp/sat-baselines-20260723/separate-packed-binary-storage-easy-repeat11.jsonl"
+easy_jsonl_sha256 = "6903b23a99d2ee4ce68d24bad3c873a3d4f879e0e996b3de8ce2611d8ee22af7"
+control_proof = "/private/tmp/sat-baselines-20260723/separate-binary-storage-6s268-control.drat"
+treatment_proof = "/private/tmp/sat-baselines-20260723/separate-binary-storage-6s268-treatment.drat"
+proof_sha256 = "a787ce78cf16cde3e314ad9b490908a5cbf5271b8560506862489aa8f993ae64"
+summary = "The representation preserved 3/8 validated two-second solves, every inspected deterministic search counter, and a byte-identical independently verified 6s268 proof. It improved both hard endpoints and cut the exact logical clause/reason payload by 30.61 percent. The repeated speed alternative missed, and median maximum resident set size fell from 321290240 to 289193984 bytes: a 9.9898 percent improvement, only 32768 bytes short of the frozen 10 percent threshold."
+conclusion = "Rejected unchanged under the exact preregistered gate; do not round the 9.9898 percent RSS reduction up to ten percent. The implementation was preserved as the measured intermediate, then combined with a separately preregistered sparse learned-binary activity mapping. That final combined representation was gated against the original legacy binary and promoted; see 2026-07-23-sparse-binary-activity.toml."
+
+[results.full_slice]
+control_solved = 3
+treatment_solved = 3
+sat_models = "all valid"
+status_disagreements = 0
+
+[results.jointly_solved]
+control_pooled_median_seconds = 0.629924583
+treatment_pooled_median_seconds = 0.634436083
+change_percent = 0.716197
+
+[results.jointly_solved.gm24sparrc]
+control_median_seconds = 0.315450958
+treatment_median_seconds = 0.325698333
+change_percent = 3.248484
+
+[results.jointly_solved.six299]
+control_median_seconds = 0.314473625
+treatment_median_seconds = 0.308737750
+change_percent = -1.823961
+
+[results.endpoints.break12]
+control_median_seconds = 3.318607666
+treatment_median_seconds = 3.168103583
+change_percent = -4.535157
+
+[results.endpoints.six268]
+control_median_seconds = 5.353955250
+treatment_median_seconds = 5.014621375
+change_percent = -6.338004
+
+[results.easy]
+control_pooled_median_seconds = 0.014724166
+treatment_pooled_median_seconds = 0.015020751
+change_percent = 2.014273
+
+[results.memory]
+instance = "6s268r_Iter94.cnf"
+control_maximum_resident_set_size_bytes = [321290240, 321257472, 323092480]
+treatment_maximum_resident_set_size_bytes = [289177600, 289292288, 289193984]
+control_median_bytes = 321290240
+treatment_median_bytes = 289193984
+improvement_percent = 9.989801
+threshold_shortfall_bytes = 32768
+gate = "failed because the exact improvement is less than 10 percent"
+
+[results.storage_at_end_of_six268]
+stored_binary_clauses = 874367
+stored_long_clauses = 848585
+binary_storage_bytes = 14864239
+long_storage_bytes = 42022568
+reason_storage_bytes = 1950032
+packed_logical_total_bytes = 58836839
+legacy_equivalent_storage_bytes = 84797376
+logical_improvement_percent = 30.614788
+
+[results.correctness]
+deterministic_counter_cases = ["gm24sparrc", "6s299b685_Iter22", "Break_12_50", "6s268r_Iter94"]
+deterministic_counter_mismatches = 0
+proof_bytes = 7984674
+proof_lines = 78479
+proof = "control and treatment SHA-256 are identical; DRAT-trim VERIFIED the treatment"
+tests = "86 Rust tests passed after the representation change"

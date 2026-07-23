@@ -1,0 +1,165 @@
+c Guarded BVA proof fixture.
+c The 4x4 product is exactly at the macro gate m*n = 2*(m+n).
+c Unit 9 satisfies 126 normalized short filler clauses, bringing the ingested
+c short-clause density to exactly 16 per declared variable without changing
+c the root-simplified product.
+p cnf 9 145
+1 5 0
+1 6 0
+1 7 0
+1 8 0
+2 5 0
+2 6 0
+2 7 0
+2 8 0
+3 5 0
+3 6 0
+3 7 0
+3 8 0
+4 5 0
+4 6 0
+4 7 0
+4 8 0
+-1 -2 -3 -4 0
+-5 -6 -7 -8 0
+9 0
+c filler group 1
+9 1 2 0
+9 1 2 0
+9 1 2 0
+9 1 2 0
+9 1 2 0
+9 1 2 0
+9 1 2 0
+9 1 2 0
+9 1 2 0
+c filler group 2
+9 1 2 0
+9 1 2 0
+9 1 2 0
+9 1 2 0
+9 1 2 0
+9 1 2 0
+9 1 2 0
+9 1 2 0
+9 1 2 0
+c filler group 3
+9 1 2 0
+9 1 2 0
+9 1 2 0
+9 1 2 0
+9 1 2 0
+9 1 2 0
+9 1 2 0
+9 1 2 0
+9 1 2 0
+c filler group 4
+9 1 2 0
+9 1 2 0
+9 1 2 0
+9 1 2 0
+9 1 2 0
+9 1 2 0
+9 1 2 0
+9 1 2 0
+9 1 2 0
+c filler group 5
+9 1 2 0
+9 1 2 0
+9 1 2 0
+9 1 2 0
+9 1 2 0
+9 1 2 0
+9 1 2 0
+9 1 2 0
+9 1 2 0
+c filler group 6
+9 1 2 0
+9 1 2 0
+9 1 2 0
+9 1 2 0
+9 1 2 0
+9 1 2 0
+9 1 2 0
+9 1 2 0
+9 1 2 0
+c filler group 7
+9 1 2 0
+9 1 2 0
+9 1 2 0
+9 1 2 0
+9 1 2 0
+9 1 2 0
+9 1 2 0
+9 1 2 0
+9 1 2 0
+c filler group 8
+9 1 2 0
+9 1 2 0
+9 1 2 0
+9 1 2 0
+9 1 2 0
+9 1 2 0
+9 1 2 0
+9 1 2 0
+9 1 2 0
+c filler group 9
+9 1 2 0
+9 1 2 0
+9 1 2 0
+9 1 2 0
+9 1 2 0
+9 1 2 0
+9 1 2 0
+9 1 2 0
+9 1 2 0
+c filler group 10
+9 1 2 0
+9 1 2 0
+9 1 2 0
+9 1 2 0
+9 1 2 0
+9 1 2 0
+9 1 2 0
+9 1 2 0
+9 1 2 0
+c filler group 11
+9 1 2 0
+9 1 2 0
+9 1 2 0
+9 1 2 0
+9 1 2 0
+9 1 2 0
+9 1 2 0
+9 1 2 0
+9 1 2 0
+c filler group 12
+9 1 2 0
+9 1 2 0
+9 1 2 0
+9 1 2 0
+9 1 2 0
+9 1 2 0
+9 1 2 0
+9 1 2 0
+9 1 2 0
+c filler group 13
+9 1 2 0
+9 1 2 0
+9 1 2 0
+9 1 2 0
+9 1 2 0
+9 1 2 0
+9 1 2 0
+9 1 2 0
+9 1 2 0
+c filler group 14
+9 1 2 0
+9 1 2 0
+9 1 2 0
+9 1 2 0
+9 1 2 0
+9 1 2 0
+9 1 2 0
+9 1 2 0
+9 1 2 0

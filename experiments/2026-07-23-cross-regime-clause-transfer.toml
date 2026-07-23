@@ -1,0 +1,221 @@
+[experiment]
+id = "2026-07-23-cross-regime-clause-transfer"
+owner = "Codex"
+status = "complete"
+worktree_revision = "uncommitted initial worktree"
+evsids_control_binary = "/private/tmp/sat-baselines-20260723/sat-promoted-sparse-binary-activity"
+evsids_control_sha256 = "d0e9d16c7407eac20c536e00f4624aee52aa923a73c8de49c689919c5ba0041e"
+lrb_control_binary = "/private/tmp/sat-baselines-20260723/sat-lrb-full"
+lrb_control_sha256 = "b7e2bf18d3e5c90c1e4b546f8995f58c27d5182231d8c6e75e69bd95ac4a32d3"
+
+[preregistration_note]
+pre_execution_correction = "Before any transfer executable, correctness run, or performance result existed, the warmup was corrected from eight scored alternating epochs to one unscored EVSIDS bootstrap plus eight scored alternating epochs. The original wording would have treated epoch 1 as an LRB-producer observation before LRB had produced any clause, introducing an asymmetric forced zero. No other policy or gate changed."
+
+[hypothesis]
+mechanism = "EVSIDS and LRB expose sharply complementary search trajectories. A clause learned under one trajectory provides delayed evidence about that trajectory's reusable knowledge only if the clause later performs useful work under the other trajectory. Cross-regime use therefore supplies a causal, search-internal credit signal that immediate conflict rate, learned-clause LBD, and same-regime clause activity cannot provide."
+prediction = "A deterministic dual-warm EVSIDS/LRB controller driven only by cross-regime learned-clause use will preserve the useful LRB trajectory on 6s268 while escaping its Break_12_50 failure, solve at least the four two-second development instances solved by the better pure arm, and stay within ten percent of the per-instance pure-arm oracle on the jointly solved development set."
+falsification = "Reject the controller if it solves fewer two-second development instances than full LRB; exceeds the per-instance pure-arm oracle median by more than twenty-five percent on any selected development or endpoint instance; exceeds the pooled pure-arm oracle median by more than ten percent; exceeds ten percent easy-instance overhead relative to EVSIDS; fails to exercise both regimes and both directions of cross-regime credit; changes either frozen pure-mode trajectory; or fails any model, proof, differential, determinism, or metadata-integrity check. Do not tune the warmup length, probe cadence, reward definition, smoothing factor, restart policy, or promotion thresholds after observing treatment results."
+
+[prior_art]
+maple_hybrid = "MapleCOMSPS and MapleGlucose use established LRB/VSIDS hybrids, including fixed time, conflict, and restart-boundary switches; https://maplesat.github.io/"
+restart_bandits = "Kissat_MAB and later work select branching regimes at restart boundaries with conflict/decision rewards. Duration-aware restart MAB is current prior art; https://doi.org/10.4230/LIPIcs.CP.2021.20 and https://doi.org/10.4230/LIPIcs.CP.2026.39"
+dynamic_configuration = "DynamicSAT applies UCB to online configuration selection with recent-LBD rewards; https://doi.org/10.4230/LIPIcs.CP.2025.34"
+clause_utility = "CausalSAT studies the effect of branching regime on future learned-clause utility, including propagation and conflict-analysis usage; https://doi.org/10.4230/LIPIcs.SAT.2023.28"
+clause_usage = "Recent LBD-free clause management counts learned-clause use in propagation and conflict analysis, ages it, and uses it for retention; https://arxiv.org/abs/2602.20829"
+parallel_transfer = "Parallel clause-sharing work measures whether clauses useful to a producer remain useful to a distinct consumer search; https://doi.org/10.4230/LIPIcs.SAT.2024.17"
+distinction = "The preregistered treatment does not claim that hybrid branching, restart-level selection, clause-use counting, or cross-worker clause transfer is new. Its provisional research distinction is the closed sequential feedback loop: tag clauses by the branching regime that produced them, observe only their use by the opposite live regime, and feed that delayed cross-regime transfer signal back into selection of the producer regime."
+novelty_status = "No priority claim. A targeted literature search found the listed adjacent mechanisms but no exact sequential producer-credit loop. Treat this as a candidate algorithmic contribution whose novelty remains contingent on broader scholarly and source-code review."
+
+[policy]
+search_mode = "Add an opt-in --search=transfer mode. Keep --search=evsids and --search=lrb byte-for-byte trajectory compatible with their frozen implementations and keep EVSIDS as the default regardless of this experiment's outcome."
+dual_warm_state = "Maintain independent EVSIDS and full-LRB score arrays and deterministic maximum heaps throughout transfer mode. Every analyzed conflict updates both score systems. Every assignment and unassignment updates LRB interval state even while EVSIDS selects decisions. Phase saving, the trail, clause database, proof, and all other search state remain shared."
+initial_regime = "Begin search in EVSIDS. Epoch 1 is an unscored producer bootstrap because no LRB-origin clause can exist yet."
+epoch = "One controller epoch is one existing Luby restart interval. Restarts always return to decision level zero and retain the frozen Luby sequence. A root conflict or completed model ends solving without fabricating a partial epoch observation."
+clause_origin = "Every learned clause of length at least two is tagged with the regime active when it was allocated. Original clauses and learned units have no origin and are excluded. Store origin and last-credited epoch in optional side arrays allocated only by transfer mode; do not expand default Clause, binary-clause, Watch, or reason metadata."
+qualifying_use = "A learned clause earns at most one credit in a controller epoch when, under the opposite active regime, it first (a) forces a unit propagation, (b) is the conflicting clause returned by propagation, or (c) is traversed as a reason/conflict clause during first-UIP analysis. Merely inspecting a watch, finding a satisfied blocker, moving a watch, allocating, minimizing, retaining, or deleting a clause is not use. Repeated qualifying events for the same clause in the same epoch count once."
+direction = "Credit belongs to the clause-producing regime, never the currently consuming regime. Maintain separate EVSIDS-origin and LRB-origin credit counts. Same-regime use produces no controller credit."
+epoch_sample = "At restart after every epoch except bootstrap epoch 1, update only the inactive producer's estimate with sample = 1000 * distinct cross-regime credits for that producer during the completed epoch / conflicts in the completed epoch. Restart intervals contain at least one conflict; use max(conflicts,1) defensively."
+smoothing = "For each producer independently, set its estimate to its first observed sample. Thereafter update estimate = 0.75 * estimate + 0.25 * sample. Comparisons use IEEE-754 total order and break exact ties in favor of EVSIDS."
+schedule = "Epoch 1 is an unscored EVSIDS bootstrap. Epochs 2 through 9 alternate LRB, EVSIDS, LRB, EVSIDS, giving four scored consumer observations for each producer. Thereafter repeat ten-epoch cycles: one EVSIDS consumer probe, one LRB consumer probe, then eight epochs using the producer with the greater smoothed transfer estimate after both probes. Recompute the winner only after the two probes; do not switch within the eight exploitation epochs."
+switching = "Change only which warmed heap supplies the next decision after a root restart. Do not clear scores, phases, LRB interval history, clauses, activities, or controller estimates on a regime switch."
+everything_else = "Use phase saving, first-UIP analysis, recursive minimization, chronological backtracking, clause activity/LBD reduction, sparse binary activity, packed storage, proof logging, and all preprocessing defaults of the frozen control. Disable rephasing, tiers, elimination, arena compaction, binary minimization, subsumption, vivification, failed-literal probing, and trail reuse exactly as in the branching baselines."
+
+[variants]
+evsids_control = "/private/tmp/sat-baselines-20260723/sat-promoted-sparse-binary-activity --search=evsids --restart=luby --reuse-trail=never --no-rephase --no-tiers --no-eliminate --no-compact-arena --no-binary-minimize --no-subsume --no-vivify --no-probe"
+lrb_control = "/private/tmp/sat-baselines-20260723/sat-lrb-full --search=lrb --restart=luby --reuse-trail=never --no-rephase --no-tiers --no-eliminate --no-compact-arena --no-binary-minimize --no-subsume --no-vivify --no-probe"
+treatment = "target/release/sat --search=transfer --restart=luby --reuse-trail=never --no-rephase --no-tiers --no-eliminate --no-compact-arena --no-binary-minimize --no-subsume --no-vivify --no-probe"
+compiler = "rustc stable with -C target-cpu=native and release fat LTO"
+
+[corpus]
+manifest = "benchmarks/manifests/satcomp-2025-development.json"
+role = "development"
+deduplication = "sha256"
+heldout_use = "none"
+
+[protocol]
+full_slice_timeout_seconds = 2
+full_slice_repetitions = 1
+jointly_solved_repetitions = 7
+jointly_solved_selection = "After the frozen three-way full-slice run, repeat every development instance solved by all three variants whose median control or treatment wall time is at least 0.1 seconds. Freeze this set before repeats."
+endpoint_instances = ["Break_12_50.xml.cnf", "6s268r_Iter94.cnf"]
+endpoint_timeout_seconds = 25
+endpoint_repetitions = 3
+easy_overhead_repetitions = 11
+proof_instances = ["Break_12_50.xml.cnf", "6s268r_Iter94.cnf"]
+threads = 1
+order_seed = 20251103
+primary_metric = "validated two-second development solved count, then pooled median slowdown against the per-instance faster pure EVSIDS/LRB control"
+secondary_metrics = [
+  "per-instance selected and endpoint medians against both pure controls",
+  "easy-instance pooled overhead against EVSIDS",
+  "decisions, propagations, conflicts, restarts, learned literals, LRB counters, regime epochs, mode switches, and directional transfer credits",
+]
+stopping_rule = "Implement the frozen transfer policy once, run correctness and proof checks, then execute the declared comparisons. Do not consume held-out data or tune the selector, LRB, EVSIDS, restart, clause management, or schedule from treatment results."
+
+[correctness]
+unit = "Test origin tagging for long and binary learned clauses, exclusion of originals and units, qualifying versus non-qualifying use, once-per-clause-per-epoch credit, directional ownership, epoch normalization, smoothing, exact warmup/probe/exploit schedule, deterministic ties, dual heap repair, and mode switches."
+differential = "Extend the deterministic brute-force differential suite to --search=transfer, including every optional-feature regression whose combination is semantically supported."
+models = "Independently validate every SAT model emitted in development and endpoint runs."
+proof = "Emit treatment DRAT proofs for both endpoints when solved within 25 seconds and require independent DRAT-trim verification. At minimum, independently verify one nontrivial UNSAT treatment proof; a timeout remains a performance-gate failure even if another proof verifies."
+trajectory = "Rebuild frozen pure EVSIDS and LRB configurations from the modified source and require their exact deterministic counters to match the recorded baseline trajectories. Require repeat transfer executions on selected and endpoint instances to have identical results and counters."
+metadata = "Assert optional transfer metadata lengths track long and binary clause storage only in transfer mode, survive deletion without aliasing, and remain empty in every pure mode."
+exercise = "Require positive EVSIDS and LRB epoch counts, at least two mode switches, positive EVSIDS-origin credit consumed by LRB, and positive LRB-origin credit consumed by EVSIDS on at least one nontrivial development or endpoint instance."
+
+[promotion_gate]
+development_solved_minimum = 4
+development_solved_delta_vs_best_pure_minimum = 0
+jointly_solved_pooled_oracle_max_regression_percent = 10
+jointly_solved_per_instance_oracle_max_regression_percent = 25
+endpoint_pooled_oracle_max_regression_percent = 10
+endpoint_per_instance_oracle_max_regression_percent = 25
+easy_evsids_overhead_max_percent = 10
+pure_evsids_trajectory_exact_required = true
+pure_lrb_trajectory_exact_required = true
+deterministic_treatment_reproducibility_required = true
+both_regimes_exercised_required = true
+both_credit_directions_exercised_required = true
+sat_model_validation_required = true
+proof_validation_required = true
+next_step = "If every gate passes, retain transfer as an opt-in candidate and validate once on an untouched held-out corpus before any default change or novelty claim. If rejected, preserve the preregistration and negative result, remove or retain the mode according to correctness and diagnostic value, and do not post-hoc tune this experiment."
+
+[results]
+treatment_binary = "/private/tmp/sat-baselines-20260723/sat-cross-regime-transfer"
+treatment_binary_sha256 = "f99af814d29a6163ecf0793fcb912902d9a6ee2ce663edcca3c2e4ac3a27a072"
+full_slice_jsonl = "/private/tmp/sat-baselines-20260723/cross-regime-clause-transfer-full-2s.jsonl"
+full_slice_jsonl_sha256 = "033074b4dc056da9d750a24ab89956f8a834a45f8be7ddf89160cf61f385e99b"
+jointly_solved_jsonl = "/private/tmp/sat-baselines-20260723/cross-regime-clause-transfer-jointly-solved-repeat7.jsonl"
+jointly_solved_jsonl_sha256 = "2549c7ce1c9c647dede9188f79e3cda5ea89fa9d1052e7e6e78254b3847c4f23"
+endpoint_jsonl = "/private/tmp/sat-baselines-20260723/cross-regime-clause-transfer-endpoints-repeat3.jsonl"
+endpoint_jsonl_sha256 = "83fe8c3fe4a8dc08531ccf35bc5e65111d6f513e3ccbf4a2c1a1a1a806379c91"
+easy_jsonl = "/private/tmp/sat-baselines-20260723/cross-regime-clause-transfer-easy-repeat11.jsonl"
+easy_jsonl_sha256 = "23d519a0df95fc69984f5b7dad8a7ed9f22eeb64b4063f20767895a2cdcb3d4f"
+proof = "/private/tmp/sat-baselines-20260723/cross-regime-transfer-6s268.drat"
+proof_sha256 = "630c07ce14e3597e47ec93126d4171497d70a87c0a8c268177551bca86e5857d"
+pure_endpoint_controls = "/private/tmp/sat-baselines-20260723/learning-rate-branching-endpoints-repeat3.jsonl"
+pure_endpoint_controls_sha256 = "ebb4cda590bf7c823e70910f23915edeba3cb5ce714ca5c85e72606bdab3a664"
+summary = "The transfer treatment was correct, deterministic on every completed run, cheap on smoke, and exercised both warmed branchers plus both directions of cross-regime credit. The performance hypothesis failed decisively. Treatment solved 3/8 two-second development instances versus LRB's 4/8, regressed 43.54% and 119.24% against the faster pure arm on the repeated jointly solved cases, took 18.72 seconds on 6s268 versus LRB's 1.22 seconds, and timed out on Break where EVSIDS took 3.07 seconds."
+conclusion = "Rejected as a performance candidate and default. Retained behind --search=transfer as a correctness-checked negative research result because its counters expose the failure mechanism. Cross-regime clause-use rate is measurable but is not a reliable proxy for which producer regime will solve faster. No novelty or priority claim is made, and the signal or schedule will not be tuned on these revealed families."
+
+[results.full_slice]
+evsids_solved = 3
+lrb_solved = 4
+treatment_solved = 3
+treatment_delta_vs_best_pure = -1
+treatment_sat = 2
+treatment_unsat = 1
+sat_models = "all valid"
+status_disagreements = 0
+gate = "failed: treatment missed the development_solved_minimum and best-pure solved-count gate"
+
+[results.jointly_solved]
+instances = ["gm24sparrc", "6s299b685_Iter22"]
+pure_oracle_pooled_median_seconds = 0.5294601249916013
+treatment_pooled_median_seconds = 0.9322741669893730
+change_percent = 76.08014711290325
+gate = "failed: pooled and both per-instance oracle ceilings exceeded"
+
+[results.jointly_solved.gm24sparrc]
+oracle_solver = "lrb"
+oracle_median_seconds = 0.22757912499946542
+treatment_median_seconds = 0.49894558399682865
+change_percent = 119.24048789536417
+
+[results.jointly_solved.six299]
+oracle_solver = "evsids"
+oracle_median_seconds = 0.3018809999921359
+treatment_median_seconds = 0.4333285829925444
+change_percent = 43.54284734840308
+
+[results.endpoints]
+pure_oracle_pooled_median_seconds = 4.29304725
+treatment_censored_pooled_median_seconds = 43.73021154195885
+censored_change_percent = 918.6287034683547
+control_reuse = "The exact frozen EVSIDS/LRB binaries and their existing three-repeat endpoint artifact were reused; the modified source separately reproduced both pure trajectories exactly on 6s268."
+gate = "failed: both per-instance oracle ceilings and the pooled oracle ceiling exceeded"
+
+[results.endpoints.break12]
+oracle_solver = "evsids"
+oracle_median_seconds = 3.069428875
+treatment_censored_median_seconds = 25.007404666976072
+treatment_timeouts = 3
+censored_change_percent = 714.725008637839
+
+[results.endpoints.six268]
+oracle_solver = "lrb"
+oracle_median_seconds = 1.223618375
+treatment_median_seconds = 18.72280687498278
+change_percent = 1430.1181526456548
+
+[results.easy]
+evsids_pooled_median_seconds = 0.015041416976600885
+treatment_pooled_median_seconds = 0.01515941700199619
+change_percent = 0.7845007260876447
+gate = "passed"
+
+[results.correctness]
+tests = "101 Rust tests and 7 Python tests passed; rustfmt and clippy -D warnings clean"
+differential = "2000 deterministic brute-force formulas passed under transfer"
+proof_instance = "6s268r_Iter94.cnf"
+proof_bytes = 17739525
+proof_lines = 162057
+proof = "DRAT-trim VERIFIED the complete 6s268 treatment proof; 3043 of 162058 lemmas were in the backward core"
+pure_evsids_trajectory = "exact: 409643 decisions, 91945173 propagations, 78479 conflicts, 251 restarts, and 17804 chronological backtracks on 6s268"
+pure_lrb_trajectory = "exact: 87627 decisions, 9201145 propagations, 18362 conflicts, 62 restarts, 9436036 unassign updates, 251518 reason-side rewards, and 5396263 anti-exploration decays on 6s268"
+treatment_reproducibility = "gm24, 6s299, and 6s268 repeated exact deterministic counters; Break produced three consistent 25-second timeouts and therefore no completed counters"
+metadata = "optional long/binary transfer metadata remained empty in pure modes and stayed index-aligned through allocation and deletion tests"
+
+[results.exercise.gm24sparrc]
+decisions = 14690
+propagations = 3665408
+conflicts = 219
+restarts = 2
+transfer_evsids_epochs = 2
+transfer_lrb_epochs = 1
+transfer_mode_switches = 2
+transfer_evsids_origin_credits = 4
+transfer_lrb_origin_credits = 6
+
+[results.exercise.six299]
+decisions = 62333
+propagations = 2696138
+conflicts = 3446
+restarts = 17
+transfer_evsids_epochs = 13
+transfer_lrb_epochs = 5
+transfer_mode_switches = 10
+transfer_evsids_origin_credits = 155
+transfer_lrb_origin_credits = 555
+
+[results.exercise.six268]
+decisions = 741104
+propagations = 173894677
+conflicts = 162057
+restarts = 443
+transfer_evsids_epochs = 396
+transfer_lrb_epochs = 48
+transfer_mode_switches = 96
+transfer_evsids_origin_credits = 27791
+transfer_lrb_origin_credits = 28217
+transfer_bcp_credits = 56008
+transfer_analysis_credits = 0
+analysis_credit_note = "Under root-level restart epochs, a learned reason or conflict clause necessarily qualifies during BCP before first-UIP traverses it in the same epoch, so once-per-epoch deduplication makes analysis-only first credits structurally absent in completed treatment runs."

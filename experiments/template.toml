@@ -1,0 +1,42 @@
+[experiment]
+id = "YYYY-MM-DD-short-name"
+owner = ""
+status = "preregistered" # preregistered | running | complete | abandoned
+
+[hypothesis]
+mechanism = "What algorithmic mechanism is changing?"
+prediction = "What directional result should occur, and on which families?"
+prior_art_checked = []
+
+[variants]
+control_revision = ""
+treatment_revision = ""
+control_command = ""
+treatment_command = ""
+compiler = ""
+build_flags = ""
+
+[corpus]
+manifest = ""
+role = "development" # training | development | held-out
+deduplication = "sha256"
+
+[protocol]
+timeout_seconds = 300
+memory_megabytes = 0 # 0 means not yet specified; specify before running
+threads = 1
+repetitions = 1
+order_seed = 0
+primary_metric = "solved_count"
+secondary_metrics = ["PAR-2", "paired_runtime"]
+stopping_rule = "Complete the declared corpus; do not stop on a favorable prefix."
+
+[validation]
+sat_models = "required"
+unsat_proofs = "required once proof emission exists"
+disagreements = "quarantine and investigate"
+
+[results]
+jsonl = ""
+summary = ""
+conclusion = ""

@@ -1,0 +1,238 @@
+[experiment]
+id = "2026-07-23-lbd-free-clause-management"
+owner = "Codex"
+status = "promoted as default"
+worktree_revision = "uncommitted initial worktree"
+control_binary = "/private/tmp/sat-baselines-20260723/sat-promoted-sparse-binary-activity"
+control_sha256 = "d0e9d16c7407eac20c536e00f4624aee52aa923a73c8de49c689919c5ba0041e"
+treatment_binary = "/private/tmp/sat-baselines-20260723/sat-lbd-free-clause-management"
+treatment_sha256 = "7019d09ece2f4f0b6d9d040769c12c531bc586d60aaaa56aafc2805e096e3a69"
+
+[hypothesis]
+mechanism = "The default reducer predicts learned-clause value from LBD and conflict-analysis activity, but ignores clauses that repeatedly steer Boolean propagation. A two-stage LBD-free policy can preserve clauses with demonstrated recent use in either BCP or conflict analysis, age obsolete evidence, then use only clause length to give unused short clauses a second chance."
+prediction = "The published MiniSat-style LBD-free usage policy will retain useful propagation clauses missed by the default LBD/activity ordering, preserve at least the control's validated two-second development solved count, and either add a solve or improve the jointly solved pooled median by at least five percent without a catastrophic endpoint or easy-instance regression."
+falsification = "Do not promote the policy if it loses a two-second development solve; neither adds a solve nor improves the frozen jointly solved pooled median by at least five percent; any selected or endpoint median regresses by more than twenty-five percent; endpoint pooled median regresses by more than ten percent; easy pooled overhead exceeds ten percent; the usage, decay, protection, zero-score selection, dynamic fraction, or square-root schedule is not exercised; the default trajectory changes; or any model, proof, differential, determinism, or metadata check fails. Do not tune the decay interval, reduction schedule, fraction, score definition, binary policy, or thresholds after observing treatment results."
+
+[prior_art]
+paper = "Yalun Cai, Xindi Zhang, Zhengyuan Shi, Mengxia Tao, and Qiang Xu, Rethinking Clause Management for CDCL SAT Solvers, arXiv:2602.20829v2, 25 February 2026, https://arxiv.org/abs/2602.20829"
+reference_repository = "https://github.com/RethinkingClauseManagement/RethinkingClauseManagement"
+reference_commit = "a77eccdc188be0700a3a80d8c9f04c78e596a71a"
+reference_implementation = "Solvers/MiniSAT_ours/minisat/core/Solver.cc, Solver.h, and SolverTypes.h at the pinned commit"
+established = "The score initialization, BCP and analysis increments, 2048-conflict MiniSat decay interval, two-stage positive-score/length policy, 0.50-to-0.90 deletion fraction, and square-root reduction schedule are the authors' published and released mechanism. This treatment is a current established baseline, not an algorithmic novelty."
+reported_result = "The paper reports four additional solves and a 4.7 percent PAR-2 reduction for its Kissat variant on SAT Competition 2022, plus large gains on arithmetic circuit equivalence instances. Those claims are context, not results for this Rust solver."
+distinction = "The host adaptation preserves permanent learned binaries, stable clause references, sparse binary activity, first-UIP minimization, chronological backtracking, Luby restarts, proof logging, and the promoted packed storage. The reference MiniSat source comments that binary clauses are never removed; this implementation makes that invariant explicit and applies usage scores only to reducible learned long clauses."
+novelty_status = "Established 2026 clause-management baseline. No novelty claim."
+
+[policy]
+flag = "Add opt-in --lbd-free-reduction and --no-lbd-free-reduction flags. Keep the feature disabled by default regardless of this experiment's result until the frozen gate is evaluated."
+score_storage = "Allocate a u32 side array aligned with long-clause references only when the feature is enabled. Original clauses have score 0. Every learned long clause starts at score 1. Do not expand Clause, binary-clause, Watch, or reason metadata."
+score_use = "Saturating-increment a learned long clause's score once whenever it forces a unit propagation and once whenever it is traversed as the conflict or a reason clause during first-UIP analysis. A clause that first propagated a literal and is later traversed during analysis earns both increments, matching the reference implementation. Watch inspection, blocker hits, watch moves, allocation beyond the initial score, minimization without traversal, retention, and deletion do not increment."
+decay = "Immediately after incrementing the global conflict count, every 2048 conflicts decrement each positive score of every active learned long clause by one. Deleted and original clauses are skipped. Learned binaries remain permanent and unscored."
+reduction_schedule = "Trigger the first reduction at conflict 1000. Number reductions from r=1. After reduction r, schedule the next threshold by adding floor(1000*sqrt(r)) to the current conflict count."
+stage_one = "At reduction, protect every locked learned long clause and every learned long clause with positive score. Only active, unlocked, zero-score learned long clauses enter Stage 2."
+stage_two = "Sort Stage-2 candidates by length descending and clause reference ascending for a deterministic length-only order. Delete floor(fraction*candidate_count) leading candidates, where fraction=0.90-0.40/log10(r+9) for one-indexed reduction r. This is 0.50 at r=1 and asymptotically approaches 0.90. Do not consult LBD or floating-point clause activity."
+binary_policy = "Keep learned binary clauses permanent, preserving the host solver's promoted binary invariant and the reference MiniSat reducer's stated binary exception."
+activity = "Under the treatment, do not bump or decay the unused floating-point clause activity. EVSIDS variable activity is unchanged. Under the default, preserve clause-activity arithmetic exactly."
+everything_else = "Use default EVSIDS, phase saving, first-UIP analysis, recursive minimization, chronological backtracking, Luby restarts, root restart, packed watches, split binary storage, proof logging, and all existing defaults. Disable rephasing, tiers, elimination, arena compaction, binary minimization, subsumption, vivification, probing, trail reuse, and every alternate search regime for both variants."
+
+[variants]
+control = "/private/tmp/sat-baselines-20260723/sat-promoted-sparse-binary-activity --search=evsids --restart=luby --reuse-trail=never --no-rephase --no-tiers --no-eliminate --no-compact-arena --no-binary-minimize --no-subsume --no-vivify --no-probe"
+treatment = "target/release/sat --search=evsids --restart=luby --reuse-trail=never --lbd-free-reduction --no-rephase --no-tiers --no-eliminate --no-compact-arena --no-binary-minimize --no-subsume --no-vivify --no-probe"
+compiler = "rustc stable with -C target-cpu=native and release fat LTO"
+
+[pre_execution_amendment]
+recorded = "2026-07-23, after implementation correctness tests and default-trajectory verification but before any treatment benchmark execution"
+issue = "The preregistered control command passed --no-lbd-free-reduction to a frozen control binary built before that flag existed, which would reject the command instead of running the intended default."
+correction = "Omit only --no-lbd-free-reduction from the frozen control command. The flag is a no-op default selector in the modified source; a release rebuild with that flag reproduced the frozen 6s268 trajectory exactly before treatment execution."
+scope = "No treatment policy, corpus, timeout, repetition, seed, metric, or gate changed."
+
+[corpus]
+manifest = "benchmarks/manifests/satcomp-2025-development.json"
+role = "development"
+deduplication = "sha256"
+heldout_use = "none"
+arithmetic_corpus = "The authors' circuit corpus was acquired and pinned for later domain validation but is not part of this promotion gate; its published runtimes require materially longer limits than the present development protocol."
+
+[protocol]
+full_slice_timeout_seconds = 2
+full_slice_repetitions = 1
+jointly_solved_repetitions = 7
+jointly_solved_selection = "After the frozen full-slice control/treatment run, repeat every development instance that both variants solve and whose control or treatment wall time is at least 0.1 seconds. Freeze this set before repeats."
+endpoint_instances = ["Break_12_50.xml.cnf", "6s268r_Iter94.cnf"]
+endpoint_timeout_seconds = 25
+endpoint_repetitions = 3
+easy_overhead_repetitions = 11
+proof_instance = "6s268r_Iter94.cnf"
+threads = 1
+order_seed = 20251103
+primary_metric = "validated two-second development solved count, then pooled median time on the frozen jointly solved set"
+secondary_metrics = [
+  "per-instance selected medians",
+  "pooled and per-instance endpoint medians",
+  "easy-instance pooled overhead",
+  "decisions, propagations, conflicts, restarts, learned literals, reductions, deleted clauses, usage increments, decay passes, decayed scores, positive protections, and zero-score candidates",
+]
+stopping_rule = "Implement the frozen policy once, run correctness and proof checks, then execute the declared comparisons. Do not consume held-out data or tune T, reduction timing, deletion fraction, score semantics, binary deletion, search, restart, or other clause-management parameters from treatment results."
+
+[correctness]
+unit = "Test score initialization, saturating BCP and analysis increments, double use through both channels, exact 2048-conflict decay, deleted/original exclusion, positive-score and lock protection, length-only deletion, deterministic ties, dynamic fractions, and square-root thresholds."
+differential = "Extend the deterministic brute-force differential suite to --lbd-free-reduction, including every optional-feature regression whose combination is semantically supported."
+models = "Independently validate every SAT model emitted in development and endpoint runs."
+proof = "Emit a treatment DRAT proof for 6s268 under the endpoint timeout and require independent DRAT-trim verification."
+trajectory = "Rebuild the frozen default configuration from modified source and require its exact 6s268 deterministic counters to match the promoted control. Require repeat treatment executions on every selected and endpoint instance to produce identical result and counters."
+metadata = "Require usage side-array length to match long-clause storage under the feature, remain aligned through deletion and optional compaction, and remain empty under the default and every unrelated mode."
+exercise = "Require positive BCP increments, analysis increments, decay passes, scores decayed, positive-score protections, zero-score candidates, reductions, and deletions on at least one nontrivial development or endpoint instance."
+
+[promotion_gate]
+development_solved_delta_minimum = 0
+qualifying_improvement = "Either treatment development solved count exceeds control, or counts tie and jointly solved pooled median improves by at least 5 percent."
+jointly_solved_pooled_improvement_percent_minimum_if_tied = 5
+jointly_solved_max_regression_percent = 25
+endpoint_pooled_max_regression_percent = 10
+endpoint_max_regression_percent = 25
+easy_overhead_max_percent = 10
+default_trajectory_exact_required = true
+deterministic_treatment_reproducibility_required = true
+usage_mechanisms_exercised_required = true
+sat_model_validation_required = true
+proof_validation_required = true
+next_step = "If promoted, make the LBD-free policy the default only after documenting its established origin and then validate once on untouched held-out data. If rejected, retain it opt-in only if correctness passes, record the negative result, and use its measured protection/deletion behavior to select a separately preregistered novel clause-management intervention without parameter retuning."
+
+[results]
+promoted_default_binary = "target/release/sat"
+promoted_default_binary_sha256 = "ff29d62f9f74f5923905f465988d01e4a14651a42bcc6e4a09c4deb9669d1232"
+full_slice_jsonl = "/private/tmp/sat-baselines-20260723/lbd-free-clause-management-full-2s.jsonl"
+full_slice_jsonl_sha256 = "b65f8beb84866e1417e58918d2acce239de38300bfabf291d184ce3beaba1948"
+jointly_solved_jsonl = "/private/tmp/sat-baselines-20260723/lbd-free-clause-management-jointly-solved-repeat7.jsonl"
+jointly_solved_jsonl_sha256 = "296da520770e1bcbb9f6ee6f1eb654cd04e8ef326b709db9362fdc67b183637d"
+endpoint_jsonl = "/private/tmp/sat-baselines-20260723/lbd-free-clause-management-endpoints-repeat3.jsonl"
+endpoint_jsonl_sha256 = "b8dfd8fe737f9fe6c89d932c19a01e93cbfe0b13dfed6c1e60776ecf5aea9b60"
+easy_jsonl = "/private/tmp/sat-baselines-20260723/lbd-free-clause-management-easy-repeat11.jsonl"
+easy_jsonl_sha256 = "159d4f2ac81478d881a1984c275fb023892bb7366cec0a3706b368a184d33f7f"
+easy_corpus = "benchmarks/smoke, the standing eight-instance easy-overhead corpus"
+proof = "/private/tmp/sat-baselines-20260723/lbd-free-clause-management-6s268.drat"
+proof_sha256 = "39f48b0765b257c27d9b0daac1b97ab99781e5a474cf881154c765a18d47cab0"
+summary = "The published LBD-free clause-management treatment passed every frozen gate. It raised validated two-second development coverage from 3/8 to 5/8 with no lost solve, adding one SAT and one UNSAT result. The two jointly solved nontrivial cases regressed by 7.74% and 8.76%, both inside the 25% ceiling; their pooled median regressed 8.23%, but the qualifying solved-count branch had already passed. Break improved 58.84%, 6s268 improved 88.45%, pooled endpoint time improved 77.20%, and easy overhead was 0.44%."
+conclusion = "Promoted as the default learned-clause reducer. The exact former LBD/activity policy remains available through --no-lbd-free-reduction. This is an implementation and validation of Cai et al.'s established 2026 mechanism, not a novel contribution. No post-promotion held-out result is claimed in this artifact."
+
+[results.full_slice]
+control_solved = 3
+treatment_solved = 5
+solved_delta = 2
+control_sat = 2
+control_unsat = 1
+treatment_sat = 3
+treatment_unsat = 2
+sat_models = "all valid"
+status_disagreements = 0
+gate = "passed: treatment added two solves and lost none"
+
+[results.jointly_solved]
+instances = ["gm24sparrc", "6s299b685_Iter22"]
+control_pooled_median_seconds = 0.6644997500116006
+treatment_pooled_median_seconds = 0.7192152499919757
+change_percent = 8.234088873535317
+gate = "passed: solved-count qualification applies; both per-instance regressions stayed below 25%"
+
+[results.jointly_solved.gm24sparrc]
+control_median_seconds = 0.3436140000121668
+treatment_median_seconds = 0.37021816600463353
+change_percent = 7.742456940498554
+
+[results.jointly_solved.six299]
+control_median_seconds = 0.32088574999943376
+treatment_median_seconds = 0.3489970839873422
+change_percent = 8.760542962084816
+
+[results.endpoints]
+control_pooled_median_seconds = 8.181722749985056
+treatment_pooled_median_seconds = 1.865837499994086
+change_percent = -77.1950534501124
+gate = "passed"
+
+[results.endpoints.break12]
+control_median_seconds = 3.1096829579910263
+treatment_median_seconds = 1.2799349580018315
+change_percent = -58.84033918272111
+treatment_timeouts = 0
+
+[results.endpoints.six268]
+control_median_seconds = 5.07203979199403
+treatment_median_seconds = 0.5859025419922546
+change_percent = -88.4483843577672
+treatment_timeouts = 0
+
+[results.easy]
+control_pooled_median_seconds = 0.01458945797639899
+treatment_pooled_median_seconds = 0.01465374999679625
+change_percent = 0.4406744959357889
+gate = "passed"
+
+[results.correctness]
+tests = "107 Rust tests and 7 Python tests passed; rustfmt and clippy -D warnings clean"
+differential = "2000 deterministic brute-force formulas passed with LBD-free clause management enabled"
+proof_instance = "6s268r_Iter94.cnf"
+proof_bytes = 369152
+proof_lines = 5551
+proof = "DRAT-trim VERIFIED the complete treatment proof; 1644 of 5552 lemmas were in the backward core and no RAT lemma was required"
+frozen_legacy_trajectory = "exact under --no-lbd-free-reduction: 409643 decisions, 91945173 propagations, 78479 conflicts, 251 restarts, 78212 learned clauses, and 1157888 learned literals on 6s268"
+promoted_default_trajectory = "exact against the frozen treatment: 42363 decisions, 5893854 propagations, 5551 conflicts, 28 restarts, 5517 learned clauses, and 52491 learned literals on 6s268"
+deterministic_counter_cases = ["gm24sparrc", "6s299b685_Iter22", "Break_12_50", "6s268r_Iter94"]
+deterministic_counter_mismatches = 0
+metadata = "The u32 score array stayed aligned with long-clause references through allocation, deletion, and optional arena compaction, and remained empty under the exact legacy ablation."
+
+[results.exercise.gm24sparrc]
+decisions = 233
+propagations = 4252492
+conflicts = 147
+restarts = 1
+clause_usage_bcp_increments = 242
+clause_usage_analysis_increments = 305
+clause_usage_decay_passes = 0
+clause_usage_scores_decayed = 0
+clause_usage_positive_protections = 0
+clause_usage_zero_candidates = 0
+reductions = 0
+deleted_clauses = 0
+
+[results.exercise.six299]
+decisions = 63158
+propagations = 2644896
+conflicts = 3230
+restarts = 15
+clause_usage_bcp_increments = 4832
+clause_usage_analysis_increments = 3415
+clause_usage_decay_passes = 1
+clause_usage_scores_decayed = 2028
+clause_usage_positive_protections = 2812
+clause_usage_zero_candidates = 0
+reductions = 2
+deleted_clauses = 0
+
+[results.exercise.break12]
+decisions = 210071
+propagations = 20630050
+conflicts = 37717
+restarts = 125
+clause_usage_bcp_increments = 525242
+clause_usage_analysis_increments = 151166
+clause_usage_decay_passes = 18
+clause_usage_scores_decayed = 161253
+clause_usage_positive_protections = 105592
+clause_usage_zero_candidates = 39456
+reductions = 15
+deleted_clauses = 23202
+
+[results.exercise.six268]
+decisions = 42363
+propagations = 5893854
+conflicts = 5551
+restarts = 28
+clause_usage_bcp_increments = 16106
+clause_usage_analysis_increments = 11421
+clause_usage_decay_passes = 2
+clause_usage_scores_decayed = 4577
+clause_usage_positive_protections = 7223
+clause_usage_zero_candidates = 2943
+reductions = 4
+deleted_clauses = 1577

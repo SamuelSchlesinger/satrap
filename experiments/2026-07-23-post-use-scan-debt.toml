@@ -1,0 +1,257 @@
+[experiment]
+id = "2026-07-23-post-use-scan-debt"
+owner = "Codex"
+status = "rejected; retained opt-in"
+worktree_revision = "uncommitted initial worktree"
+preregistration_sha256 = "06037b2be3b7268351e5944d7d85cdb19527e7d22f72de4b2ebba7715e81c36a"
+control_binary = "/private/tmp/sat-baselines-20260723/sat-promoted-lbd-free-clause-management"
+control_sha256 = "ff29d62f9f74f5923905f465988d01e4a14651a42bcc6e4a09c4deb9669d1232"
+treatment_binary = "/private/tmp/sat-baselines-20260723/sat-post-use-scan-debt"
+treatment_sha256 = "fce0c55049b48c3c5c07027dec90bbc088fd590afea1d42aaa94fc443c257f50"
+
+[hypothesis]
+mechanism = "The promoted LBD-free reducer counts useful clause events but treats every positive score as free protection. Some previously useful clauses subsequently consume substantial Boolean-propagation work through blocker checks and replacement scans without propagating or contributing to analysis. Exact post-use scan debt estimates this negative marginal work directly. Under the same reduction schedule and deletion count, allowing high-debt clauses to displace low-debt clauses should reduce wasted propagation work without indiscriminately shrinking the learned database."
+prediction = "The scan-debt treatment will preserve the control's validated two-second development solved count and either add a solve or improve the jointly solved pooled median by at least five percent. On at least one nontrivial case it will make a deletion choice different from the published usage/length baseline, delete a positive-score high-debt clause, or otherwise demonstrate a nonzero exact-work displacement while staying within the frozen endpoint and easy-overhead ceilings."
+falsification = "Reject the treatment if it loses a two-second development solve; neither adds a solve nor improves the frozen jointly solved pooled median by at least five percent; any selected or endpoint median regresses by more than twenty-five percent; endpoint pooled median regresses by more than ten percent; easy pooled overhead exceeds ten percent; no deletion selection changes despite nonzero scan debt; the zero-debt comparator differs from the promoted policy; or any model, proof, differential, determinism, metadata, or accounting check fails. Do not tune the charged operations, reset events, comparator, schedule, fraction, or thresholds after observing treatment results."
+
+[prior_art]
+promoted_control = "Yalun Cai, Xindi Zhang, Zhengyuan Shi, Mengxia Tao, and Qiang Xu, Rethinking Clause Management for CDCL SAT Solvers, arXiv:2602.20829v2, 2026, https://arxiv.org/abs/2602.20829"
+recent_unlearning = "Bernhard Gstrein, Florian Pollitt, Andre Schidler, Mathias Fleury, and Armin Biere, Learn to Unlearn, SAT 2025, DOI 10.4230/LIPIcs.SAT.2025.14"
+simple_online_reduction = "Sima Jamali and David Mitchell, Simplifying CDCL Clause Database Reduction, SAT 2019, DOI 10.1007/978-3-030-24258-9_12"
+elapsed_cost_proxy = "David Scott McGrew, Boolean satisfiability SAT solver, US10650109B1, 2020, especially value_of_clause=1/(time_since_last_propagation_through_clause*clause_length)"
+stable_watches = "Ashlin Iser and Tomas Balyo, Unit Propagation with Stable Watches, CP 2021, DOI 10.4230/LIPIcs.CP.2021.6"
+freezing = "Gilles Audemard, Jean-Marie Lagniez, and Laurent Simon, On Freezing and Reactivating Learnt Clauses, SAT 2011, DOI 10.1007/978-3-642-21581-0_16"
+causal_analysis = "Jiong Yang, Arijit Shaw, Teodora Baluta, Mate Soos, and Kuldeep S. Meel, Explaining SAT Solving Using Causal Reasoning, SAT 2023, DOI 10.4230/LIPIcs.SAT.2023.28"
+established = "Clause activity, LBD, length, age, recent conflict-analysis use, propagation-use counts, saved-polarity relevance, stable watched-literal selection, approximate elapsed propagation cost, freezing/reactivation, and offline causal analysis are established. None is claimed here."
+distinction = "The preregistered treatment measures the exact assignment-value checks actually spent on each active learned long clause after its last beneficial BCP or analysis use, then uses that accumulated negative evidence to alter a fixed-cardinality reduction decision. It does not approximate cost by clause length or elapsed time, change watched-literal selection, freeze clauses by saved phase, learn an offline model, or change the published reduction schedule or deletion count. A targeted paper, patent, source, and web search found close motivations but no exact post-use work-debt comparator. This is a provisional candidate contribution, not a priority or novelty proof."
+novelty_status = "Candidate algorithmic contribution. No priority claim; novelty remains contingent on broader scholarly and source-code review plus a successful ablation."
+
+[collision_audit]
+rejected_rup_direction = "A proposed bounded current-database RUP/re-derivability deletion signal is not pursued as novel. US10650109B1 explicitly removes a clause, falsifies its literals, runs BCP against the remaining database, and deletes clauses proved redundant. Clause vivification and UCP-irredundancy supply additional adjacent prior art."
+ucp_irredundancy = "Petr Savicky, On CNF formulas irredundant with respect to unit clause propagation, arXiv:2309.01750 and Theoretical Computer Science 1064 (2026) 115707"
+consequence = "Do not revive clause-removal-plus-BCP implicativity as a novelty claim without a materially different mechanism and a new audit."
+
+[policy]
+flag = "Add opt-in --scan-debt-reduction and --no-scan-debt-reduction flags. Keep the treatment disabled by default regardless of this development result. The enabled form requires the promoted LBD-free reducer."
+storage = "Allocate one u64 scan-debt side entry aligned with every long-clause reference only when the feature is enabled. Original and newly learned long clauses start at zero. Learned binaries remain permanent and untracked. Do not expand Clause, binary-clause, Watch, or reason metadata."
+charged_work = "During ordinary search BCP only, saturating-add one debt unit to an active learned long clause for its blocker assignment-value check. If the blocker is not true, add one for the other watched literal check. If the other watch is not true, add one for every unwatched literal whose assignment is tested while searching for a replacement, including the successful or final failed test. Do not charge deleted/ignored clauses, binary clauses, original clauses, probe BCP, vivification BCP, watch-list copying, clause allocation, conflict analysis, or wall time."
+beneficial_reset = "After charging the current visit, reset a learned long clause's debt to zero whenever it forces an ordinary unit propagation. Also reset it whenever the clause is traversed as the conflict or a reason during first-UIP analysis. A propagation followed by later analysis may reset twice, but only a nonzero-to-zero reset counts in diagnostics. Blocker hits, watch moves, conflicts before analysis, minimization-only access, retention, and deletion do not reset debt."
+quota = "Compute locks and the unlocked zero-score pool exactly as the promoted LBD-free reducer. For one-indexed reduction r, delete exactly floor((0.90-0.40/log10(r+9))*zero_score_pool_size) clauses. Thus the treatment changes which clauses are deleted, never how many, at a given solver state."
+ordering = "Place every active unlocked learned long clause in the treatment ordering. Sort by scan debt descending, usage score ascending, length descending, then clause reference ascending. Delete the first quota clauses. Locked clauses and learned binaries remain protected. With all debts zero, the zero-score prefix, length order, reference ties, and deletion set are exactly the promoted policy."
+schedule = "Keep score initialization and BCP/analysis increments, 2048-conflict score decay, first reduction at conflict 1000, square-root reduction intervals, and dynamic deletion fraction exactly as promoted. Scan debt has no clock-based decay; beneficial use is its only reset."
+diagnostics = "Report total charged literal checks, nonzero debt resets, peak debt, deletion-set displacements relative to the promoted comparator at the same state, positive-score clauses deleted, and zero-score baseline deletions rescued."
+everything_else = "Use default EVSIDS, phase saving, first-UIP analysis, recursive minimization, chronological backtracking, Luby restarts, root restart, packed watches, split binary storage, proof logging, and all existing defaults. Disable rephasing, tiers, elimination, arena compaction, binary minimization, subsumption, vivification, probing, trail reuse, and every alternate search regime for both variants."
+
+[variants]
+control = "/private/tmp/sat-baselines-20260723/sat-promoted-lbd-free-clause-management --search=evsids --restart=luby --reuse-trail=never --no-rephase --no-tiers --no-eliminate --no-compact-arena --no-binary-minimize --no-subsume --no-vivify --no-probe"
+treatment = "target/release/sat --search=evsids --restart=luby --reuse-trail=never --scan-debt-reduction --no-rephase --no-tiers --no-eliminate --no-compact-arena --no-binary-minimize --no-subsume --no-vivify --no-probe"
+compiler = "rustc stable with -C target-cpu=native and release fat LTO"
+
+[corpus]
+manifest = "benchmarks/manifests/satcomp-2025-development.json"
+role = "development"
+deduplication = "sha256"
+heldout_use = "none"
+
+[protocol]
+full_slice_timeout_seconds = 2
+full_slice_repetitions = 1
+jointly_solved_repetitions = 7
+jointly_solved_selection = "After the frozen full-slice control/treatment run, repeat every development instance that both variants solve and whose control or treatment wall time is at least 0.1 seconds. Freeze this set before repeats."
+endpoint_instances = ["Break_12_50.xml.cnf", "6s268r_Iter94.cnf"]
+endpoint_timeout_seconds = 25
+endpoint_repetitions = 3
+easy_overhead_repetitions = 11
+proof_instance = "6s268r_Iter94.cnf"
+threads = 1
+order_seed = 20251103
+primary_metric = "validated two-second development solved count, then pooled median time on the frozen jointly solved set"
+secondary_metrics = [
+  "per-instance selected medians",
+  "pooled and per-instance endpoint medians",
+  "easy-instance pooled overhead",
+  "decisions, propagations, conflicts, restarts, learned literals, reductions, deleted clauses, charged literal checks, nonzero resets, peak debt, deletion-set displacements, positive-score deletions, and zero-score rescues",
+]
+stopping_rule = "Implement the frozen policy once, run correctness and proof checks, then execute the declared comparisons. Do not consume held-out data or tune charged operations, reset semantics, comparator fields, score semantics, schedule, deletion fraction, search, restart, or any threshold from treatment results."
+
+[correctness]
+unit = "Test exact blocker/other/replacement charge counts; saturation; reset on BCP and analysis use; exclusions for original, binary, deleted, probe, and vivification clauses; fixed deletion quota; debt/score/length/reference ordering; lock protection; positive displacement; and zero-debt equivalence to the promoted deletion set."
+differential = "Extend the deterministic brute-force differential suite to --scan-debt-reduction, including every optional-feature regression whose combination is semantically supported."
+models = "Independently validate every SAT model emitted in development and endpoint runs."
+proof = "Emit a treatment DRAT proof for 6s268 under the endpoint timeout and require independent DRAT-trim verification."
+trajectory = "Require exact promoted counters when the feature is disabled. Require repeated treatment executions on every selected and endpoint instance to produce identical result, search counters, and scan-debt counters."
+metadata = "Require the u64 side-array length to match long-clause storage under the feature, remain aligned through deletion and optional compaction, and remain empty under the default and every unrelated mode."
+exercise = "Require nonzero charged checks, nonzero resets, nonzero peak debt, reductions, deletions, and at least one deletion-set displacement on a nontrivial development or endpoint instance."
+
+[promotion_gate]
+development_solved_delta_minimum = 0
+qualifying_improvement = "Either treatment development solved count exceeds control, or counts tie and jointly solved pooled median improves by at least 5 percent."
+jointly_solved_pooled_improvement_percent_minimum_if_tied = 5
+jointly_solved_max_regression_percent = 25
+endpoint_pooled_max_regression_percent = 10
+endpoint_max_regression_percent = 25
+easy_overhead_max_percent = 10
+disabled_trajectory_exact_required = true
+deterministic_treatment_reproducibility_required = true
+zero_debt_equivalence_required = true
+selection_displacement_required = true
+sat_model_validation_required = true
+proof_validation_required = true
+next_step = "If every gate passes, retain the treatment as an opt-in candidate and perform a broader prior-art review before one untouched held-out evaluation; do not make it default from development data. If rejected, preserve the preregistration and negative result, remove or retain the mode according to diagnostic value, and do not post-hoc tune this signal on the revealed families."
+
+[results]
+full_slice_jsonl = "/private/tmp/sat-baselines-20260723/post-use-scan-debt-full-2s.jsonl"
+full_slice_jsonl_sha256 = "b6843693772d78e0b4cb4e4722a78cfaf82d0ee9ea9b1aba40cb12d0bcd6ce57"
+jointly_solved_jsonl = "/private/tmp/sat-baselines-20260723/post-use-scan-debt-jointly-solved-repeat7.jsonl"
+jointly_solved_jsonl_sha256 = "d8e959fa07fbff0ae3abb83a22092c6a74231a5d35153c2e975083fd199f4ce3"
+endpoint_jsonl = "/private/tmp/sat-baselines-20260723/post-use-scan-debt-endpoints-repeat3.jsonl"
+endpoint_jsonl_sha256 = "eeff11dc27d4c3e776280bf080dcdb1aa9a460277a0d5de8552594db8c364242"
+easy_jsonl = "/private/tmp/sat-baselines-20260723/post-use-scan-debt-easy-repeat11.jsonl"
+easy_jsonl_sha256 = "b65942120f5bdae10066fb7deff53a8d473bd8c36c78fe09d8831030c3779cbb"
+easy_corpus = "benchmarks/smoke, the standing eight-instance easy-overhead corpus"
+proof = "/private/tmp/sat-baselines-20260723/post-use-scan-debt-6s268.drat"
+proof_sha256 = "a640e7733c261204d186b9b0abeccf4eb10e3ec5f81ecc2fdf8a7fc841b1ed91"
+summary = "The treatment tied the promoted control at 5/8 validated two-second development solves but regressed every repeated nontrivial case. The sum of four per-instance medians rose 11.31%, so the primary qualifying gate failed. The two endpoints regressed 4.05% and 18.95%, with a 14.19% pooled regression that also exceeded the frozen 10% ceiling. Easy pooled overhead was 1.25%. Exact counters show why: when reductions were active, debt-first ranking displaced 20,349 baseline deletions on Break and 1,394 on 6s268, deleting 17,776 and 1,390 positive-score clauses respectively and increasing conflicts and learned literals."
+conclusion = "Rejected as a performance candidate and default. Retained behind --scan-debt-reduction as a correctness- and proof-checked negative result because it exposes the failure mechanism. Raw post-use scan debt confounds avoidable cost with clause exposure: frequently visited, still useful clauses accumulate the most debt and are preferentially deleted. Do not normalize, reweight, or threshold this signal on the revealed development families. No novelty or priority claim is made from the negative result."
+
+[results.full_slice]
+control_solved = 5
+treatment_solved = 5
+solved_delta = 0
+control_sat = 3
+control_unsat = 2
+treatment_sat = 3
+treatment_unsat = 2
+control_timeouts = 3
+treatment_timeouts = 3
+sat_models = "all valid"
+status_disagreements = 0
+gate = "tied; proceed to the frozen jointly solved runtime qualification"
+
+[results.jointly_solved]
+instances = [
+  "gm24sparrc.cnf",
+  "6s299b685_Iter22.cnf",
+  "Break_12_50.xml.cnf",
+  "6s268r_Iter94.cnf",
+]
+control_pooled_median_seconds = 2.4736680010391865
+treatment_pooled_median_seconds = 2.753327666025143
+change_percent = 11.305464794324527
+gate = "failed: tied solved count required at least a 5 percent pooled improvement, but every case regressed"
+
+[results.jointly_solved.gm24sparrc]
+control_median_seconds = 0.3432413340196945
+treatment_median_seconds = 0.3505961250048131
+change_percent = 2.1427463000993408
+
+[results.jointly_solved.six299]
+control_median_seconds = 0.3277964169974439
+treatment_median_seconds = 0.34336808300577104
+change_percent = 4.750407631346554
+
+[results.jointly_solved.break12]
+control_median_seconds = 1.2267295830242801
+treatment_median_seconds = 1.4596979579946492
+change_percent = 18.99101303125239
+
+[results.jointly_solved.six268]
+control_median_seconds = 0.575900666997768
+treatment_median_seconds = 0.5996655000199098
+change_percent = 4.126550702924248
+
+[results.endpoints]
+control_pooled_median_seconds = 1.8034767509961966
+treatment_pooled_median_seconds = 2.0594748749863356
+change_percent = 14.194700533219073
+gate = "failed: pooled regression exceeded 10 percent"
+
+[results.endpoints.break12]
+control_median_seconds = 1.2276630839915015
+treatment_median_seconds = 1.4603387500101235
+change_percent = 18.95272970676316
+treatment_timeouts = 0
+
+[results.endpoints.six268]
+control_median_seconds = 0.5758136670046952
+treatment_median_seconds = 0.5991361249762122
+change_percent = 4.050348108761859
+treatment_timeouts = 0
+
+[results.easy]
+control_pooled_median_seconds = 0.014763795043108985
+treatment_pooled_median_seconds = 0.014949000033084303
+change_percent = 1.2544538137689853
+gate = "passed"
+
+[results.correctness]
+tests = "115 Rust tests and 7 Python tests passed; rustfmt and clippy -D warnings clean"
+differential = "2000 deterministic brute-force formulas passed with scan-debt clause management enabled"
+proof_instance = "6s268r_Iter94.cnf"
+proof_bytes = 504363
+proof_lines = 6346
+proof = "DRAT-trim VERIFIED the complete treatment proof; 2153 of 6347 lemmas were in the backward core, using 289348 resolution steps and no RAT lemma"
+disabled_trajectory = "exact against the frozen promoted control on 6s268: 42363 decisions, 5893854 propagations, 5551 conflicts, 28 restarts, 5517 learned clauses, 52491 learned literals, 1577 deletions, and every usage counter"
+determinism = "Two independent treatment stats runs on each of gm24, 6s299, Break, and 6s268 had identical output hashes after excluding solve_seconds; all repeat-7 SAT models were valid"
+zero_debt = "Unit tests establish exact promoted deletion-set equivalence when every debt is zero"
+metadata = "The optional u64 debt array stayed aligned with long-clause references through deletion and optional arena compaction and remained empty under the default"
+
+[results.exercise.gm24sparrc]
+decisions = 233
+propagations = 4252492
+conflicts = 147
+reductions = 0
+deleted_clauses = 0
+literal_checks = 4908
+nonzero_resets = 250
+peak_debt = 119
+selection_displacements = 0
+positive_score_deletions = 0
+
+[results.exercise.six299]
+decisions = 63158
+propagations = 2644896
+conflicts = 3230
+reductions = 2
+deleted_clauses = 0
+literal_checks = 190266
+nonzero_resets = 6469
+peak_debt = 1698
+selection_displacements = 0
+positive_score_deletions = 0
+
+[results.exercise.break12]
+control_decisions = 210071
+treatment_decisions = 228819
+control_propagations = 20630050
+treatment_propagations = 23683257
+control_conflicts = 37717
+treatment_conflicts = 42616
+control_learned_literals = 5397124
+treatment_learned_literals = 6771235
+control_deleted_clauses = 23202
+treatment_deleted_clauses = 30531
+literal_checks = 151638834
+nonzero_resets = 630760
+peak_debt = 185730
+selection_displacements = 20349
+positive_score_deletions = 17776
+zero_score_rescues = 20349
+
+[results.exercise.six268]
+control_decisions = 42363
+treatment_decisions = 44248
+control_propagations = 5893854
+treatment_propagations = 6067588
+control_conflicts = 5551
+treatment_conflicts = 6346
+control_learned_literals = 52491
+treatment_learned_literals = 71058
+control_deleted_clauses = 1577
+treatment_deleted_clauses = 1715
+literal_checks = 1153076
+nonzero_resets = 27455
+peak_debt = 1522
+selection_displacements = 1394
+positive_score_deletions = 1390
+zero_score_rescues = 1394

@@ -1,0 +1,140 @@
+[experiment]
+id = "2026-07-23-online-trail-reuse-gate"
+owner = "Codex"
+status = "complete"
+worktree_revision = "uncommitted initial worktree"
+
+[hypothesis]
+mechanism = "A score-valid ReusedTrail prefix saves reconstruction work, but retaining it can also keep the solver in an unproductive trajectory. The useful signal is therefore not prefix validity alone, but the quality and propagation cost of the search epoch following each root or reused restart."
+prediction = "A per-instance gate using the latest action-conditioned epoch productivity, plus parameter-free logarithmic exploration, will retain the two-event 6s268r_Iter94 benefit while rejecting most harmful reuse on Break_12_50."
+falsification = "Reject the gate unchanged if it fails either development endpoint: solve 6s268r_Iter94 within 2 seconds and Break_12_50 within 10 seconds. Do not tune its reward, exploration schedule, or thresholds after seeing these outcomes."
+
+[prior_art]
+checked = [
+  "https://www.cs.cmu.edu/~mheule/publications/JSAT7_11_vanderTak.pdf",
+  "https://cca.informatik.uni-freiburg.de/papers/BiereFroehlich-SAT15.pdf",
+  "https://arxiv.org/abs/1608.04720",
+  "https://arxiv.org/abs/0907.5032",
+  "https://arxiv.org/abs/2404.03753",
+  "https://arxiv.org/abs/2404.16387",
+  "https://doi.org/10.3390/sym11020197",
+]
+established = "ReusedTrail itself, MAB selection among restart schedules, ML restart selection after an observation window, MAB restart-versus-reset selection, duplicate-trail-triggered branching perturbation, and periodic information-forgetting restarts are prior art."
+distinction = "The candidate gate chooses between full root restart and the already-computed score-valid ReusedTrail level. Its reward combines conflict yield, learned-clause LBD, and propagation cost for the epoch following the chosen action."
+novelty_status = "Research hypothesis only. Absence of this exact gate in the checked sources is not a novelty proof, and no novelty claim will be made from a two-instance development result."
+
+[policy]
+name = "last-epoch quality with logarithmic reuse probes"
+scope = "EVSIDS restart trail reuse only"
+epoch = "search from one restart action to the next scheduled restart"
+quality = "Q = conflicts^2 / (max(propagations, 1) * max(sum_of_analyzed_clause_LBDs, 1))"
+comparison = "Compare Q exactly by saturating u128 cross multiplication; higher is better."
+memory = "Keep only the most recently completed root-action epoch and reuse-action epoch, allowing nonstationary adaptation without a decay parameter."
+eligible_event = "A scheduled restart for which the standard score-frontier ReusedTrail level is nonzero."
+decision = "On eligible event k, reuse if no reuse epoch has yet completed, k is a power of two, or the latest reuse quality is at least the latest root quality. Otherwise restart to level zero."
+exploration = "Power-of-two eligible events 1, 2, 4, 8, ... are reuse probes; probe density tends to zero and introduces no tuned numeric parameter."
+noneligible_action = "If the standard ReusedTrail level is zero, perform a root restart and classify the following epoch as root."
+
+[variants]
+control_root = "target/release/sat --no-reuse-trail"
+control_always = "target/release/sat --reuse-trail"
+treatment = "target/release/sat --reuse-trail=adaptive"
+compiler = "rustc stable with -C target-cpu=native and release fat LTO"
+
+[corpus]
+manifest = "benchmarks/manifests/satcomp-2025-development.json"
+role = "development"
+deduplication = "sha256"
+primary_instances = [
+  "Break_12_50.xml.cnf",
+  "6s268r_Iter94.cnf",
+]
+heldout_use = "none unless every development and correctness gate passes"
+
+[protocol]
+endpoint_timeout_seconds = 25
+endpoint_repetitions = 3
+full_slice_timeout_seconds = 2
+full_slice_repetitions = 1
+easy_overhead_repetitions = 7
+threads = 1
+order_seed = 20250813
+primary_metric = "development endpoints: 6s268 solved within 2 seconds and Break_12_50 solved within 10 seconds"
+secondary_metrics = [
+  "validated solved count on the frozen eight-instance development slice at 2 seconds",
+  "deterministic conflicts",
+  "wall-time median",
+  "adaptive eligible events",
+  "reuse probes",
+  "quality-selected reuse actions",
+  "quality-selected root actions",
+]
+stopping_rule = "Implement this policy once, run correctness and proof checks, then execute the declared development comparisons. Record a negative result unchanged if either endpoint fails. Do not inspect or tune on the existing held-out corpus."
+
+[correctness]
+unit_tests = "Exact quality ordering, saturation behavior, power-of-two probe schedule, and action-state updates."
+differential = "Include adaptive reuse in deterministic brute-force differential testing."
+sat_models = "tools/benchmark.py must report valid"
+unsat_proof = "Emit DRAT for adaptive 6s268r_Iter94 and require independent DRAT-trim verification."
+disabled_overhead = "The default Never policy must not accumulate LBD reward state in the conflict hot path."
+
+[promotion_gate]
+sixs268_seconds = 2
+break12_seconds = 10
+development_solved_minimum = 4
+easy_overhead_max_percent = 2
+next_step = "Only a passing candidate may justify selecting a new, outcome-blind, family-disjoint quarantined evaluation sample. The already-revealed held-out slice is not a tuning set."
+
+[results]
+solver_binary_sha256 = "813df04c24b41cd20b51d7b4f77262ef00b72952c67e1a1609da9810740c67b1"
+endpoint_jsonl = "/private/tmp/sat-baselines-20260723/online-trail-reuse-endpoints-repeat3.jsonl"
+endpoint_jsonl_sha256 = "0e685ecdbdb37102c61d8d817cb50b9a6e75193fa2cdc2319f84bf2bcd0737c5"
+full_slice_jsonl = "/private/tmp/sat-baselines-20260723/online-trail-reuse-full-2s.jsonl"
+full_slice_jsonl_sha256 = "41dcfc46469f5e3dd40e68bad620da39c2f675b007d9f88bd0950d70782d53cd"
+summary = "Adaptive exactly reproduced always-reuse on 6s268 because its only two eligible events were both preregistered probes. On Break it timed out in all three 25-second benchmark runs and solved directly in 26.11 seconds after 835,182 conflicts, worse than both controls. The 2-second development coverage was adaptive 4/8, always 4/8, and root 3/8."
+conclusion = "Rejected unchanged. The propagation-and-LBD epoch reward is not aligned with eventual search progress on Break: it made 20 quality-based accepts and 30 quality-based rejects among 56 eligible events, yet produced a trajectory worse than always reusing. Keep the mode as a documented negative result; do not promote it or inspect held-out data."
+
+[results.endpoints.break12]
+root_median_seconds = 3.346304
+always_median_seconds = 18.165795
+adaptive_result = "3/3 TIMEOUT"
+adaptive_timeout_seconds = 25
+adaptive_direct_seconds = 26.110779
+adaptive_conflicts = 835182
+adaptive_restarts = 1788
+adaptive_eligible_events = 56
+adaptive_reused_restarts = 26
+adaptive_reuse_probes = 6
+adaptive_quality_accepts = 20
+adaptive_quality_rejects = 30
+
+[results.endpoints.sixs268]
+root_median_seconds = 5.393300
+always_median_seconds = 0.614438
+adaptive_median_seconds = 0.608943
+adaptive_conflicts = 7614
+adaptive_restarts = 30
+adaptive_eligible_events = 2
+adaptive_reused_restarts = 2
+adaptive_reuse_probes = 2
+adaptive_quality_accepts = 0
+adaptive_quality_rejects = 0
+
+[results.full_slice]
+root_solved = 3
+always_solved = 4
+adaptive_solved = 4
+sat_models = "all valid"
+status_disagreements = 0
+
+[results.drat.sixs268]
+proof_sha256 = "7e33f8ee95c0c501934cc6fb68fc47594e59cdffa75ebd47e9a4cae7765b7487"
+proof_bytes = 638473
+checker = "DRAT-trim v05.22.2023"
+checker_result = "VERIFIED"
+
+[results.drat.gm24sparrc]
+proof_sha256 = "cc54b3df80a2cfd9ab080972dd70ab5229588fda3add762eedd357c4909b30e7"
+proof_bytes = 18552
+checker = "DRAT-trim v05.22.2023"
+checker_result = "VERIFIED"

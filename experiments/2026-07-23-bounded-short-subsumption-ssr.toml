@@ -1,0 +1,161 @@
+[experiment]
+id = "2026-07-23-bounded-short-subsumption-ssr"
+owner = "Codex"
+status = "complete"
+worktree_revision = "uncommitted initial worktree"
+
+[hypothesis]
+mechanism = "Short original clauses can explicitly delete supersets by subsumption or remove one complementary literal by self-subsuming resolution (SSR). A sparse occurrence index should find these structural redundancies more directly and with less trajectory perturbation than propagation-based probing."
+prediction = "On the frozen development slice, the bounded pass will remove at least one clause or literal, preserve the 2-second solved count, and avoid a greater-than-ten-percent median regression on either Break_12_50 or 6s268r_Iter94."
+falsification = "Reject default promotion unchanged if no development clause/literal changes, solved count falls, either hard endpoint regresses by more than ten percent, a SAT model is invalid, or an SSR proof fails DRAT-trim. Do not tune any bound after outcomes are observed."
+
+[prior_art]
+checked = [
+  "https://fmv.jku.at/papers/BiereJarvisaloKiesl-SAT-Handbook-2021-Preprocessing-Chapter-Manuscript.pdf",
+  "SatELite: Effective Preprocessing in SAT through Variable and Clause Elimination, Eén and Biere, SAT 2005",
+  "CaDiCaL 3.0.1 src/subsume.cpp and options.hpp at pinned local revision c607304d8d0e3f62b28c1dbf4e47e8811d115c06",
+]
+established = "Occurrence-indexed subsumption, shortest-list scheduling, bounded effort, literal marking, and self-subsuming resolution are established SAT preprocessing/inprocessing techniques."
+distinction = "This is a deliberately bounded baseline subset: only short original clauses act as subsumers/strengtheners, targets are original clauses of bounded size, replacements are not rescheduled, and learned clauses are excluded."
+novelty_status = "Baseline engineering only. No novelty claim."
+
+[policy]
+name = "one-pass sparse-occurrence short-clause subsumption and SSR"
+schedule = "Run once after root propagation and any explicitly enabled probing/vivification, before CDCL search."
+subsumers = "Snapshot active original clauses of length 2 through 8, sort by length then stable clause reference, and retain at most 5000."
+targets = "Snapshot active original clauses of length at most 64. Build occurrence lists only for literals appearing in the retained subsumer schedule, using a dense literal-to-sparse-slot map."
+candidate_order = "For each subsumer, traverse the occurrence lists of all its literals from shortest to longest and deduplicate target clauses for that subsumer."
+classification = "Mark each target's literals. If no subsumer literal is missing, delete the target as subsumed. If exactly one subsumer literal p is missing and the target contains not-p, replace the target by the target with not-p removed. Otherwise do nothing."
+replacement = "Emit every SSR strengthening as a textual DRAT/RUP addition, lazily delete the old arena clause, and attach a fresh original clause. Purely subsumed clauses need no proof addition because the proof formula may safely retain them. New replacements are not inserted into this round's occurrence index or subsumer schedule."
+budget = "Count subsumer_length + target_length literal touches per unique pair. Stop before the next pair once total touches reach min(5000000, original_nonunit_literal_count). Building the single sparse occurrence scan is outside this pair budget."
+rounds = 1
+default = "disabled until the promotion gate passes"
+
+[variants]
+control = "target/release/sat --no-subsume --no-vivify --no-probe"
+treatment = "target/release/sat --subsume --no-vivify --no-probe"
+compiler = "rustc stable with -C target-cpu=native and release fat LTO"
+
+[corpus]
+manifest = "benchmarks/manifests/satcomp-2025-development.json"
+role = "development"
+deduplication = "sha256"
+heldout_use = "none"
+
+[protocol]
+full_slice_timeout_seconds = 2
+full_slice_repetitions = 1
+endpoint_timeout_seconds = 25
+endpoint_repetitions = 3
+easy_overhead_repetitions = 11
+threads = 1
+order_seed = 20251001
+primary_metric = "validated solved count on the frozen eight-instance development slice at two seconds"
+secondary_metrics = [
+  "subsumption checks and literal touches",
+  "subsumed clauses",
+  "SSR-strengthened clauses and literals",
+  "deterministic search conflicts",
+  "paired wall time",
+]
+stopping_rule = "Implement the frozen policy once, run correctness and proof checks, then execute the declared development comparisons. Do not inspect held-out data or change the policy after observing results."
+
+[correctness]
+unit_tests = "Exercise strict and duplicate subsumption, positive/negative-pivot SSR, no-op pairs, unit SSR, stable replacement, candidate deduplication, sparse occurrence construction, and every cap."
+differential = "Add subsumption/SSR to deterministic brute-force differential testing and validate every SAT model against the original clauses."
+unsat_proof = "Retain a proof whose first lemma is an SSR strengthening and require independent DRAT-trim verification on a crafted case plus a real development UNSAT case if real SSR occurs."
+storage = "All deletions are lazy and SSR replacements receive fresh stable clause references."
+disabled_overhead = "The default disabled path is one configuration branch before search and allocates no occurrence data."
+
+[promotion_gate]
+development_solved_delta_minimum = 0
+development_structural_changes_minimum = 1
+endpoint_max_regression_percent = 10
+easy_overhead_max_percent = 5
+proof_required_if_ssr_occurs = true
+next_step = "If promoted, expand toward iterative forward/backward subsumption and learned-clause inprocessing. If rejected, retain proof/storage machinery and move to binary-implication-graph learned-clause minimization."
+
+[results]
+solver_binary_sha256 = "28696d1e83aba5529162b2d257daf7af23d9d6952379e82f4c9eac5bc116fcb8"
+full_slice_jsonl = "/private/tmp/sat-baselines-20260723/bounded-short-subsumption-ssr-full-2s.jsonl"
+full_slice_jsonl_sha256 = "6975b7d1fbd5ac673b4ec0454ab61328feefa0d16f3639a59abbecc97313bb8c"
+endpoint_jsonl = "/private/tmp/sat-baselines-20260723/bounded-short-subsumption-ssr-endpoints-repeat3.jsonl"
+endpoint_jsonl_sha256 = "2caa649e464a5c672856c450d56744ff2dde4eeac731373c6d10c724ff65dc78"
+easy_jsonl = "/private/tmp/sat-baselines-20260723/bounded-short-subsumption-ssr-easy-repeat11.jsonl"
+easy_jsonl_sha256 = "f96cf0d912b5709e1d10cfc45b5fcad2b9ed4b98f905a4a459ea31959be8c2ab"
+summary = "The frozen pass met every explicit numeric minimum gate: it tied 3/8 solved at two seconds, made structural changes, kept both hard-endpoint medians within ten percent, stayed below the easy-overhead ceiling, validated every SAT model, and produced independently verified crafted and real-development DRAT proofs. Break improved 1.45 percent and 6s268 regressed 1.10 percent. However, the full slice exposed a large unbounded secondary regression on one of the three solved cases: 6s299 rose from 0.314 to 0.493 seconds while six clauses were subsumed, 2,950 clauses were self-subsumed, and search conflicts rose from 3,205 to 3,600."
+conclusion = "Retained behind --subsume as a proof-checked baseline, but not enabled by default. This is not a falsification under the preregistered minimum gate, which passed; it is a conservative post-gate decision because the gate failed to bound regressions on every jointly solved development instance and there was no solved-count gain. Record that design flaw rather than inventing a new threshold or tuning the revealed policy. The next promotion gate must cover every jointly solved development case; move to separately preregistered binary-implication-graph learned-clause minimization without using held-out data."
+
+[results.full_slice]
+control_solved = 3
+treatment_solved = 3
+sat_models = "all valid"
+status_disagreements = 0
+
+[results.endpoints.break12]
+control_median_seconds = 3.330038
+treatment_median_seconds = 3.281784
+treatment_improvement_percent = 1.45
+control_conflicts = 118557
+treatment_conflicts = 118557
+treatment_subsumption_checks = 31174
+treatment_literal_touches = 124696
+treatment_subsumed_clauses = 0
+treatment_self_subsumed_clauses = 0
+
+[results.endpoints.sixs268]
+control_median_seconds = 5.310470
+treatment_median_seconds = 5.368987
+treatment_regression_percent = 1.10
+control_conflicts = 78479
+treatment_conflicts = 78479
+treatment_subsumption_checks = 62460
+treatment_literal_touches = 296346
+treatment_subsumed_clauses = 0
+treatment_self_subsumed_clauses = 2
+treatment_self_subsumed_literals = 2
+
+[results.sixs299]
+control_wall_seconds = 0.314199
+treatment_wall_seconds = 0.493432
+treatment_regression_percent = 57.0
+control_conflicts = 3205
+treatment_conflicts = 3600
+treatment_subsumption_checks = 441542
+treatment_literal_touches = 2240180
+treatment_subsumed_clauses = 6
+treatment_self_subsumed_clauses = 2950
+treatment_self_subsumed_literals = 2950
+
+[results.gm24sparrc]
+control_wall_seconds = 0.392861
+treatment_wall_seconds = 0.371944
+control_conflicts = 147
+treatment_conflicts = 147
+treatment_subsumption_checks = 152077
+treatment_literal_touches = 913122
+treatment_subsumed_clauses = 0
+treatment_self_subsumed_clauses = 0
+
+[results.easy_overhead]
+control_pooled_median_seconds = 0.001845541
+treatment_pooled_median_seconds = 0.001833313
+delta_percent = -0.66
+worst_instance_delta_percent = 1.14
+interpretation = "process-launch noise dominates; no measurable disabled-path overhead"
+
+[results.drat.sixs268]
+instance = "0e36fa2e12f32cde67937803299fb57b-6s268r_Iter94.cnf"
+first_lemma = "687 -1577 1758 1759 0"
+proof_sha256 = "c65815838482b5c48b208fb5b59fc146dd42576a18641f4ea33da7342ec2b467"
+proof_bytes = 7984710
+checker = "DRAT-trim v05.22.2023"
+checker_result = "VERIFIED"
+
+[results.drat.smoke]
+instance = "benchmarks/smoke/ssr-unsat.cnf"
+first_lemma = "2 0"
+proof_sha256 = "efeda76d1642d33bf3293614b796456512f3952e094d6e5e61908f8caa071e03"
+proof_bytes = 6
+checker = "DRAT-trim v05.22.2023"
+checker_result = "VERIFIED"

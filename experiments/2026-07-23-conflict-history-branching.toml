@@ -1,0 +1,178 @@
+[experiment]
+id = "2026-07-23-conflict-history-branching"
+owner = "Codex"
+status = "complete"
+worktree_revision = "uncommitted initial worktree"
+control_binary = "/private/tmp/sat-baselines-20260723/sat-promoted-sparse-binary-activity"
+control_sha256 = "d0e9d16c7407eac20c536e00f4624aee52aa923a73c8de49c689919c5ba0041e"
+
+[hypothesis]
+mechanism = "Conflict History-Based Branching applies an exponential-recency weighted average to every variable that is decided, propagated, or asserted. Its reward is inversely proportional to the number of conflicts since that variable last participated in conflict analysis, with an extra reward when the propagation round ends in conflict. This feedback can rank repeatedly conflict-relevant variables without globally decaying every variable score."
+prediction = "A faithful opt-in CHB implementation will produce a distinct deterministic search trajectory, preserve all SAT/UNSAT correctness and proof obligations, solve at least as many two-second development instances as the promoted EVSIDS control, and either add a solve or improve pooled jointly solved median time by at least five percent without a catastrophic endpoint or easy-instance regression."
+falsification = "Do not promote CHB as the default if it loses a two-second development solve; neither adds a solve nor improves the frozen jointly solved pooled median by at least five percent; any selected or endpoint median regresses by more than twenty-five percent; endpoint pooled median regresses by more than ten percent; easy pooled overhead exceeds ten percent; any model or proof fails validation; or the implementation does not exercise non-conflict propagation-round rewards, conflict propagation-round rewards, and conflict-history timestamp updates on a nontrivial development instance. Do not tune the step size, multiplier, reward definition, restart policy, or promotion thresholds after observing treatment results."
+
+[prior_art]
+paper = "Jia Hui Liang, Vijay Ganesh, Pascal Poupart, and Krzysztof Czarnecki, Exponential Recency Weighted Average Branching Heuristic for SAT Solvers, AAAI 2016, https://cs.uwaterloo.ca/~ppoupart/publications/sat/sat-erwa.pdf"
+established = "The treatment reproduces Algorithm 1's CHB score initialization, propagation-round play set, 1.0/0.9 multiplier, inverse conflict-age reward, ERWA update, step-size schedule, conflict-history timestamps, greedy maximum-score selection, and phase saving. It is an established branching baseline, not an algorithmic novelty."
+competitive_context = "Modern portfolio and adaptive solvers commonly choose between VSIDS and CHB-family regimes. Implementing the missing CHB arm is prerequisite baseline work before evaluating any new selector or cross-regime credit mechanism."
+distinction = "The host solver keeps its existing first-UIP analysis, recursive minimization, phase saving, chronological backtracking, Luby restarts, LBD reduction, packed clause representation, and proof logging. Only variable scoring and heap maintenance change under --search=chb."
+novelty_status = "Established algorithmic baseline. No novelty claim."
+
+[policy]
+initialization = "Initialize Q[v]=0 and last_conflict[v]=0 for every variable, step_size=0.4, and plays empty at the search boundary after all configured root preprocessing."
+plays = "A search propagation round starts with the variable most recently decided or asserted and adds every variable newly propagated by Boolean constraint propagation. Each assigned variable appears at most once in that round."
+reward = "Immediately after propagation, before incrementing the current conflict counter, update every v in plays with reward=multiplier/(conflicts-last_conflict[v]+1), where multiplier is 1.0 if propagation found a conflict and 0.9 otherwise."
+score = "Update Q[v]=(1-step_size)*Q[v]+step_size*reward and repair the maximum heap in either direction. Then clear plays."
+conflict_history = "After incrementing the conflict counter and performing non-root first-UIP conflict analysis, set last_conflict[v]=conflicts for every distinct non-root variable encountered in the clauses traversed by analysis before learned-clause minimization."
+step_size = "Initialize step_size to 0.4. Before each non-root conflict analysis, subtract 0.000001 and clamp at 0.06."
+branching = "Choose the unassigned variable with maximum Q score, preserving deterministic variable-index tie breaking, and use the existing phase-saving polarity."
+restarts = "Use the existing static Luby restart policy with restart-trail reuse disabled for both variants."
+everything_else = "Do not change clause scoring, reduction, learned-clause minimization, chronological backtracking, preprocessing, rephasing, proof logging, model reconstruction, storage, or any unrelated default."
+default = "Keep EVSIDS as the default unless the frozen promotion gate passes. Retain a correctness-passing --search=chb mode as an explicit established comparison baseline even if default promotion fails."
+
+[variants]
+control = "/private/tmp/sat-baselines-20260723/sat-promoted-sparse-binary-activity --search=evsids --restart=luby --reuse-trail=never --no-rephase --no-tiers --no-eliminate --no-compact-arena --no-binary-minimize --no-subsume --no-vivify --no-probe"
+treatment = "target/release/sat --search=chb --restart=luby --reuse-trail=never --no-rephase --no-tiers --no-eliminate --no-compact-arena --no-binary-minimize --no-subsume --no-vivify --no-probe"
+compiler = "rustc stable with -C target-cpu=native and release fat LTO"
+
+[corpus]
+manifest = "benchmarks/manifests/satcomp-2025-development.json"
+role = "development"
+deduplication = "sha256"
+heldout_use = "none"
+
+[protocol]
+full_slice_timeout_seconds = 2
+full_slice_repetitions = 1
+jointly_solved_repetitions = 7
+jointly_solved_selection = "After the frozen full-slice control/treatment run, repeat every development instance that both variants solve and whose control or treatment wall time is at least 0.1 seconds. Freeze this set before repeats."
+endpoint_instances = ["Break_12_50.xml.cnf", "6s268r_Iter94.cnf"]
+endpoint_timeout_seconds = 25
+endpoint_repetitions = 3
+easy_overhead_repetitions = 11
+proof_instance = "6s268r_Iter94.cnf"
+threads = 1
+order_seed = 20251103
+primary_metric = "validated two-second development solved count, then pooled median time on the frozen jointly solved set"
+secondary_metrics = [
+  "per-instance selected medians",
+  "pooled and per-instance endpoint medians",
+  "easy-instance pooled overhead",
+  "decisions, propagations, conflicts, restarts, learned literals, and CHB exercise counters",
+]
+stopping_rule = "Implement the frozen CHB policy once, run correctness and proof checks, then execute the declared comparisons. Do not consume held-out data or add heuristic switching, CHB parameter tuning, restart tuning, or clause-management changes."
+
+[correctness]
+unit = "Test propagation-round reward arithmetic and event ordering, conflict/non-conflict multipliers, conflict-age timestamps, step-size clamping, bidirectional heap repair, and deterministic tie breaking."
+differential = "Extend the full deterministic brute-force differential suite to --search=chb, including every optional-feature regression whose combination is semantically supported."
+models = "Independently validate every SAT model emitted in the development and endpoint runs."
+proof = "Emit a treatment DRAT proof for 6s268 under the endpoint timeout and require DRAT-trim verification. The proof need not match EVSIDS bytes because the treatment intentionally changes trajectory."
+trajectory = "Require repeat executions of CHB on every selected jointly solved instance and both endpoints to produce identical result and deterministic counters within the treatment; require at least one counter to differ from EVSIDS on a nontrivial instance."
+exercise = "Require positive chb_score_updates, chb_conflict_score_updates, and chb_conflict_history_updates on at least one nontrivial development or endpoint instance."
+
+[promotion_gate]
+development_solved_delta_minimum = 0
+qualifying_improvement = "Either treatment development solved count exceeds control, or counts tie and jointly solved pooled median improves by at least 5 percent."
+jointly_solved_pooled_improvement_percent_minimum_if_tied = 5
+jointly_solved_max_regression_percent = 25
+endpoint_pooled_max_regression_percent = 10
+endpoint_max_regression_percent = 25
+easy_overhead_max_percent = 10
+deterministic_treatment_reproducibility_required = true
+distinct_control_trajectory_required = true
+chb_mechanisms_exercised_required = true
+sat_model_validation_required = true
+proof_validation_required = true
+next_step = "If promoted, make CHB the default and update the architecture/baseline documentation. If rejected, keep it opt-in as an established baseline only if correctness passes, record the negative result, and continue toward a new selector or cross-regime credit mechanism without parameter retuning."
+
+[results]
+treatment_binary = "/private/tmp/sat-baselines-20260723/sat-chb-full"
+treatment_binary_sha256 = "e6dd09da0bfe23a3e3207ab7a2a90b38d146255b92eede924bb0ff41c5ad5526"
+full_slice_jsonl = "/private/tmp/sat-baselines-20260723/conflict-history-branching-full-2s.jsonl"
+full_slice_jsonl_sha256 = "2267f087f50a5f51bf30949d8235ec616f6110e11d24b20bac840ffc61f9595f"
+jointly_solved_jsonl = "/private/tmp/sat-baselines-20260723/conflict-history-branching-jointly-solved-repeat7.jsonl"
+jointly_solved_jsonl_sha256 = "b57cddc2348fd3a8ca0bd605d1cc71ff47b1275e50121f2e55581736e9fdea9c"
+endpoint_jsonl = "/private/tmp/sat-baselines-20260723/conflict-history-branching-endpoints-repeat3.jsonl"
+endpoint_jsonl_sha256 = "310191f62fa3db8cdfd0464b3a2edd489de0aa6f110f811c010a2186bac8fc53"
+easy_jsonl = "/private/tmp/sat-baselines-20260723/conflict-history-branching-easy-repeat11.jsonl"
+easy_jsonl_sha256 = "450a8830eea3afb6336a9e75ac0d431525ca9da0aa3f3dc9ba6c1d6f06512604"
+proof = "/private/tmp/sat-baselines-20260723/chb-gm24sparrc.drat"
+proof_sha256 = "bd78af6331fefc052055f9da7635cf6b6a770c5ce66fff678b56d95489fae419"
+summary = "CHB passed the development solved-count, correctness, model-validation, exercise, easy-overhead, completed-run determinism, and independent gm24 proof checks. It tied EVSIDS at 3/8 validated two-second solves and added only 0.025116 percent pooled smoke overhead. Search quality was nevertheless uniformly worse on the nontrivial completed comparisons: gm24 regressed 142.743705 percent, 6s299 regressed 200.938832 percent, Break regressed 346.884088 percent, and all three 6s268 treatment runs timed out at 25 seconds."
+conclusion = "Rejected as the default because the qualifying jointly solved speed gate, every per-instance speed ceiling, the endpoint pooled ceiling, the designated 6s268 proof gate, and the complete endpoint-counter reproducibility gate failed. Retained behind --search=chb as a correctness-checked established baseline. Unlike LRB, this implementation exposed no promising complementary development endpoint."
+
+[results.full_slice]
+control_solved = 3
+treatment_solved = 3
+solved_delta = 0
+control_sat = 2
+control_unsat = 1
+treatment_sat = 2
+treatment_unsat = 1
+sat_models = "all valid"
+status_disagreements = 0
+
+[results.jointly_solved]
+instances = ["gm24sparrc", "6s299b685_Iter22"]
+control_pooled_median_seconds = 0.671694959
+treatment_pooled_median_seconds = 1.818882542
+change_percent = 170.789964653
+
+[results.jointly_solved.gm24sparrc]
+control_median_seconds = 0.347981750
+treatment_median_seconds = 0.844703792
+change_percent = 142.743704807
+
+[results.jointly_solved.six299]
+control_median_seconds = 0.323713209
+treatment_median_seconds = 0.974178750
+change_percent = 200.938831957
+
+[results.endpoints]
+control_censored_pooled_median_seconds = 8.160341209
+treatment_censored_pooled_median_seconds = 38.990309542
+censored_change_percent = 377.802441632
+gate = "failed: every endpoint exceeded its per-instance ceiling and 6s268 timed out in all three treatment runs"
+
+[results.endpoints.break12]
+control_median_seconds = 3.129589000
+treatment_median_seconds = 13.985635250
+change_percent = 346.884087656
+
+[results.endpoints.six268]
+control_median_seconds = 5.030752209
+treatment_censored_median_seconds = 25.004674292
+treatment_timeouts = 3
+censored_change_percent = 397.036491826
+
+[results.easy]
+control_pooled_median_seconds = 0.014926793
+treatment_pooled_median_seconds = 0.014930542
+change_percent = 0.025115782
+
+[results.correctness]
+tests = "96 Rust tests and 7 Python tests passed; rustfmt and clippy -D warnings clean"
+differential = "2000 deterministic brute-force formulas passed under CHB"
+proof_instance = "gm24sparrc, substituted only as an additional retained-baseline correctness check after the designated 6s268 run timed out"
+proof_bytes = 468173
+proof_lines = 2600
+proof = "DRAT-trim VERIFIED the complete gm24 treatment proof; the preregistered 6s268 proof requirement failed because treatment did not solve within the endpoint limit"
+deterministic_counter_cases = ["gm24sparrc", "6s299b685_Iter22", "Break_12_50"]
+deterministic_counter_mismatches = 0
+six268_reproducibility = "three consistent 25-second TIMEOUT outcomes; no completed treatment counters, so the declared complete endpoint-counter requirement failed"
+distinct_from_control = "yes; every completed nontrivial inspected trajectory changed"
+
+[results.exercise.gm24sparrc]
+chb_score_updates = 12841850
+chb_conflict_score_updates = 11694716
+chb_conflict_history_updates = 3238979
+
+[results.exercise.six299]
+chb_score_updates = 6828960
+chb_conflict_score_updates = 954617
+chb_conflict_history_updates = 150525
+
+[results.exercise.break12]
+chb_score_updates = 230775872
+chb_conflict_score_updates = 128567329
+chb_conflict_history_updates = 70087942

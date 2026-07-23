@@ -1,0 +1,138 @@
+[experiment]
+id = "2026-07-23-bounded-failed-literal-probing"
+owner = "Codex"
+status = "complete"
+worktree_revision = "uncommitted initial worktree"
+
+[hypothesis]
+mechanism = "Before the first CDCL decision, temporarily assume literals and run ordinary watched-literal propagation. If an assumption conflicts, add its negation as a root-level RUP unit. Root units can collapse implication-heavy structure before search, while a fixed propagation budget bounds unsuccessful work."
+prediction = "On the frozen eight-instance development slice, bounded failed-literal probing will preserve validated solved count at two seconds and reduce conflicts on at least one nontrivial solved instance without adding more than five percent median overhead on the smoke/easy set."
+falsification = "Do not promote probing as the default if development solved count falls, no failed literal is found on the development endpoints, or repeated easy-case median overhead exceeds five percent. Record the implementation as an experimental baseline capability even if the default-promotion gate fails; do not tune the budget after seeing outcomes."
+
+[prior_art]
+checked = [
+  "https://fmv.jku.at/papers/BiereJarvisaloKiesl-SAT-Handbook-2021-Preprocessing-Chapter-Manuscript.pdf",
+  "https://www.cs.helsinki.fi/u/mjarvisa/papers/jarvisalo-korhonen.sat14.pdf",
+  "CaDiCaL 3.0.1 src/probe.cpp at pinned local revision c607304d8d0e3f62b28c1dbf4e47e8811d115c06",
+  "Kissat 4.0.4 src/probe.c and src/preprocess.c at pinned local revision 8af8e56cf016be5f7a1f9a854d48fc154ded5f77",
+]
+established = "Failed-literal probing is long-established preprocessing and inprocessing. Current CaDiCaL bounds probing by effort, focuses on roots of the binary implication graph, and can derive hyper-binary resolvents; current Kissat combines several stronger simplifiers in probing phases."
+novelty_status = "Baseline engineering only. This experiment makes no novelty claim."
+
+[policy]
+name = "one-pass bounded root failed-literal probing"
+schedule = "Run once after initial root propagation and before the first CDCL search decision."
+candidates = "Visit every root-unassigned variable in ascending index order. Probe its saved phase first and the opposite phase second; skip the second polarity if the first probe derives a root assignment."
+attempt = "Push one temporary decision level, enqueue the candidate without changing saved phases, run the ordinary full-clause propagator to completion, then backtrack to level zero without recording a best-phase snapshot."
+failed = "If propagation conflicts, emit the negated assumption as a textual DRAT/RUP unit, enqueue it at level zero, and propagate all resulting root consequences. A root conflict ends preprocessing as UNSAT."
+successful = "Discard the temporary assignment and implications. Do not learn implications or hyper-binary clauses in this first mechanism."
+budget = "Stop before the next attempt once probing plus derived-root propagation has processed min(100000, 2 * declared_variables) trail literals. A started propagation is completed, so one attempt may cross the limit."
+rounds = 1
+default = "disabled until the promotion gate passes"
+
+[variants]
+control = "target/release/sat --no-probe"
+treatment = "target/release/sat --probe"
+compiler = "rustc stable with -C target-cpu=native and release fat LTO"
+
+[corpus]
+manifest = "benchmarks/manifests/satcomp-2025-development.json"
+role = "development"
+deduplication = "sha256"
+heldout_use = "none"
+
+[protocol]
+full_slice_timeout_seconds = 2
+full_slice_repetitions = 1
+endpoint_timeout_seconds = 25
+endpoint_repetitions = 3
+easy_overhead_repetitions = 11
+threads = 1
+order_seed = 20250903
+primary_metric = "validated solved count on the frozen eight-instance development slice at two seconds"
+secondary_metrics = [
+  "failed literal units",
+  "probe attempts",
+  "probing propagations",
+  "deterministic search conflicts",
+  "paired wall time",
+]
+stopping_rule = "Implement the frozen policy once, run correctness and proof checks, then execute the declared development comparisons. Do not inspect held-out data and do not change the 100000-propagation cap after observing results."
+
+[correctness]
+unit_tests = "Exercise successful probes, failed probes, both polarities, derived root contradiction, phase preservation, and budget termination."
+differential = "Add probing to deterministic brute-force differential testing and validate every returned SAT model against the original formula."
+unsat_proof = "Retain at least one proof containing a probe-derived unit and require independent DRAT-trim verification."
+disabled_overhead = "The default disabled path performs only one configuration branch before search and adds no branch to ordinary propagation or enqueue."
+
+[promotion_gate]
+development_solved_delta_minimum = 0
+development_failed_literals_minimum = 1
+easy_overhead_max_percent = 5
+proof_required = true
+next_step = "If promoted, keep the simple mechanism as a baseline and separately preregister binary-root scheduling and hyper-binary resolution. If rejected, move to subsumption/vivification without tuning this result."
+
+[results]
+solver_binary_sha256 = "c7df0740a5484e992f1709db1f3d211dfbfaf0e10fcfe99a745733c39d3edff1"
+full_slice_jsonl = "/private/tmp/sat-baselines-20260723/bounded-failed-literal-probing-full-2s.jsonl"
+full_slice_jsonl_sha256 = "d80e766b47790fc505c248374fa6ee94cb19cdabb722baf80010be6bef75f5d1"
+endpoint_jsonl = "/private/tmp/sat-baselines-20260723/bounded-failed-literal-probing-endpoints-repeat3.jsonl"
+endpoint_jsonl_sha256 = "0287dac91b97f0e88da7c0725bb91ce5dd484f6d1e67293ee069d38621d5804f"
+easy_jsonl = "/private/tmp/sat-baselines-20260723/bounded-failed-literal-probing-easy-repeat11.jsonl"
+easy_jsonl_sha256 = "5f8c16374a2c3fdfb34f77973f1f16a195c4c26d1e9deae2ede635e2a336fb3b"
+summary = "The numeric minimum gates passed but the mechanism did not generalize. Both variants solved the same 3/8 development instances at two seconds and all SAT models validated. Probing improved Break_12_50 by 31.9 percent while deriving no units there, but regressed 6s268r_Iter94 by 44.7 percent after deriving 14 units and regressed gm24sparrc by more than 3x after deriving two units. Pooled smoke timing showed no detectable disabled-path overhead."
+conclusion = "Rejected as the default and retained behind --probe as a proof-checked baseline capability. The intended unit-discovery mechanism was not responsible for the only hard-case gain: successful probes incidentally reordered watches on Break. Where units were found, the changed root state led to substantially worse deterministic search on both measured UNSAT cases. Do not tune this budget or consume held-out data; move to a separately preregistered subsumption or vivification mechanism."
+
+[results.full_slice]
+control_solved = 3
+treatment_solved = 3
+sat_models = "all valid"
+status_disagreements = 0
+
+[results.endpoints.break12]
+control_median_seconds = 3.294003
+treatment_median_seconds = 2.243305
+treatment_speedup_percent = 31.9
+treatment_conflicts = 79558
+treatment_probe_attempts = 429
+treatment_failed_literal_units = 0
+treatment_probing_propagations = 28164
+
+[results.endpoints.sixs268]
+control_median_seconds = 5.565691
+treatment_median_seconds = 8.055409
+treatment_regression_percent = 44.7
+treatment_conflicts = 150046
+treatment_probe_attempts = 1163
+treatment_failed_literal_units = 14
+treatment_probing_propagations = 100225
+
+[results.gm24sparrc]
+control_direct_seconds = 0.282049
+treatment_direct_seconds = 1.039006
+control_conflicts = 147
+treatment_conflicts = 1280
+treatment_probe_attempts = 4
+treatment_failed_literal_units = 2
+treatment_probing_propagations = 101447
+
+[results.easy_overhead]
+control_pooled_median_seconds = 0.002051479
+treatment_pooled_median_seconds = 0.002047896
+delta_percent = -0.17
+interpretation = "process-launch noise dominates; no measurable disabled-path overhead"
+
+[results.drat.gm24sparrc]
+proof_sha256 = "433273d53a66421fa85fde5c3d07119dea2daefc4dcef2bea72ce27fd96d71e0"
+proof_bytes = 143017
+first_lemmas = ["1 0", "2 0"]
+checker = "DRAT-trim v05.22.2023"
+checker_result = "VERIFIED"
+
+[results.drat.smoke]
+instance = "benchmarks/smoke/probe-unsat.cnf"
+proof_sha256 = "d047fbee3d1473aa70ec3900d826169af8d7a52fe5f8c660190f9770c97e4796"
+proof_bytes = 7
+first_lemma = "-1 0"
+checker = "DRAT-trim v05.22.2023"
+checker_result = "VERIFIED"

@@ -1,0 +1,226 @@
+[experiment]
+id = "2026-07-23-dense-macro-bva"
+owner = "Codex"
+status = "results complete; mixed; retained opt-in; K4-L2 certification pending"
+worktree_revision = "uncommitted worktree after exact-neighborhood BVA"
+
+[diagnosis]
+source_experiment = "experiments/2026-07-23-exact-neighborhood-bva.toml"
+training_derived = true
+boundary = "This policy is derived after observing the REGN training and eight-instance development outcomes. Passing those same corpora can justify retaining the policy for a later untouched gate, but cannot establish generalization or default promotion."
+beneficial = "On four solved REGN cases, exact BVA introduced 54-206 variables and removed 87-93 percent of matrix clauses. Peak products ranged from 64 by 256 to 256 by 2048. Coverage rose from 1/6 to 4/6."
+harmful = "On Break_12_50, 1056 separate 3-by-3 products removed only 2112 net clauses, raised conflicts from 37717 to 131742, and regressed the repeated median 372 percent."
+overhead = "On 6s268 no product was accepted, deterministic search counters were unchanged, but scanning 1644115 candidate clauses and 4306286 literals regressed the repeated median about 50 percent."
+static_separation = "Before root simplification, every REGN training instance has at least 32 short clauses per input variable. Every development instance has fewer than 9 short candidate clauses per input variable."
+
+[hypothesis]
+mechanism = "A cheap input-density gate can avoid whole-snapshot work on structurally sparse formulas, while a macro-product gate can reject small exact rewrites whose clause savings are too weak to justify changing the CDCL variable space. Dense formulas with at least 16 short clauses per input variable and products that remove at least half their matrix should retain the REGN capability."
+prediction = "The guarded mode will retain 4/6 five-second REGN solves, restore the promoted 5/8 development coverage and exact search trajectories there, keep every solved REGN case within ten percent of unrestricted exact BVA, and add less than five percent pooled smoke overhead."
+falsification = "Reject the guarded policy unchanged if REGN coverage falls below 4/6, development coverage falls below 5/8, any guarded SAT model or UNSAT proof fails, any solved REGN case regresses more than ten percent against unrestricted exact BVA, any development instance enters the expensive snapshot despite failing the frozen density predicate, or pooled smoke overhead exceeds five percent. Do not alter either threshold after observing results."
+
+[prior_art]
+established = "Bounded variable addition, formula factoring, size thresholds, and preprocessing effort gates are established SAT engineering."
+novelty_status = "Baseline deployment engineering only. The 16-to-1 density threshold and half-matrix reduction rule are training-derived heuristics; no novelty, priority, or generalization claim."
+future_boundary = "A genuinely novel contribution must add new proof-search information or intervention semantics after this baseline is stable; retuning these thresholds is not that contribution."
+
+[policy]
+name = "dense macro exact-neighborhood BVA"
+switch = "--factor-macro"
+control_switch = "--factor"
+default = "disabled; eligibility for a later untouched gate only"
+input_short_clause = "A non-tautological normalized input clause of length two through five. Count it during clause ingestion, before root assignments or any simplifier."
+density_gate = "Enter exact-neighborhood snapshot construction only when input_short_clause_count is at least 16 times the external input-variable count. Empty-variable formulas are ineligible."
+density_numerator = 16
+density_denominator = 1
+product_gate = "After exact quotient neighborhoods are verified, accept a product only when matrix clause count is at least twice replacement clause count: m*n >= 2*(m+n)."
+minimum_reduction_fraction = 0.5
+unchanged = "Candidate lengths, exact complete neighborhoods, deterministic plan order, overlap handling, eight rounds, literal-touch budget, fresh-variable model projection, and RAT proof order remain byte-for-byte the unrestricted exact-BVA policy."
+accounting = "Report the ingested short-clause count, density-gate checks and skips, products rejected by the macro rule, and all existing factorization counters."
+
+[variants]
+promoted_control = "/private/tmp/sat-baselines-20260723/sat-promoted-lbd-free-clause-management"
+exact_control = "/private/tmp/sat-baselines-20260723/sat-exact-neighborhood-bva --factor"
+treatment = "target/release/sat --factor-macro"
+
+[corpus.regn]
+manifest = "benchmarks/manifests/reg-n-training.json"
+role = "training reused after exact-BVA diagnosis"
+instances = 6
+
+[corpus.development]
+manifest = "benchmarks/manifests/satcomp-2025-development.json"
+role = "revealed development reused after exact-BVA diagnosis"
+instances = 8
+
+[corpus.easy]
+role = "the eight smoke instances present before factor-unsat.cnf was added"
+instances = 8
+
+[protocol]
+regn_timeout_seconds = 5
+regn_repetitions = 3
+development_timeout_seconds = 2
+development_repetitions = 1
+jointly_solved_repetitions = 7
+easy_repetitions = 11
+threads = 1
+order_seed = 2026072306
+primary_metric = "guarded solved count on the six REGN training cases at five seconds"
+secondary_metrics = [
+  "guard decision and short-clause density",
+  "guarded versus unrestricted exact-BVA wall time",
+  "accepted and macro-rejected products",
+  "extension variables and net clause reduction",
+  "development solved count and deterministic search counters",
+  "pooled easy overhead",
+]
+stopping_rule = "Implement both frozen predicates once, complete correctness checks, and execute the declared comparisons. Do not tune thresholds on these reused corpora."
+
+[correctness]
+unit = "Test density just below, at, and above 16-to-1; empty and unused declared variables; macro products just below and at the half-matrix boundary; deterministic counters; root simplification; and proof/model behavior."
+differential = "Run all 2000 deterministic brute-force formulas with guarded mode enabled and require exact input-length SAT models satisfying the original formula."
+proof = "Forward-check the crafted RAT proof and K3-L1 REGN proof under guarded mode."
+disabled_equivalence = "The modified binary under --no-factor must reproduce the frozen promoted 6s268 trajectory exactly."
+
+[promotion_gate]
+regn_solved_minimum = 4
+regn_per_case_max_regression_percent_vs_exact = 10
+development_solved_minimum = 5
+development_snapshot_entries_maximum = 0
+development_exact_search_trajectory_required = true
+easy_overhead_max_percent = 5
+sat_model_validation_required = true
+proof_validation_required = true
+default_promotion = "not authorized from reused corpora; a pass only advances guarded mode to an untouched generalization gate"
+next_step = "If this capability-retention gate passes, freeze the guarded binary and construct a new license-compatible, family-stratified untouched corpus before considering a default. Then begin a separate prior-art-reviewed proof-regularity experiment."
+
+[artifacts]
+exact_experiment = "experiments/2026-07-23-exact-neighborhood-bva.toml"
+exact_binary_sha256 = "62fa56cfc13a443f9e9ec9a07fb25a45a3b0a9f710425f4f892a4aa51b743f5e"
+exact_regn_jsonl = "/private/tmp/sat-baselines-20260723/exact-neighborhood-bva-regn-5s.jsonl"
+exact_regn_jsonl_sha256 = "a0283e1068a87df1a96858d64cff5807c4d279e06869e6373c81d102cf4da06d"
+exact_development_jsonl = "/private/tmp/sat-baselines-20260723/exact-neighborhood-bva-development-2s.jsonl"
+exact_development_jsonl_sha256 = "86747cae1ad899787876bf04873aebd4f37af2ead2b6dc471bb29c2648c1c5e4"
+
+[results]
+decision = "Reject the frozen guarded policy unchanged for promotion and retain it only behind --factor-macro. It raised reused REGN coverage from exact BVA's 4/6 to 5/6 and avoided the development scan regressions, but K3-L3-Seed25 regressed 41.31 percent against exact BVA, violating the preregistered ten-percent per-solved-case ceiling. Thresholds were not retuned."
+preregistered_policy_sha256 = "e2ff6db5bb4be1a27ca3ee53c45cac8fecfac5ae0c1febb062186389d9234647"
+treatment_binary = "/private/tmp/sat-baselines-20260723/sat-dense-macro-bva"
+treatment_binary_sha256 = "fe5944637999c1ffd103bc8217399e6ddacbcb5203ea3ad32f3f75204f1b75b7"
+regn_jsonl = "/private/tmp/sat-baselines-20260723/dense-macro-bva-regn-repeat3.jsonl"
+regn_jsonl_sha256 = "d9e922df5c4e687886f452e62acf10e2ac5552f7aeb586f60bac2f3aa52d574a"
+development_jsonl = "/private/tmp/sat-baselines-20260723/dense-macro-bva-development-2s.jsonl"
+development_jsonl_sha256 = "39f035f8b040f64f72e342b7d44d4b4c5a45bc4676b0ddbd1fbda918420f0bc4"
+jointly_solved_jsonl = "/private/tmp/sat-baselines-20260723/dense-macro-bva-jointly-solved-repeat7.jsonl"
+jointly_solved_jsonl_sha256 = "082ffae73d64fbc5a7442d7b3bb001897aac6fdcb6795c813dd9dfbe770ce147"
+easy_jsonl = "/private/tmp/sat-baselines-20260723/dense-macro-bva-easy-repeat11.jsonl"
+easy_jsonl_sha256 = "b331e6416ec42e51efb9436d617f13bb275f564cb106cfb6bb70fb947d8955c2"
+summary = "The density gate successfully removes sparse-corpus snapshot overhead and the macro gate exposes a harder REGN solve, but the same product filter perturbs one already-solved REGN trajectory beyond the frozen ceiling. This is useful family-specific capability, not evidence of generalization and not a default candidate."
+
+[results.regn]
+exact_solved = 4
+macro_solved = 5
+exact_unsat = 4
+macro_unsat = 5
+status_disagreements_with_manifest = 0
+coverage_gate = "passed"
+latency_gate = "failed: K3-L3-Seed25 exceeded ten percent"
+
+[results.regn.k3_l1_seed20]
+exact_median_seconds = 0.01542570799938403
+macro_median_seconds = 0.014855875022476539
+change_percent = -3.694047475
+
+[results.regn.k4_l1_seed30]
+exact_median_seconds = 0.5594033329980448
+macro_median_seconds = 0.567828291998012
+change_percent = 1.506061638
+
+[results.regn.k3_l3_seed25]
+exact_median_seconds = 0.3311815420165658
+macro_median_seconds = 0.46798337501240894
+change_percent = 41.307203343
+gate = "failed"
+
+[results.regn.k3_l3_seed30]
+exact_median_seconds = 0.33884908401523717
+macro_median_seconds = 0.3538272499863524
+change_percent = 4.420305876
+
+[results.regn.k4_l2_seed20]
+exact = "three five-second timeouts"
+macro_seconds = [3.410065375006525, 3.4267622920160647, 3.533743499981938]
+macro_median_seconds = 3.4267622920160647
+pinned_reference_boundary = "The promoted Rust solver, exact BVA, Kissat 4.0.4, and CaDiCaL 3.0.1 all timed out at five seconds. This is a frozen-baseline-exclusive solve only; no claim that the instance was globally or previously unsolved."
+decisions = 1638016
+propagations = 3523259
+conflicts = 156403
+factorization_rounds = 3
+factorization_candidate_clauses = 3600143
+factorization_literal_touches = 39056158
+factored_variables = 270
+clauses_removed = 3503104
+clauses_added = 211471
+clause_reduction = 3291633
+peak_factors = 512
+peak_quotients = 4096
+input_short_clauses = 3301376
+macro_rejections = 768
+
+[results.regn.k4_l2_seed35]
+exact = "three five-second timeouts"
+macro = "three five-second timeouts"
+
+[results.development]
+control_solved = 5
+macro_solved = 5
+control_sat = 3
+macro_sat = 3
+control_unsat = 2
+macro_unsat = 2
+status_disagreements = 0
+sat_models = "all three emitted macro models validated against the original CNFs"
+density = "All eight inputs were below the frozen 16-to-1 predicate and skipped snapshot construction."
+trajectory = "The five solved inputs reproduced --no-factor decisions, propagations, conflicts, restarts, chronological backtracks, learned counts and literals, binary-watch visits, reductions, and deletions exactly. The three hard inputs matched the control timeout status."
+gate = "passed"
+
+[results.jointly_solved]
+control_pooled_median_seconds = 0.3911116664967267
+macro_pooled_median_seconds = 0.3916470839903923
+change_percent = 0.136896324
+gm24sparrc_change_percent = -4.728966179
+break_triple_change_percent = 1.900491552
+six268_change_percent = -5.431559245
+six299_change_percent = 1.399416504
+
+[results.easy]
+control_pooled_median_seconds = 0.0019321459985803813
+macro_pooled_median_seconds = 0.001905021010315977
+change_percent = -1.403878811
+gate = "passed"
+corpus = "the eight smoke instances frozen at preregistration"
+
+[results.correctness]
+tests = "make check passed after the final result record: rustfmt, clippy -D warnings, 126 Rust tests, and 7 Python tests"
+differential = "The guarded variant was included in all 2000 deterministic brute-force formulas; every SAT projection had exactly the input variable count and satisfied the original formula"
+disabled_trajectory = "The modified binary under --no-factor exactly reproduced the promoted 6s268 trajectory: 42363 decisions, 5893854 propagations, 5551 conflicts, 28 restarts, 5517 learned clauses, 52491 learned literals, and 1577 deletions"
+crafted_formula = "benchmarks/smoke/factor-macro-unsat.cnf"
+crafted_formula_sha256 = "8ca4144ec12e8844d98d4459c00d5a859e095c327bfda5bfd982869f9f0a0c86"
+crafted_boundary = "144 normalized short input clauses and 9 external variables enter the density gate exactly; the accepted 4-by-4 product satisfies m*n = 2*(m+n) exactly and removes eight net clauses"
+crafted_proof = "/private/tmp/sat-factor-macro-smoke.drat"
+crafted_proof_sha256 = "2f0c18cb50f71c57fc20d10e4bfc2237359143156d45d7beb392fe0f10682ec3"
+crafted_proof_bytes = 68
+crafted_proof_result = "DRAT-trim strict forward verification succeeded; 8 of 11 lemmas were in the core using 59 resolution steps"
+regn_proof = "/private/tmp/sat-regn-k3l1-macro.drat"
+regn_proof_sha256 = "fe90e4fee147fa35084300648687d803c41187767315fc2cafd44b969b817405"
+regn_proof_bytes = 250058
+regn_proof_result = "DRAT-trim strict forward verification succeeded; 3538 of 4019 lemmas were in the core, including 3206 RAT lemmas, using 57322 resolution steps"
+drat_trim_sha256 = "5f4364c0dc84fe7694b6e7380017a8e693504fbd29d090ae8af32e8734e191b3"
+
+[results.certification.k4_l2_seed20]
+formula = "/private/tmp/sat-baselines-20260723/reg-n-training/2902c241b2196f5fd914509fdc124ba7-REGRandom-K4-L2-Seed20.cnf"
+formula_sha256 = "0c656126d77c6f01513b6c67729f43f3715ccc04d41a838c88a7f19ded232219"
+proof = "/private/tmp/sat-regn-k4l2-seed20-macro.drat"
+proof_sha256 = "ea574d0343a54146e5db0647ff8456edb7d2b004d0e1a54f338eadba3e49146d"
+proof_bytes = 314943925
+status = "standard backward DRAT-trim verification still running; do not treat the K4-L2 result as certified yet"

@@ -3,17 +3,19 @@
 //! The crate deliberately keeps the hot path dependency-free. [`Solver`] is a
 //! conventional CDCL engine with two-watched-literal propagation, first-UIP
 //! learning, EVSIDS/VMTF variable selection, phase saving, ablatable static,
-//! dynamic, focused, and stable search regimes, and learned-clause reduction.
+//! dynamic, focused, and stable search regimes, learned-clause reduction,
+//! reusable assumption queries, and activation-literal clause scopes.
 //! [`dimacs`] contains a strict DIMACS CNF parser.
 
 pub mod dimacs;
 mod proof;
+pub mod smt;
 mod solver;
 mod types;
 
 pub use solver::{
-    Model, RestartPolicy, RestartTrailReuse, SearchStrategy, SolveResult, Solver, SolverConfig,
-    SolverStats,
+    IncrementalError, Interrupter, Model, RestartPolicy, RestartTrailReuse, SearchStrategy,
+    SolveLimits, SolveResult, Solver, SolverConfig, SolverStats, UnknownReason,
 };
 pub use types::{Lit, Var};
 

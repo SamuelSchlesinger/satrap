@@ -17,13 +17,19 @@ Passing this gate means “worth iterating on,” not “competitive.”
 
 ## Gate 1: competition-grade correctness
 
-- assumptions and incremental solving;
+- assumption solving, implication-graph failed subsets, learned-state reuse,
+  monotone post-query clause addition, and activation-literal scopes are
+  implemented and differentially checked against brute force; scope-aware
+  irreversible preprocessing and an incremental proof container remain;
 - extend the implemented textual DRAT stream with deletion/binary modes and an
   automated independent checker in every UNSAT benchmark run;
 - model checking integrated into every benchmark run;
 - coverage-guided parser and solver fuzzing;
 - differential testing against at least two independent established solvers;
-- interruption, resource-limit, and malformed-input behavior; and
+- a reusable `Unknown` path, deterministic CDCL conflict/propagation limits,
+  and a thread-safe interruption handle are implemented; charging one-time
+  preprocessing, OS signal wiring, and end-to-end malformed interactive input
+  behavior remain; and
 - reproducible bug corpus with minimized instances.
 
 No claim about a previously unsolved UNSAT instance passes this gate without a
@@ -217,19 +223,48 @@ application are therefore closed to retuning on these results. A successor
 must capture different information or justify a new observation event rather
 than moving this scan slightly earlier on the same revealed traces.
 
-## Gate 3: select an SMT wedge
+## Gate 3: interactive SMT foundation and QF_BV
 
-SMT performance is logic-specific. Choose one initial logic after measuring
-where the Boolean engine and Rust implementation offer leverage. QF_BV is the
-natural first candidate because bit-blasting reuses the SAT kernel; QF_UF or a
-difference-logic fragment may instead offer a cleaner CDCL(T) research surface.
+Build the streaming SMT-LIB 2.7 command state machine, typed/hash-consed terms,
+sort checking, rewriting, Boolean lowering, model reconstruction, incremental
+proof container, and the public context API on the reusable SAT kernel. The
+first complete theory track is QF_BV: bit-blast every required operation with
+checked encodings, reconstruct total bit-vector models, and pass independent
+single-query and incremental validation before performance promotion.
 
-The chosen track needs an SMT-LIB frontend, canonicalization, model construction,
-incremental push/pop, theory propagation, compact explanations, and its own
-independent result validation. Only then compare against pinned configurations
-of mature SMT solvers on that logic.
+**Status (2026-07-24): partial.** The streaming session, typed Rust API,
+hash-consed terms, complete fixed-width operator lowering, models, values,
+scopes, assumptions, cores, and deterministic resource limits are implemented.
+Exhaustive small-width semantics and 544 deterministic incremental queries
+agree with Z3 4.16.0. The incremental SMT proof container, additional
+independent solvers/model validators, full protocol conformance, fuzzing, and
+representative performance evaluation are not complete, so this gate remains
+open.
 
-## Gate 4: algorithmic research
+## Gate 4: general CDCL(T) coverage
+
+Add a theory-neutral assignment/propagation/explanation/backtrack/model
+interface, then implement QF_UF, extensional arrays, integer and real difference
+logic, linear real arithmetic, and linear integer arithmetic. Validate the
+required combinations QF_UFBV, QF_ABV, QF_AUFBV, QF_UFIDL, QF_UFLIA,
+QF_UFLRA, and QF_AUFLIA. A theory advances only with scoped incremental tests,
+independently validated SAT models, independently checked UNSAT artifacts, and
+family-disjoint benchmarks.
+
+**Status (2026-07-24): partial.** The theory boundary, model-based explained
+congruence closure, QF_UF, QF_UFBV, extensional arrays, QF_ABV, and QF_AUFBV are
+implemented. Demand-driven array semantics and permanent theory lemmas agree
+with Z3 on 640 UF/UFBV and 384 array/array-combination incremental queries.
+Exact QF_IDL uses arbitrary-precision difference constraints; QF_RDL and QF_LRA
+use exact rational Fourier–Motzkin elimination. Another 1,024 deterministic
+incremental arithmetic queries agree with Z3, and popped unsupported arithmetic
+atoms no longer participate in later checks. General LIA deliberately returns
+`unknown`. The arithmetic typed API, all UF/array arithmetic combinations,
+independent model and proof validation, and trail-level theory propagation
+remain open. The current counts are differential evidence against one mature
+solver, not independent validation.
+
+## Gate 5: algorithmic research and world-class evaluation
 
 Candidate directions below are hypotheses, not novelty claims. Each first needs
 a literature and implementation collision check.

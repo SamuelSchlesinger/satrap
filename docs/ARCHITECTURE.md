@@ -252,12 +252,12 @@ propagation, and backtracking are monomorphized separately from search and do
 not update saved or best phases.
 
 A strict strengthening is proof-logged before the old arena clause is marked
-deleted. The replacement receives a fresh stable clause reference and its own
+deleted, and the deletion emits a `d` step so checkers can drop the old
+clause. The replacement receives a fresh stable clause reference and its own
 watches; stale watches of the old clause disappear lazily. Units are installed
-at level zero and propagated immediately. The proof stream deliberately keeps
-the old clause because deletion lines are still omitted. This is a conservative
-subset of modern vivification: there is no conflict analysis, decision-prefix
-reuse, learned-clause selection, or repeated inprocessing.
+at level zero and propagated immediately. This is a conservative subset of
+modern vivification: there is no conflict analysis, decision-prefix reuse,
+learned-clause selection, or repeated inprocessing.
 
 The frozen pass is not the default. It turned gm24sparrc into a
 preprocessing-only UNSAT solve with a verified 194-byte DRAT proof and improved
@@ -554,40 +554,97 @@ waste, so this exact comparator remains an opt-in negative result rather than
 a default or a novelty claim.
 
 When enabled, each minimized learned clause is streamed as a textual DRAT
-addition and an UNSAT result appends the empty clause. Proof I/O errors are
-retained by the solver and must be checked by the caller. The current stream
-omits deletion lines, favoring a simple trustworthy first implementation over
-proof size.
+addition, every clause deletion is streamed as a `d` step so checkers can
+drop deleted clauses instead of carrying them through the remaining proof,
+and an UNSAT result appends the empty clause. Proof I/O errors are retained
+by the solver and must be checked by the caller.
 
 ## Module boundary
 
 ```text
-DIMACS / future SMT frontend
-             |
-             v
-       clause API + model
-             |
-             v
-   CDCL search and propagation
-      |                  ^
-      v                  |
-branch/restart      learned clauses
-heuristics          and explanations
+ DIMACS CLI                         SMT-LIB session / typed Rust API
+      |                                         |
+      |                              typed hash-consed terms
+      |                                  /             \
+      |                         Boolean/BV lowering   UF/arrays
+      |                                  \             /
+      +----------------------------> clause + theory lemmas
+                                             |
+                                             v
+                                  CDCL search and propagation
+                                     |                  ^
+                                     v                  |
+                               branch/restart      learned clauses
+                               heuristics          and explanations
 ```
 
-The current API is intentionally narrow and single-shot. Assumptions,
-incrementality, proof deletions/stronger proof formats, and theory explanations
-will require explicit interfaces rather than ad hoc access to internals.
+The clause API is reusable. `solve_assuming` installs temporary literals as
+aligned decision levels, retains globally valid learned clauses across queries,
+and walks the implication graph to return a failed subset without making the
+permanent context inconsistent. Exact repeated queries are cached. A distinct
+query first returns to level zero, so an assumption-only conflict cannot leak
+assignments into the next check.
 
-## Planned SMT boundary
+Permanent clauses and variables can be added between queries. New clauses are
+evaluated against the existing root closure before their watches are installed,
+which prevents already-propagated root literals from hiding a new unit or
+conflict. Activation literals implement nested `push`/`pop`: clauses in a frame
+contain the negated frame selector, active selectors are query assumptions, and
+pop permanently asserts their negations. Learned clauses therefore remain valid
+after a frame disappears. Random operation sequences are differentially checked
+against brute force.
 
-The Boolean solver should eventually consume a `Theory` interface with four
-operations: receive assignments, propagate theory literals, explain each
-propagation/conflict as a Boolean clause, and backtrack to a trail checkpoint.
-That gives a conventional CDCL(T) loop without coupling the hot SAT data layout
-to a particular theory.
+Bounded variable elimination and variable addition are currently one-shot
+equisatisfiable transformations. The fallible incremental API rejects mutation
+after either configured pass rather than risking an invalid reconstructed model
+or collision with an extension variable. Making those passes scope-aware is a
+remaining preprocessing task.
 
-Likely layering is:
+Per-query conflict and propagation budgets cover the main CDCL search, and a
+thread-safe interruption token is polled between search iterations and
+propagated trail literals. Exhaustion returns `Unknown`, backtracks to the root,
+and leaves the context reusable. One-time preprocessing is not yet charged to
+those two logical-work budgets.
+
+DRAT additions and deletions remain globally valid across assumption queries,
+but an assumption-only UNSAT deliberately does not append the empty clause.
+An incremental proof container that records active assumptions/scopes, plus
+theory explanations and an SMT proof format, remains future work.
+
+## Implemented SMT boundary
+
+`src/smt/term.rs` owns typed, hash-consed Core, bit-vector, uninterpreted, and
+array terms. Core is Tseitin-encoded permanently; fixed-width bit-vectors are
+lowered to shared Boolean circuits. The public Rust context and streaming
+SMT-LIB session share this representation and the same incremental SAT solver.
+
+`Theory` has preparation, required-assignment, level, assignment notification,
+propagation, final-check, explanation, backtrack, and model responsibilities.
+The current engine gives it one temporary level for each complete SAT model.
+UF then builds an explained congruence closure, hashes applications by their
+current argument values/classes, and returns either a model fragment or a
+blocking lemma. The interface is ready for trail-level use, but the current
+integration does not yet propagate theory facts during CDCL search.
+
+Arrays use a hidden select function per structural array sort. Every observed
+read stays an application so UF congruence applies. Constant-array and
+read-over-write semantics are installed as permanent theory axioms.
+Extensional equality introduces a fresh index witness. Read demand propagates
+only across array equalities, array-valued `ite`s, and potentially congruent
+array-valued applications; it does not build a global array-by-index Cartesian
+product.
+
+Arithmetic terms are canonical affine expressions with arbitrary-precision
+integer and rational coefficients. Integer difference constraints normalize to
+weighted graph edges and use Bellman–Ford negative-cycle detection. Real
+difference logic and general linear real arithmetic use exact Fourier–Motzkin
+elimination with open-bound tracking and reverse model reconstruction.
+Arithmetic checking is restricted to predicates reachable from active
+assertions and assumptions; popped formulas therefore do not keep imposing
+theory work. Integer formulas outside difference logic return `unknown`
+instead of being approximated.
+
+The implemented layering is:
 
 ```text
 SMT-LIB parser and typed terms
@@ -595,16 +652,21 @@ SMT-LIB parser and typed terms
       rewriting / lowering
             |
   +---------+----------+
-  |                    |
-bit-vector encoding  theory solver(s)
-  |                    |
-  +------> CDCL <-------+
+  |                    |                    |
+bit-vector encoding  UF + extensional arrays  exact linear arithmetic
+  |                    |                    |
+  +------------------> CDCL <---------------+
              |
        model / proof data
 ```
 
-This is a target boundary, not an implemented feature. The first theory track
-will be chosen only after the SAT baseline and benchmark pipeline are credible.
+Theory lemmas and unconditional axioms are permanent because term definitions
+are permanent even when the assertion that first exposed them is scoped.
+Resource limits currently charge SAT conflicts/propagations, not parsing,
+lowering, theory preparation, or final checking. General linear integer
+arithmetic, arithmetic theory combinations, the typed arithmetic API,
+trail-level propagation, independent SMT model/proof validation, and an
+incremental SMT proof format remain future work.
 
 ## Performance policy
 

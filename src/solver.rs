@@ -1,7 +1,10 @@
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
+use std::fmt;
 use std::io::Write;
 use std::num::NonZeroU32;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
 
 use crate::proof::DratWriter;
 use crate::types::MAX_VARIABLES;
@@ -63,6 +66,12 @@ pub struct Model {
 }
 
 impl Model {
+    pub(crate) fn arbitrary(variable_count: usize) -> Self {
+        Self {
+            values: vec![false; variable_count],
+        }
+    }
+
     /// Number of variables in the model.
     #[must_use]
     pub fn len(&self) -> usize {
@@ -101,13 +110,15 @@ impl Model {
     }
 }
 
-/// The conclusive result of a SAT solve.
+/// The result of a SAT solve.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum SolveResult {
     /// The formula is satisfiable, with a complete model.
     Sat(Model),
     /// The formula is unsatisfiable.
     Unsat,
+    /// Search stopped without a satisfiability conclusion.
+    Unknown(UnknownReason),
 }
 
 impl SolveResult {
@@ -122,7 +133,91 @@ impl SolveResult {
     pub const fn is_unsat(&self) -> bool {
         matches!(self, Self::Unsat)
     }
+
+    /// Returns whether search stopped without a conclusion.
+    #[must_use]
+    pub const fn is_unknown(&self) -> bool {
+        matches!(self, Self::Unknown(_))
+    }
 }
+
+/// Why a solve returned [`SolveResult::Unknown`].
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum UnknownReason {
+    /// An external interruption token was set.
+    Interrupted,
+    /// The per-query conflict budget was exhausted.
+    ConflictLimit,
+    /// The per-query propagation budget was exhausted.
+    PropagationLimit,
+    /// A theory combination or operator was parsed safely but its complete
+    /// decision procedure is not implemented.
+    IncompleteTheory,
+}
+
+/// Deterministic CDCL work limits for one query.
+///
+/// Limits count main-search conflicts and propagated trail literals. One-time
+/// root preprocessing is deliberately outside these counters.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct SolveLimits {
+    /// Maximum conflicts analyzed by this query.
+    pub conflicts: Option<u64>,
+    /// Maximum trail literals propagated by this query.
+    pub propagations: Option<u64>,
+}
+
+/// A thread-safe handle that can interrupt a running [`Solver`].
+#[derive(Clone, Debug)]
+pub struct Interrupter {
+    flag: Arc<AtomicBool>,
+}
+
+impl Interrupter {
+    /// Requests interruption. The solver observes this at bounded points in
+    /// propagation and between search iterations.
+    pub fn interrupt(&self) {
+        self.flag.store(true, AtomicOrdering::Release);
+    }
+
+    /// Clears a previous request so the context can be queried again.
+    pub fn clear(&self) {
+        self.flag.store(false, AtomicOrdering::Release);
+    }
+
+    /// Whether interruption is currently requested.
+    #[must_use]
+    pub fn is_interrupted(&self) -> bool {
+        self.flag.load(AtomicOrdering::Acquire)
+    }
+}
+
+/// A safe failure from an incremental mutation of a solver context.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum IncrementalError {
+    /// A one-shot equisatisfiable preprocessing pass has already transformed
+    /// the permanent formula, so adding clauses could invalidate its model
+    /// reconstruction or reuse an internal extension variable.
+    IrreversiblePreprocessing,
+    /// More variables were requested than fit in the packed literal format.
+    VariableLimit,
+    /// More scopes were popped than are currently active.
+    ScopeUnderflow,
+}
+
+impl fmt::Display for IncrementalError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::IrreversiblePreprocessing => formatter.write_str(
+                "incremental mutation is unavailable after variable elimination or addition",
+            ),
+            Self::VariableLimit => formatter.write_str("packed Boolean variable limit exceeded"),
+            Self::ScopeUnderflow => formatter.write_str("cannot pop beyond the base scope"),
+        }
+    }
+}
+
+impl std::error::Error for IncrementalError {}
 
 /// Search mechanisms that can be ablated without maintaining divergent code.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1330,10 +1425,12 @@ impl HybridSearchState {
     }
 }
 
-/// A reusable builder and single-shot CDCL solver.
+/// A reusable CDCL solver with temporary assumption queries.
 ///
-/// Add all clauses, then call [`Solver::solve`]. Repeated calls to `solve`
-/// return the cached result. Adding clauses after the first solve is rejected.
+/// Add all permanent clauses, then call [`Solver::solve`] or
+/// [`Solver::solve_assuming`]. Learned clauses and heuristic state are retained
+/// across queries. Adding permanent clauses after the first query is not yet
+/// supported.
 #[derive(Debug)]
 pub struct Solver {
     config: SolverConfig,
@@ -1395,7 +1492,16 @@ pub struct Solver {
     binary_minimize_epoch: u32,
     consistent: bool,
     started: bool,
+    scope_selectors: Vec<Lit>,
+    interrupt_flag: Arc<AtomicBool>,
+    search_limits: SolveLimits,
+    search_start_conflicts: u64,
+    search_start_propagations: u64,
+    search_control_active: bool,
+    stop_reason: Option<UnknownReason>,
+    cached_assumptions: Vec<Lit>,
     cached_result: Option<SolveResult>,
+    failed_assumptions: Vec<Lit>,
     original_clause_count: usize,
     stats: SolverStats,
     conflicts_since_restart: u64,
@@ -1598,7 +1704,16 @@ impl Solver {
             binary_minimize_epoch: 0,
             consistent: true,
             started: false,
+            scope_selectors: Vec::new(),
+            interrupt_flag: Arc::default(),
+            search_limits: SolveLimits::default(),
+            search_start_conflicts: 0,
+            search_start_propagations: 0,
+            search_control_active: false,
+            stop_reason: None,
+            cached_assumptions: Vec::new(),
             cached_result: None,
+            failed_assumptions: Vec::new(),
             original_clause_count: 0,
             stats: SolverStats::default(),
             conflicts_since_restart: 0,
@@ -1624,24 +1739,33 @@ impl Solver {
     ///
     /// # Panics
     ///
-    /// Panics if solving has already started.
+    /// Panics if `variable_count` exceeds the packed literal limit or an
+    /// irreversible preprocessing configuration has already been run. Use
+    /// [`Solver::try_reserve_variables`] to handle those errors explicitly.
     pub fn reserve_variables(&mut self, variable_count: usize) {
-        self.assert_not_started();
+        self.try_reserve_variables(variable_count)
+            .expect("cannot reserve variables in the current solver state");
+    }
+
+    /// Fallible form of [`Solver::reserve_variables`] for interactive clients.
+    pub fn try_reserve_variables(&mut self, variable_count: usize) -> Result<(), IncrementalError> {
         if variable_count <= self.external_variable_count {
-            return;
+            return Ok(());
         }
+        if variable_count > MAX_VARIABLES {
+            return Err(IncrementalError::VariableLimit);
+        }
+        self.prepare_incremental_mutation()?;
         self.external_variable_count = variable_count;
         self.grow_variables(variable_count);
+        Ok(())
     }
 
     fn grow_variables(&mut self, variable_count: usize) {
         if variable_count <= self.assignments.len() {
             return;
         }
-        assert!(
-            variable_count <= MAX_VARIABLES,
-            "variable count exceeds the packed-literal limit"
-        );
+        debug_assert!(variable_count <= MAX_VARIABLES);
 
         let old_count = self.assignments.len();
         self.assignments.resize(variable_count, UNASSIGNED);
@@ -1678,24 +1802,63 @@ impl Solver {
 
     /// Adds a clause. Duplicate literals are removed and tautologies ignored.
     ///
+    /// When a scope is active, the clause belongs to the innermost scope.
+    ///
     /// Returns `false` when the clauses added so far are already inconsistent.
     ///
     /// # Panics
     ///
-    /// Panics if solving has already started.
+    /// Panics when an irreversible preprocessing configuration has already
+    /// been run. Use [`Solver::try_add_clause`] to handle that error.
     pub fn add_clause(&mut self, literals: &[Lit]) -> bool {
-        self.assert_not_started();
-        self.original_clause_count += 1;
+        self.try_add_clause(literals)
+            .expect("cannot add a clause in the current solver state")
+    }
 
-        if let Some(maximum) = literals.iter().map(|literal| literal.var().index()).max() {
-            self.reserve_variables(
-                maximum
-                    .checked_add(1)
-                    .expect("variable index does not fit usize"),
-            );
+    /// Fallible form of [`Solver::add_clause`] for interactive clients.
+    pub fn try_add_clause(&mut self, literals: &[Lit]) -> Result<bool, IncrementalError> {
+        self.add_clause_internal(literals, true, true)
+    }
+
+    /// Adds a permanent encoding lemma even when a user assertion scope is
+    /// active. SMT lowering uses this for definitional Tseitin clauses whose
+    /// meaning is independent of assertion lifetime.
+    pub(crate) fn add_encoding_clause(
+        &mut self,
+        literals: &[Lit],
+    ) -> Result<bool, IncrementalError> {
+        self.add_clause_internal(literals, false, false)
+    }
+
+    fn add_clause_internal(
+        &mut self,
+        literals: &[Lit],
+        guard_with_scope: bool,
+        count_as_input: bool,
+    ) -> Result<bool, IncrementalError> {
+        self.prepare_incremental_mutation()?;
+        if count_as_input {
+            self.original_clause_count += 1;
         }
 
         let mut normalized = literals.to_vec();
+        if guard_with_scope {
+            if let Some(&selector) = self.scope_selectors.last() {
+                normalized.push(!selector);
+            }
+        }
+        if let Some(maximum) = normalized.iter().map(|literal| literal.var().index()).max() {
+            let required = maximum
+                .checked_add(1)
+                .ok_or(IncrementalError::VariableLimit)?;
+            if required > self.external_variable_count {
+                if required > MAX_VARIABLES {
+                    return Err(IncrementalError::VariableLimit);
+                }
+                self.external_variable_count = required;
+                self.grow_variables(required);
+            }
+        }
         normalized.sort_unstable_by_key(|literal| literal.index());
         let mut write = 0;
         for read in 0..normalized.len() {
@@ -1706,7 +1869,7 @@ impl Solver {
                     continue;
                 }
                 if previous.var() == current.var() {
-                    return self.consistent;
+                    return Ok(self.consistent);
                 }
             }
             normalized[write] = normalized[read];
@@ -1722,6 +1885,51 @@ impl Solver {
                 .saturating_add(1);
         }
 
+        if self.started {
+            if !self.consistent || self.propagate().is_some() {
+                self.consistent = false;
+                return Ok(false);
+            }
+            if normalized
+                .iter()
+                .any(|&literal| self.literal_value(literal) == TRUE)
+            {
+                return Ok(true);
+            }
+            normalized.sort_unstable_by_key(|&literal| {
+                if self.literal_value(literal) == UNASSIGNED {
+                    0
+                } else {
+                    1
+                }
+            });
+            let unassigned = normalized
+                .iter()
+                .take_while(|&&literal| self.literal_value(literal) == UNASSIGNED)
+                .count();
+            if unassigned == 0 {
+                self.consistent = false;
+                return Ok(false);
+            }
+
+            if normalized.len() == 1 {
+                let enqueued = self.enqueue(normalized[0], None);
+                debug_assert!(enqueued, "new root unit must be unassigned");
+            } else {
+                let unit = (unassigned == 1).then_some(normalized[0]);
+                let clause = self.allocate_clause(normalized, 0, false);
+                self.attach_clause(clause);
+                if let Some(unit) = unit {
+                    let enqueued = self.enqueue(unit, Some(clause));
+                    debug_assert!(enqueued, "new root-unit clause must imply its live literal");
+                }
+            }
+            if self.propagate().is_some() {
+                self.consistent = false;
+            }
+            return Ok(self.consistent);
+        }
+
         match normalized.len() {
             0 => self.consistent = false,
             1 => {
@@ -1734,7 +1942,22 @@ impl Solver {
                 self.attach_clause(clause);
             }
         }
-        self.consistent
+        Ok(self.consistent)
+    }
+
+    fn prepare_incremental_mutation(&mut self) -> Result<(), IncrementalError> {
+        if self.started
+            && (self.config.bounded_variable_elimination || self.config.bounded_variable_addition)
+        {
+            return Err(IncrementalError::IrreversiblePreprocessing);
+        }
+        if self.started {
+            self.cancel_until(0);
+        }
+        self.cached_result = None;
+        self.cached_assumptions.clear();
+        self.failed_assumptions.clear();
+        Ok(())
     }
 
     /// Number of variables currently known to the solver.
@@ -1747,6 +1970,62 @@ impl Solver {
     #[must_use]
     pub const fn original_clause_count(&self) -> usize {
         self.original_clause_count
+    }
+
+    /// Allocates one new Boolean variable at the end of the current namespace.
+    pub fn new_variable(&mut self) -> Result<Var, IncrementalError> {
+        if self.external_variable_count == MAX_VARIABLES {
+            return Err(IncrementalError::VariableLimit);
+        }
+        let variable = Var::new(
+            u32::try_from(self.external_variable_count)
+                .map_err(|_| IncrementalError::VariableLimit)?,
+        );
+        self.try_reserve_variables(self.external_variable_count + 1)?;
+        Ok(variable)
+    }
+
+    /// Opens a clause scope implemented by a fresh activation variable.
+    ///
+    /// Clauses added before the matching [`Solver::pop`] remain permanent;
+    /// clauses added afterward and before the pop are active only while this
+    /// scope is active. Scope activation variables count toward
+    /// [`Solver::variable_count`] but callers need not mention them.
+    pub fn push(&mut self) -> Result<(), IncrementalError> {
+        if self.config.bounded_variable_elimination || self.config.bounded_variable_addition {
+            return Err(IncrementalError::IrreversiblePreprocessing);
+        }
+        let selector = Lit::positive(self.new_variable()?);
+        self.scope_selectors.push(selector);
+        Ok(())
+    }
+
+    /// Closes `levels` innermost scopes and permanently disables their clauses.
+    pub fn pop(&mut self, levels: usize) -> Result<(), IncrementalError> {
+        if levels > self.scope_selectors.len() {
+            return Err(IncrementalError::ScopeUnderflow);
+        }
+        if levels == 0 {
+            return Ok(());
+        }
+        if self.config.bounded_variable_elimination || self.config.bounded_variable_addition {
+            return Err(IncrementalError::IrreversiblePreprocessing);
+        }
+        self.prepare_incremental_mutation()?;
+        for _ in 0..levels {
+            let selector = self
+                .scope_selectors
+                .pop()
+                .expect("scope count checked above");
+            self.add_clause_internal(&[!selector], false, false)?;
+        }
+        Ok(())
+    }
+
+    /// Number of currently active clause scopes.
+    #[must_use]
+    pub fn scope_depth(&self) -> usize {
+        self.scope_selectors.len()
     }
 
     /// Current cumulative search statistics.
@@ -1840,9 +2119,11 @@ impl Solver {
 
     /// Streams learned clauses to `output` as a textual DRAT proof.
     ///
-    /// The final empty clause is emitted for an UNSAT result. Proof output is
-    /// optional and has no cost beyond one branch per learned clause when
-    /// disabled. Call [`Solver::proof_error`] after solving.
+    /// Clause deletions are emitted as `d` steps so checkers do not carry
+    /// every deleted clause through the remaining proof, and the final empty
+    /// clause is emitted for an UNSAT result. Proof output is optional and
+    /// has no cost beyond one branch per learned clause when disabled. Call
+    /// [`Solver::proof_error`] after solving.
     ///
     /// # Panics
     ///
@@ -1858,32 +2139,94 @@ impl Solver {
         self.proof.error()
     }
 
-    /// Solves all clauses added so far.
+    /// Solves all permanent clauses.
+    ///
+    /// This is equivalent to calling [`Solver::solve_assuming`] with no
+    /// assumptions.
     pub fn solve(&mut self) -> SolveResult {
-        if let Some(result) = &self.cached_result {
-            return result.clone();
+        self.solve_assuming(&[])
+    }
+
+    /// Solves all permanent clauses under deterministic per-query limits.
+    pub fn solve_with_limits(&mut self, limits: SolveLimits) -> SolveResult {
+        self.solve_assuming_with_limits(&[], limits)
+    }
+
+    /// Solves all permanent clauses under temporary literal assumptions.
+    ///
+    /// Assumptions are applied as isolated decision levels and are removed
+    /// after an unsatisfiable query or before the next distinct query. Learned
+    /// clauses and heuristic state remain available to later calls. When the
+    /// result is [`SolveResult::Unsat`] but the permanent clauses are still
+    /// consistent, [`Solver::failed_assumptions`] returns an unsatisfiable
+    /// subset of `assumptions`.
+    ///
+    /// # Panics
+    ///
+    /// Panics when an assumption references a variable that has not already
+    /// been introduced by [`Solver::reserve_variables`] or
+    /// [`Solver::add_clause`].
+    pub fn solve_assuming(&mut self, assumptions: &[Lit]) -> SolveResult {
+        self.solve_assuming_with_limits(assumptions, SolveLimits::default())
+    }
+
+    /// Limited form of [`Solver::solve_assuming`].
+    pub fn solve_assuming_with_limits(
+        &mut self,
+        assumptions: &[Lit],
+        limits: SolveLimits,
+    ) -> SolveResult {
+        for &assumption in assumptions {
+            assert!(
+                assumption.var().index() < self.external_variable_count,
+                "assumptions must reference variables already known to the solver"
+            );
         }
-        self.started = true;
+
+        let mut query_assumptions =
+            Vec::with_capacity(self.scope_selectors.len().saturating_add(assumptions.len()));
+        query_assumptions.extend_from_slice(&self.scope_selectors);
+        query_assumptions.extend_from_slice(assumptions);
+
+        if self.cached_assumptions == query_assumptions {
+            if let Some(result) = &self.cached_result {
+                return result.clone();
+            }
+        }
+
+        let first_query = !self.started;
+        if first_query {
+            self.started = true;
+        } else {
+            self.cancel_until(0);
+        }
+        self.failed_assumptions.clear();
 
         let root_conflict = !self.consistent || self.propagate().is_some();
-        let probing_conflict =
-            !root_conflict && self.config.failed_literal_probing && !self.probe_failed_literals();
-        let vivification_conflict = !root_conflict
+        let probing_conflict = first_query
+            && !root_conflict
+            && self.config.failed_literal_probing
+            && !self.probe_failed_literals();
+        let vivification_conflict = first_query
+            && !root_conflict
             && !probing_conflict
             && self.config.clause_vivification
             && !self.vivify_original_clauses();
-        let subsumption_conflict = !root_conflict
+        let subsumption_conflict = first_query
+            && !root_conflict
             && !probing_conflict
             && !vivification_conflict
             && self.config.clause_subsumption
             && !self.subsume_original_clauses();
-        let elimination_conflict = !root_conflict
+        let elimination_conflict = first_query
+            && !root_conflict
             && !probing_conflict
             && !vivification_conflict
             && !subsumption_conflict
             && self.config.bounded_variable_elimination
             && !self.eliminate_variables();
-        let factorization_enabled = !root_conflict
+        let factorization_enabled = first_query
+            && !root_conflict
             && !probing_conflict
             && !vivification_conflict
             && !subsumption_conflict
@@ -1901,18 +2244,95 @@ impl Solver {
         {
             self.consistent = false;
             SolveResult::Unsat
+        } else if self.interrupt_flag.load(AtomicOrdering::Acquire) {
+            SolveResult::Unknown(UnknownReason::Interrupted)
         } else {
-            self.search()
+            self.begin_search_control(limits);
+            let result = self.search(&query_assumptions);
+            self.search_control_active = false;
+            result
         };
-        if result.is_unsat() {
+        if result.is_unsat() && !self.consistent {
             self.proof.add_clause(&[]);
         }
         self.proof.finish();
-        self.cached_result = Some(result.clone());
+        if (result.is_unsat() && self.consistent) || result.is_unknown() {
+            self.cancel_until(0);
+        }
+        if result.is_unsat() && self.consistent {
+            self.failed_assumptions
+                .retain(|literal| assumptions.contains(literal));
+        } else if result.is_unknown() {
+            self.failed_assumptions.clear();
+        }
+        if result.is_unknown() {
+            self.cached_assumptions.clear();
+            self.cached_result = None;
+        } else {
+            self.cached_assumptions.clear();
+            self.cached_assumptions
+                .extend_from_slice(&query_assumptions);
+            self.cached_result = Some(result.clone());
+        }
         result
     }
 
-    fn search(&mut self) -> SolveResult {
+    /// Returns the failed subset from the most recent assumption-UNSAT query.
+    ///
+    /// The slice is empty after SAT and after the permanent clause set itself
+    /// is found UNSAT.
+    #[must_use]
+    pub fn failed_assumptions(&self) -> &[Lit] {
+        &self.failed_assumptions
+    }
+
+    /// Returns a cloneable thread-safe interruption handle.
+    #[must_use]
+    pub fn interrupter(&self) -> Interrupter {
+        Interrupter {
+            flag: Arc::clone(&self.interrupt_flag),
+        }
+    }
+
+    fn begin_search_control(&mut self, limits: SolveLimits) {
+        self.search_limits = limits;
+        self.search_start_conflicts = self.stats.conflicts;
+        self.search_start_propagations = self.stats.propagations;
+        self.stop_reason = None;
+        self.search_control_active = true;
+    }
+
+    fn poll_search_stop(&mut self) -> Option<UnknownReason> {
+        if !self.search_control_active {
+            return None;
+        }
+        if let Some(reason) = self.stop_reason {
+            return Some(reason);
+        }
+        let reason = if self.interrupt_flag.load(AtomicOrdering::Acquire) {
+            Some(UnknownReason::Interrupted)
+        } else if self.search_limits.conflicts.is_some_and(|limit| {
+            self.stats
+                .conflicts
+                .saturating_sub(self.search_start_conflicts)
+                >= limit
+        }) {
+            Some(UnknownReason::ConflictLimit)
+        } else if self.search_limits.propagations.is_some_and(|limit| {
+            self.stats
+                .propagations
+                .saturating_sub(self.search_start_propagations)
+                >= limit
+        }) {
+            Some(UnknownReason::PropagationLimit)
+        } else {
+            None
+        };
+        self.stop_reason = reason;
+        reason
+    }
+
+    fn search(&mut self, assumptions: &[Lit]) -> SolveResult {
         if self.uses_chb_branching() {
             // Root propagation and optional preprocessing are outside the CHB
             // search loop described by Algorithm 1. Do not let their
@@ -1923,7 +2343,13 @@ impl Solver {
             self.stats.transfer_evsids_epochs = self.stats.transfer_evsids_epochs.saturating_add(1);
         }
         loop {
+            if let Some(reason) = self.poll_search_stop() {
+                return SolveResult::Unknown(reason);
+            }
             let conflict = self.propagate();
+            if let Some(reason) = self.poll_search_stop() {
+                return SolveResult::Unknown(reason);
+            }
             if self.uses_chb_branching() {
                 self.chb_finish_propagation(conflict.is_some());
             }
@@ -2039,6 +2465,28 @@ impl Solver {
                 } else if self.should_restart() && self.decision_level() > 0 {
                     self.restart();
                 }
+            } else if (self.decision_level() as usize) < assumptions.len() {
+                let assumption = assumptions[self.decision_level() as usize];
+                match self.literal_value(assumption) {
+                    TRUE => {
+                        // Preserve one level per assumption even when an
+                        // earlier assumption or root propagation already made
+                        // this literal true. This keeps level i aligned with
+                        // assumptions[i - 1] for failed-core extraction.
+                        self.trail_limits.push(self.trail.len());
+                    }
+                    FALSE => {
+                        self.failed_assumptions =
+                            self.analyze_failed_assumption(assumption, assumptions);
+                        return SolveResult::Unsat;
+                    }
+                    UNASSIGNED => {
+                        self.trail_limits.push(self.trail.len());
+                        let enqueued = self.enqueue_internal::<false>(assumption, None);
+                        debug_assert!(enqueued, "unassigned assumption must enqueue");
+                    }
+                    _ => unreachable!("assignments only contain -1, 0, or 1"),
+                }
             } else if let Some(decision) = self.pick_branch_literal() {
                 self.trail_limits.push(self.trail.len());
                 self.stats.decisions += 1;
@@ -2064,6 +2512,58 @@ impl Solver {
         }
     }
 
+    fn analyze_failed_assumption(&mut self, failed: Lit, assumptions: &[Lit]) -> Vec<Lit> {
+        debug_assert_eq!(self.literal_value(failed), FALSE);
+
+        // Construct a clause over negated assumption decisions by walking
+        // backward from the literal that contradicts `failed`. This is the
+        // final-conflict analysis used by incremental SAT solvers: reason
+        // literals are expanded until only root facts and decision literals
+        // remain.
+        let mut conflict = vec![!failed];
+        let failed_variable = failed.var();
+        self.seen[failed_variable.index()] = true;
+
+        if self.decision_level() > 0 {
+            let first_assumption_trail = self.trail_limits[0];
+            for index in (first_assumption_trail..self.trail.len()).rev() {
+                let assigned = self.trail[index];
+                let variable = assigned.var();
+                if !self.seen[variable.index()] {
+                    continue;
+                }
+                self.seen[variable.index()] = false;
+
+                if let Some(reason) = self.reasons[variable.index()] {
+                    let literal_count = self.clause_len(reason);
+                    for reason_index in 0..literal_count {
+                        let antecedent = self.clause_literal(reason, reason_index);
+                        if antecedent.var() != variable && self.levels[antecedent.var().index()] > 0
+                        {
+                            self.seen[antecedent.var().index()] = true;
+                        }
+                    }
+                } else {
+                    debug_assert!(self.levels[variable.index()] > 0);
+                    conflict.push(!assigned);
+                }
+            }
+        }
+        self.seen[failed_variable.index()] = false;
+
+        // Return assumptions, rather than the negated conflict clause, in the
+        // caller's stable order. Duplicate assumptions do not add information
+        // to an unsatisfiable subset.
+        let mut failed_assumptions = Vec::new();
+        for &assumption in assumptions {
+            if conflict.contains(&!assumption) && !failed_assumptions.contains(&assumption) {
+                failed_assumptions.push(assumption);
+            }
+        }
+        debug_assert!(failed_assumptions.contains(&failed));
+        failed_assumptions
+    }
+
     fn assert_not_started(&self) {
         assert!(
             !self.started,
@@ -2075,6 +2575,16 @@ impl Solver {
         u32::try_from(self.trail_limits.len()).expect("decision level exceeds u32")
     }
 
+    // After a chronological backtrack the asserting literal is recorded at the
+    // preserved level rather than at `jump_level`, the level that actually
+    // implies it. The over-approximation is sound: recorded levels only ever
+    // exceed true implication levels, every conflict clause still contains a
+    // literal at the recorded current level, and the trail stays partitioned
+    // by `trail_limits`. The cost is that a later backjump between the two
+    // levels unassigns the literal without re-propagating its clause (the
+    // implication is re-derived on demand) and that recorded LBDs can be
+    // inflated. Assigning the true level instead would require out-of-order
+    // trail maintenance and re-propagation as in CaDiCaL.
     fn determine_backtrack_level(&mut self, jump_level: u32, learned_length: usize) -> u32 {
         if !self.config.chronological_backtracking || learned_length == 1 {
             return jump_level;
@@ -2676,6 +3186,9 @@ impl Solver {
         ignored_clause: Option<ClauseRef>,
     ) -> Option<ClauseRef> {
         while self.propagation_head < self.trail.len() {
+            if self.poll_search_stop().is_some() {
+                return None;
+            }
             let propagated = self.trail[self.propagation_head];
             self.propagation_head += 1;
             self.stats.propagations += 1;
@@ -2997,7 +3510,8 @@ impl Solver {
         }
         debug_assert!(!candidate.is_empty());
 
-        for index in 0..candidate.len() {
+        let mut kept = Vec::with_capacity(candidate.len());
+        for literal in candidate {
             if self
                 .stats
                 .vivification_propagations
@@ -3008,30 +3522,33 @@ impl Solver {
                 return None;
             }
 
-            let literal = candidate[index];
             match self.literal_value(literal) {
                 TRUE => {
-                    let strengthened = candidate[..=index].to_vec();
+                    // The kept prefix implies this literal, so the clause
+                    // truncated after it is a RUP consequence.
+                    kept.push(literal);
                     self.cancel_until_internal::<false>(0);
-                    return (strengthened.len() < original_length).then_some(strengthened);
+                    return (kept.len() < original_length).then_some(kept);
                 }
+                // Propagation of the kept prefix falsified this literal, so
+                // dropping it is a self-subsuming RUP strengthening.
                 FALSE => continue,
                 UNASSIGNED => {}
                 _ => unreachable!("assignments only contain -1, 0, or 1"),
             }
 
+            kept.push(literal);
             self.trail_limits.push(self.trail.len());
             let enqueued = self.enqueue_internal::<false>(!literal, None);
             debug_assert!(enqueued, "vivification literal must be unassigned");
             if self.propagate_vivification::<false>(Some(clause)).is_some() {
-                let strengthened = candidate[..=index].to_vec();
                 self.cancel_until_internal::<false>(0);
-                return (strengthened.len() < original_length).then_some(strengthened);
+                return (kept.len() < original_length).then_some(kept);
             }
         }
 
         self.cancel_until_internal::<false>(0);
-        (candidate.len() < original_length).then_some(candidate)
+        (kept.len() < original_length).then_some(kept)
     }
 
     fn install_vivified_clause(
@@ -4798,10 +5315,10 @@ impl Solver {
 
         let mut locked = vec![false; self.clauses.len()];
         for &reason in &self.reasons {
-            if let Some(clause) = reason
-                && !clause.is_binary()
-            {
-                locked[clause.index()] = true;
+            if let Some(clause) = reason {
+                if !clause.is_binary() {
+                    locked[clause.index()] = true;
+                }
             }
         }
 
@@ -4852,10 +5369,10 @@ impl Solver {
 
         let mut locked = vec![false; self.clauses.len()];
         for &reason in &self.reasons {
-            if let Some(clause) = reason
-                && !clause.is_binary()
-            {
-                locked[clause.index()] = true;
+            if let Some(clause) = reason {
+                if !clause.is_binary() {
+                    locked[clause.index()] = true;
+                }
             }
         }
 
@@ -4946,10 +5463,10 @@ impl Solver {
 
         let mut locked = vec![false; self.clauses.len()];
         for &reason in &self.reasons {
-            if let Some(clause) = reason
-                && !clause.is_binary()
-            {
-                locked[clause.index()] = true;
+            if let Some(clause) = reason {
+                if !clause.is_binary() {
+                    locked[clause.index()] = true;
+                }
             }
         }
 
@@ -5056,14 +5573,14 @@ impl Solver {
 
         let mut locked = vec![false; self.clauses.len()];
         for &reason in &self.reasons {
-            if let Some(clause) = reason
-                && !clause.is_binary()
-            {
-                debug_assert!(
-                    !self.clause_is_shadow(clause),
-                    "a shadow clause must never become a reason"
-                );
-                locked[clause.index()] = true;
+            if let Some(clause) = reason {
+                if !clause.is_binary() {
+                    debug_assert!(
+                        !self.clause_is_shadow(clause),
+                        "a shadow clause must never become a reason"
+                    );
+                    locked[clause.index()] = true;
+                }
             }
         }
 
@@ -5184,10 +5701,10 @@ impl Solver {
 
         let mut locked = vec![false; self.clauses.len()];
         for &reason in &self.reasons {
-            if let Some(clause) = reason
-                && !clause.is_binary()
-            {
-                locked[clause.index()] = true;
+            if let Some(clause) = reason {
+                if !clause.is_binary() {
+                    locked[clause.index()] = true;
+                }
             }
         }
 
@@ -5234,10 +5751,10 @@ impl Solver {
         debug_assert_eq!(self.clause_usage_scores.len(), self.clauses.len());
         let mut locked = vec![false; self.clauses.len()];
         for &reason in &self.reasons {
-            if let Some(clause) = reason
-                && !clause.is_binary()
-            {
-                locked[clause.index()] = true;
+            if let Some(clause) = reason {
+                if !clause.is_binary() {
+                    locked[clause.index()] = true;
+                }
             }
         }
 
@@ -5297,11 +5814,15 @@ impl Solver {
     fn mark_clause_deleted(&mut self, clause: ClauseRef) {
         debug_assert!(!self.clause_deleted(clause));
         if clause.is_binary() {
+            self.proof
+                .delete_clause(&self.binary_literals[clause.index()]);
             self.binary_flags[clause.index()] |= BINARY_DELETED;
             return;
         }
 
         let index = clause.index();
+        let range = self.clauses[index].range();
+        self.proof.delete_clause(&self.clause_arena[range]);
         if self.config.compact_clause_arena {
             let metadata = &self.clauses[index];
             self.arena_garbage_literals =
@@ -6526,6 +7047,30 @@ mod tests {
         assert!(model.literal_value(a) || model.literal_value(b));
         assert_eq!(solver.stats.vivified_clauses, 1);
         assert_eq!(solver.stats.vivified_literals, 1);
+    }
+
+    #[test]
+    fn root_vivification_drops_literals_falsified_by_earlier_assumptions() {
+        let a = Lit::positive(Var::new(0));
+        let b = Lit::positive(Var::new(1));
+        let c = Lit::positive(Var::new(2));
+        let mut solver = Solver::with_config(SolverConfig {
+            clause_vivification: true,
+            ..SolverConfig::default()
+        });
+        solver.add_clause(&[a, b, c]);
+        solver.add_clause(&[a, !b]);
+
+        let SolveResult::Sat(model) = solver.solve() else {
+            panic!("vivification drop example should be satisfiable");
+        };
+        assert!(model.literal_value(a) || model.literal_value(c));
+        assert_eq!(solver.stats.vivified_clauses, 1);
+        assert_eq!(solver.stats.vivified_literals, 1);
+        assert!(solver.clauses[0].deleted);
+        assert!(solver.binary_clause_references().any(|clause| {
+            !solver.clause_deleted(clause) && solver.clause_literals(clause) == [a, c]
+        }));
     }
 
     #[test]

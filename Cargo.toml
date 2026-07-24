@@ -9,6 +9,9 @@ publish = false
 default-run = "sat"
 
 [dependencies]
+num-bigint = "0.4"
+num-rational = "0.4"
+num-traits = "0.2"
 
 [profile.release]
 codegen-units = 1

@@ -74,6 +74,10 @@ fn streams_a_vivified_prefix_in_the_drat_proof() {
     let proof = std::fs::read_to_string(&proof_path).unwrap();
     std::fs::remove_file(proof_path).unwrap();
     assert_eq!(proof.lines().next(), Some("1 2 0"));
+    assert!(
+        proof.lines().any(|line| line == "d 1 2 3 0"),
+        "the vivified original must be deleted after its strengthening"
+    );
     assert_eq!(proof.lines().last(), Some("0"));
 }
 

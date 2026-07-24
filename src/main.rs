@@ -833,6 +833,11 @@ fn run() -> Result<u8, String> {
             output.flush().map_err(io_error)?;
             Ok(UNSAT_EXIT)
         }
+        SolveResult::Unknown(_) => {
+            writeln!(output, "s UNKNOWN").map_err(io_error)?;
+            output.flush().map_err(io_error)?;
+            Ok(0)
+        }
     }
 }
 

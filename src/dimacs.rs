@@ -67,9 +67,12 @@ impl Error for ParseError {}
 
 /// Parses one DIMACS CNF formula.
 ///
-/// Comments beginning with `c` at the start of a token are skipped. Clauses may
-/// span lines, but every clause must end in `0`, and the declared clause count
-/// and variable bound are enforced.
+/// A `c` token skips the rest of its line, and a line whose first token starts
+/// with `c` is skipped entirely, so both `c comment` and `c=====` comment
+/// styles found in benchmark corpora are accepted. A line whose first token
+/// starts with `%` ends the input, accepting the SATLIB `%` trailer. Clauses
+/// may span lines, but every clause must end in `0`, and the declared clause
+/// count and variable bound are enforced.
 pub fn parse(input: &[u8]) -> Result<Formula, ParseError> {
     let mut lexer = Lexer::new(input);
 
@@ -252,9 +255,17 @@ impl<'a> Lexer<'a> {
             }
 
             let bytes = &self.input[start..self.position];
-            if bytes == b"c" {
+            // No valid DIMACS token starts a line with `c` or `%`: `p` leads
+            // the header, `cnf` never begins a line, and literals are signed
+            // integers. Treating them as a comment and an end-of-input trailer
+            // accepts the `c=====` and SATLIB `%` styles common in corpora.
+            if bytes == b"c" || (column == 1 && bytes[0] == b'c') {
                 self.skip_to_next_line();
                 continue;
+            }
+            if column == 1 && bytes[0] == b'%' {
+                self.position = self.input.len();
+                return None;
             }
             return Some(Token {
                 bytes,
@@ -305,6 +316,19 @@ mod tests {
             [1, -2, 3]
         );
         assert!(formula.clauses[2].is_empty());
+    }
+
+    #[test]
+    fn parses_fused_comment_lines_and_satlib_trailer() {
+        let input = b"c heading\nc=====\np cnf 3 2\n1 -2 0\n2 3 0\n%\n0\n";
+        let formula = parse(input).unwrap();
+        assert_eq!(formula.variable_count, 3);
+        assert_eq!(formula.clauses.len(), 2);
+
+        // A fused comment token is only recognized at the start of a line, so
+        // it can never swallow the `cnf` header keyword.
+        assert!(parse(b"p cnf 1 1\nc1 0\n").is_err());
+        assert!(parse(b"p cnf 1 1\n1 %\n").is_err());
     }
 
     #[test]

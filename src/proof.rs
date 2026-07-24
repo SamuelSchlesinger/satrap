@@ -24,11 +24,22 @@ impl DratWriter {
     }
 
     pub(crate) fn add_clause(&mut self, clause: &[Lit]) {
+        self.write_step(b"", clause);
+    }
+
+    /// Emits a `d` deletion step so checkers can drop the clause instead of
+    /// carrying every deleted clause through the remaining proof.
+    pub(crate) fn delete_clause(&mut self, clause: &[Lit]) {
+        self.write_step(b"d ", clause);
+    }
+
+    fn write_step(&mut self, prefix: &[u8], clause: &[Lit]) {
         if self.output.is_none() || self.error.is_some() {
             return;
         }
 
         self.line.clear();
+        self.line.extend_from_slice(prefix);
         for &literal in clause {
             push_i64(&mut self.line, literal.to_dimacs());
             self.line.push(b' ');
@@ -90,7 +101,40 @@ fn push_i64(output: &mut Vec<u8>, value: i64) {
 
 #[cfg(test)]
 mod tests {
-    use super::push_i64;
+    use super::{DratWriter, push_i64};
+    use crate::{Lit, Var};
+
+    #[test]
+    fn writes_addition_and_deletion_steps() {
+        #[derive(Clone)]
+        struct SharedBuffer(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+
+        impl std::io::Write for SharedBuffer {
+            fn write(&mut self, buffer: &[u8]) -> std::io::Result<usize> {
+                self.0.lock().unwrap().extend_from_slice(buffer);
+                Ok(buffer.len())
+            }
+
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+
+        let buffer = SharedBuffer(std::sync::Arc::default());
+        let mut writer = DratWriter::disabled();
+        writer.enable(buffer.clone());
+        let a = Lit::positive(Var::new(0));
+        let b = Lit::negative(Var::new(1));
+        writer.add_clause(&[a, b]);
+        writer.delete_clause(&[a, b]);
+        writer.add_clause(&[]);
+        writer.finish();
+        assert_eq!(writer.error(), None);
+        assert_eq!(
+            String::from_utf8(buffer.0.lock().unwrap().clone()).unwrap(),
+            "1 -2 0\nd 1 -2 0\n0\n"
+        );
+    }
 
     #[test]
     fn formats_signed_integers_without_allocation_per_number() {

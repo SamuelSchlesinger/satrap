@@ -1,6 +1,6 @@
 use sat::{
-    Lit, Model, RestartPolicy, RestartTrailReuse, SearchStrategy, SolveResult, Solver,
-    SolverConfig, Var,
+    IncrementalError, Lit, Model, RestartPolicy, RestartTrailReuse, SearchStrategy, SolveLimits,
+    SolveResult, Solver, SolverConfig, UnknownReason, Var,
 };
 
 #[test]
@@ -546,6 +546,339 @@ fn differential_against_brute_force_on_small_random_formulas() {
 }
 
 #[test]
+fn incremental_assumption_queries_differential_against_brute_force() {
+    let mut random = XorShift64::new(0xbb67_ae85_84ca_a73b);
+
+    for case in 0..500 {
+        let variable_count = 1 + random.range(6);
+        let clause_count = random.range(18);
+        let mut clauses = Vec::with_capacity(clause_count);
+        for _ in 0..clause_count {
+            let clause_length = random.range(variable_count + 2);
+            let clause = (0..clause_length)
+                .map(|_| {
+                    let variable = Var::new(random.range(variable_count) as u32);
+                    Lit::new(variable, random.next() & 1 == 0)
+                })
+                .collect::<Vec<_>>();
+            clauses.push(clause);
+        }
+
+        let mut solver = Solver::new();
+        solver.reserve_variables(variable_count);
+        for clause in &clauses {
+            solver.add_clause(clause);
+        }
+
+        for query in 0..20 {
+            let assumption_count = random.range(variable_count + 3);
+            let assumptions = (0..assumption_count)
+                .map(|_| {
+                    let variable = Var::new(random.range(variable_count) as u32);
+                    Lit::new(variable, random.next() & 1 == 0)
+                })
+                .collect::<Vec<_>>();
+            let mut augmented = clauses.clone();
+            augmented.extend(assumptions.iter().copied().map(|literal| vec![literal]));
+            let expected = brute_force(variable_count, &augmented);
+            let actual = solver.solve_assuming(&assumptions);
+
+            assert_eq!(
+                actual.is_sat(),
+                expected.is_some(),
+                "assumption mismatch in case {case}, query {query}: \
+                 clauses={clauses:?}, assumptions={assumptions:?}, \
+                 failed={:?}, stats={:?}",
+                solver.failed_assumptions(),
+                solver.stats()
+            );
+            if let SolveResult::Sat(model) = &actual {
+                assert!(satisfies(model, &clauses));
+                assert!(
+                    assumptions
+                        .iter()
+                        .all(|&literal| model.literal_value(literal)),
+                    "model violates an assumption in case {case}, query {query}"
+                );
+                assert!(solver.failed_assumptions().is_empty());
+            } else if brute_force(variable_count, &clauses).is_some() {
+                assert!(
+                    !solver.failed_assumptions().is_empty(),
+                    "an assumption-only contradiction needs a failed subset"
+                );
+                let mut core_formula = clauses.clone();
+                core_formula.extend(
+                    solver
+                        .failed_assumptions()
+                        .iter()
+                        .copied()
+                        .map(|literal| vec![literal]),
+                );
+                assert!(
+                    brute_force(variable_count, &core_formula).is_none(),
+                    "reported failed assumptions are satisfiable in case {case}, query {query}"
+                );
+            }
+        }
+    }
+}
+
+/// Configurations that differ only in deep-search machinery. Every entry must
+/// agree on every instance; disagreement is a soundness bug in one of them.
+fn deep_search_configurations() -> Vec<(&'static str, SolverConfig)> {
+    let default = SolverConfig::default();
+    vec![
+        ("default", default),
+        (
+            "legacy-reduction",
+            SolverConfig {
+                lbd_free_clause_management: false,
+                ..default
+            },
+        ),
+        (
+            "tiered-legacy-reduction",
+            SolverConfig {
+                lbd_free_clause_management: false,
+                tiered_clause_management: true,
+                ..default
+            },
+        ),
+        (
+            "scan-debt",
+            SolverConfig {
+                scan_debt_clause_management: true,
+                ..default
+            },
+        ),
+        (
+            "nonregular-retention",
+            SolverConfig {
+                nonregular_clause_retention: true,
+                ..default
+            },
+        ),
+        (
+            "shadow-reactivation",
+            SolverConfig {
+                shadow_clause_reactivation: true,
+                ..default
+            },
+        ),
+        (
+            "counterfactual-phase",
+            SolverConfig {
+                counterfactual_phase_voting: true,
+                ..default
+            },
+        ),
+        (
+            "compact-arena",
+            SolverConfig {
+                compact_clause_arena: true,
+                ..default
+            },
+        ),
+        (
+            "lbd-restarts",
+            SolverConfig {
+                restart_policy: RestartPolicy::Lbd,
+                ..default
+            },
+        ),
+        (
+            "unblocked-lbd-restarts",
+            SolverConfig {
+                restart_policy: RestartPolicy::Lbd,
+                block_lbd_restarts: false,
+                ..default
+            },
+        ),
+        (
+            "trail-reuse",
+            SolverConfig {
+                restart_trail_reuse: RestartTrailReuse::Always,
+                ..default
+            },
+        ),
+        (
+            "adaptive-trail-reuse",
+            SolverConfig {
+                restart_trail_reuse: RestartTrailReuse::Adaptive,
+                ..default
+            },
+        ),
+        (
+            "rephase",
+            SolverConfig {
+                systematic_rephasing: true,
+                ..default
+            },
+        ),
+        (
+            "no-chrono",
+            SolverConfig {
+                chronological_backtracking: false,
+                ..default
+            },
+        ),
+        (
+            "binary-minimize",
+            SolverConfig {
+                binary_resolution_minimization: true,
+                ..default
+            },
+        ),
+        (
+            "preprocessing",
+            SolverConfig {
+                failed_literal_probing: true,
+                clause_vivification: true,
+                clause_subsumption: true,
+                bounded_variable_elimination: true,
+                ..default
+            },
+        ),
+        (
+            "factor",
+            SolverConfig {
+                bounded_variable_addition: true,
+                ..default
+            },
+        ),
+        (
+            "lrb",
+            SolverConfig {
+                search_strategy: SearchStrategy::Lrb,
+                ..default
+            },
+        ),
+        (
+            "chb",
+            SolverConfig {
+                search_strategy: SearchStrategy::Chb,
+                ..default
+            },
+        ),
+        (
+            "vmtf",
+            SolverConfig {
+                search_strategy: SearchStrategy::Vmtf,
+                ..default
+            },
+        ),
+        (
+            "transfer",
+            SolverConfig {
+                search_strategy: SearchStrategy::Transfer,
+                ..default
+            },
+        ),
+        (
+            "focused",
+            SolverConfig {
+                search_strategy: SearchStrategy::Focused,
+                ..default
+            },
+        ),
+        (
+            "probe-evsids",
+            SolverConfig {
+                search_strategy: SearchStrategy::ProbeEvsids,
+                ..default
+            },
+        ),
+        (
+            "probe-vmtf",
+            SolverConfig {
+                search_strategy: SearchStrategy::ProbeVmtf,
+                ..default
+            },
+        ),
+        (
+            "focused-stable",
+            SolverConfig {
+                search_strategy: SearchStrategy::FocusedStable,
+                ..default
+            },
+        ),
+    ]
+}
+
+#[test]
+fn deep_search_configurations_agree_beyond_reduction_and_restart_thresholds() {
+    // The small differential harness above never crosses the first database
+    // reduction (1,000 conflicts) or more than a restart or two, so clause
+    // deletion, usage decay, rephasing, and trail reuse would otherwise only
+    // be reached by hand-built unit tests. Pigeonhole 8/7 drives every
+    // configuration through thousands of conflicts and multiple reductions.
+    let unsatisfiable = pigeonhole(8, 7);
+    for (name, config) in deep_search_configurations() {
+        let (result, stats) = solve_with_config(56, &unsatisfiable, config);
+        assert_eq!(
+            result,
+            SolveResult::Unsat,
+            "{name} must prove pigeonhole 8/7"
+        );
+        assert!(
+            stats.conflicts > 500,
+            "{name} should search deeply, saw {} conflicts",
+            stats.conflicts
+        );
+    }
+}
+
+#[test]
+fn deep_search_configurations_agree_on_medium_random_formulas() {
+    // 50-variable formulas are far beyond the brute-force oracle, so the
+    // configurations check each other: any SAT model is validated directly
+    // and every configuration must reach the same satisfiability verdict.
+    let mut random = XorShift64::new(0x1f83_d9ab_fb41_bd6b);
+    let configurations = deep_search_configurations();
+
+    for case in 0..20 {
+        let variable_count = 50;
+        let clauses = (0..213)
+            .map(|_| {
+                let mut variables = Vec::with_capacity(3);
+                while variables.len() < 3 {
+                    let variable = random.range(variable_count) as u32;
+                    if !variables.contains(&variable) {
+                        variables.push(variable);
+                    }
+                }
+                variables
+                    .into_iter()
+                    .map(|variable| Lit::new(Var::new(variable), random.next() & 1 == 0))
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+
+        let (reference, _) = solve_with_config(variable_count, &clauses, SolverConfig::default());
+        if let SolveResult::Sat(model) = &reference {
+            assert!(
+                satisfies(model, &clauses),
+                "invalid default model in case {case}"
+            );
+        }
+        for (name, config) in &configurations {
+            let (result, stats) = solve_with_config(variable_count, &clauses, *config);
+            assert_eq!(
+                result.is_sat(),
+                reference.is_sat(),
+                "{name} disagrees with the default configuration in case {case}; stats={stats:?}"
+            );
+            if let SolveResult::Sat(model) = &result {
+                assert!(
+                    satisfies(model, &clauses),
+                    "invalid {name} model in case {case}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
 fn pigeonhole_principle_exercises_learning() {
     let unsatisfiable = pigeonhole(5, 4);
     let (result, stats) = solve(20, &unsatisfiable);
@@ -610,6 +943,356 @@ fn solving_twice_returns_the_same_cached_result() {
     let second = solver.solve();
     assert_eq!(first, second);
     assert_eq!(stats, solver.stats());
+}
+
+#[test]
+fn assumption_queries_are_temporary_and_return_a_failed_subset() {
+    let a = Lit::positive(Var::new(0));
+    let b = Lit::positive(Var::new(1));
+    let c = Lit::positive(Var::new(2));
+    let mut solver = Solver::new();
+    solver.reserve_variables(3);
+    solver.add_clause(&[!a, !b]);
+
+    assert_eq!(solver.solve_assuming(&[c, a, b]), SolveResult::Unsat);
+    assert_eq!(solver.failed_assumptions(), [a, b]);
+
+    let SolveResult::Sat(model) = solver.solve_assuming(&[a, !b]) else {
+        panic!("a compatible assumption query should remain satisfiable");
+    };
+    assert!(model.literal_value(a));
+    assert!(model.literal_value(!b));
+    assert!(solver.failed_assumptions().is_empty());
+
+    let SolveResult::Sat(model) = solver.solve() else {
+        panic!("an assumption conflict must not poison the permanent context");
+    };
+    assert!(model.literal_value(!a) || model.literal_value(!b));
+}
+
+#[test]
+fn contradictory_assumptions_report_both_literals() {
+    let a = Lit::positive(Var::new(0));
+    let mut solver = Solver::new();
+    solver.reserve_variables(1);
+
+    assert_eq!(solver.solve_assuming(&[a, !a]), SolveResult::Unsat);
+    assert_eq!(solver.failed_assumptions(), [a, !a]);
+    assert!(solver.solve_assuming(&[a]).is_sat());
+    assert!(solver.solve_assuming(&[!a]).is_sat());
+}
+
+#[test]
+fn assumption_unsat_after_search_does_not_make_the_base_unsat() {
+    let gate = Lit::positive(Var::new(0));
+    let x = Lit::positive(Var::new(1));
+    let y = Lit::positive(Var::new(2));
+    let mut solver = Solver::new();
+    for clause in [
+        vec![!gate, x, y],
+        vec![!gate, x, !y],
+        vec![!gate, !x, y],
+        vec![!gate, !x, !y],
+    ] {
+        solver.add_clause(&clause);
+    }
+
+    assert_eq!(solver.solve_assuming(&[gate]), SolveResult::Unsat);
+    assert_eq!(solver.failed_assumptions(), [gate]);
+    let conflicts = solver.stats().conflicts;
+    assert!(
+        conflicts > 0,
+        "the gated contradiction should exercise CDCL"
+    );
+
+    let SolveResult::Sat(model) = solver.solve() else {
+        panic!("disabling the gate should satisfy the permanent formula");
+    };
+    assert!(model.literal_value(!gate));
+    assert!(solver.stats().conflicts >= conflicts);
+}
+
+#[test]
+fn repeated_identical_assumption_query_uses_the_cached_result() {
+    let a = Lit::positive(Var::new(0));
+    let mut solver = Solver::new();
+    solver.reserve_variables(1);
+    solver.add_clause(&[!a]);
+
+    let first = solver.solve_assuming(&[a]);
+    let failed = solver.failed_assumptions().to_vec();
+    let stats = solver.stats();
+    let second = solver.solve_assuming(&[a]);
+    assert_eq!(first, SolveResult::Unsat);
+    assert_eq!(second, first);
+    assert_eq!(solver.failed_assumptions(), failed);
+    assert_eq!(solver.stats(), stats);
+}
+
+#[test]
+fn assumption_unsat_does_not_emit_a_global_empty_drat_clause() {
+    #[derive(Clone)]
+    struct SharedBuffer(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+
+    impl std::io::Write for SharedBuffer {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    let a = Lit::positive(Var::new(0));
+    let b = Lit::positive(Var::new(1));
+    let output = SharedBuffer(std::sync::Arc::default());
+    let mut solver = Solver::new();
+    solver.add_clause(&[a, b]);
+    solver.enable_drat_proof(output.clone());
+
+    assert_eq!(solver.solve_assuming(&[!a, !b]), SolveResult::Unsat);
+    let proof = output.0.lock().unwrap().clone();
+    assert!(
+        !proof.split(|&byte| byte == b'\n').any(|line| line == b"0"),
+        "the base formula is satisfiable, so its proof stream must not conclude globally"
+    );
+    assert!(solver.solve().is_sat());
+}
+
+#[test]
+fn permanent_clauses_can_be_added_between_queries() {
+    let a = Lit::positive(Var::new(0));
+    let b = Lit::positive(Var::new(1));
+    let mut solver = Solver::new();
+    solver.add_clause(&[a, b]);
+    assert!(solver.solve().is_sat());
+
+    assert!(solver.try_add_clause(&[!a]).unwrap());
+    let SolveResult::Sat(model) = solver.solve() else {
+        panic!("the first incremental unit should imply b");
+    };
+    assert!(model.literal_value(!a));
+    assert!(model.literal_value(b));
+
+    assert!(!solver.try_add_clause(&[!b]).unwrap());
+    assert_eq!(solver.solve(), SolveResult::Unsat);
+}
+
+#[test]
+fn nested_clause_scopes_deactivate_only_popped_assertions() {
+    let a = Lit::positive(Var::new(0));
+    let b = Lit::positive(Var::new(1));
+    let mut solver = Solver::new();
+    solver.reserve_variables(2);
+    solver.add_clause(&[a, b]);
+
+    solver.push().unwrap();
+    solver.add_clause(&[!a]);
+    assert_eq!(solver.scope_depth(), 1);
+    let SolveResult::Sat(model) = solver.solve() else {
+        panic!("the outer scope should be satisfiable");
+    };
+    assert!(model.literal_value(!a));
+    assert!(model.literal_value(b));
+
+    solver.push().unwrap();
+    solver.add_clause(&[!b]);
+    assert_eq!(solver.scope_depth(), 2);
+    assert_eq!(solver.solve(), SolveResult::Unsat);
+    assert!(
+        solver.failed_assumptions().is_empty(),
+        "scope selectors are internal assumptions"
+    );
+
+    solver.pop(1).unwrap();
+    assert_eq!(solver.scope_depth(), 1);
+    let SolveResult::Sat(model) = solver.solve() else {
+        panic!("popping the inner assertion should restore satisfiability");
+    };
+    assert!(model.literal_value(!a));
+    assert!(model.literal_value(b));
+
+    solver.pop(1).unwrap();
+    assert_eq!(solver.scope_depth(), 0);
+    assert!(solver.solve().is_sat());
+    assert_eq!(solver.pop(1), Err(IncrementalError::ScopeUnderflow));
+}
+
+#[test]
+fn an_empty_scoped_clause_does_not_poison_the_base_context() {
+    let mut solver = Solver::new();
+    solver.push().unwrap();
+    assert!(solver.add_clause(&[]));
+    assert_eq!(solver.solve(), SolveResult::Unsat);
+    solver.pop(1).unwrap();
+    assert!(solver.solve().is_sat());
+}
+
+#[test]
+fn variables_can_be_allocated_after_a_query() {
+    let mut solver = Solver::new();
+    assert!(solver.solve().is_sat());
+    let variable = solver.new_variable().unwrap();
+    let literal = Lit::positive(variable);
+    solver.add_clause(&[literal]);
+    let SolveResult::Sat(model) = solver.solve() else {
+        panic!("a newly declared constrained variable should be satisfiable");
+    };
+    assert_eq!(model.len(), 1);
+    assert!(model.literal_value(literal));
+}
+
+#[test]
+fn irreversible_preprocessing_is_rejected_by_incremental_mutations() {
+    for config in [
+        SolverConfig {
+            bounded_variable_elimination: true,
+            ..SolverConfig::default()
+        },
+        SolverConfig {
+            bounded_variable_addition: true,
+            ..SolverConfig::default()
+        },
+    ] {
+        let mut solver = Solver::with_config(config);
+        solver.reserve_variables(1);
+        assert_eq!(
+            solver.push(),
+            Err(IncrementalError::IrreversiblePreprocessing)
+        );
+        assert!(solver.solve().is_sat());
+        assert_eq!(
+            solver.try_add_clause(&[Lit::positive(Var::new(0))]),
+            Err(IncrementalError::IrreversiblePreprocessing)
+        );
+    }
+}
+
+#[test]
+fn deterministic_limits_return_unknown_and_leave_the_context_reusable() {
+    let x = Lit::positive(Var::new(0));
+    let y = Lit::positive(Var::new(1));
+    let mut solver = Solver::new();
+    for clause in [vec![x, y], vec![x, !y], vec![!x, y], vec![!x, !y]] {
+        solver.add_clause(&clause);
+    }
+
+    assert_eq!(
+        solver.solve_with_limits(SolveLimits {
+            conflicts: Some(0),
+            propagations: None,
+        }),
+        SolveResult::Unknown(UnknownReason::ConflictLimit)
+    );
+    assert!(solver.failed_assumptions().is_empty());
+    assert_eq!(solver.solve(), SolveResult::Unsat);
+}
+
+#[test]
+fn propagation_limit_is_relative_to_each_query() {
+    let a = Lit::positive(Var::new(0));
+    let b = Lit::positive(Var::new(1));
+    let mut solver = Solver::new();
+    solver.add_clause(&[!a, b]);
+
+    let before = solver.stats().propagations;
+    assert_eq!(
+        solver.solve_with_limits(SolveLimits {
+            conflicts: None,
+            propagations: Some(1),
+        }),
+        SolveResult::Unknown(UnknownReason::PropagationLimit)
+    );
+    assert_eq!(solver.stats().propagations - before, 1);
+
+    let SolveResult::Sat(model) = solver.solve() else {
+        panic!("a limited query must leave a reusable context");
+    };
+    assert!(model.literal_value(!a) || model.literal_value(b));
+}
+
+#[test]
+fn an_external_interrupt_can_be_cleared_for_a_later_query() {
+    let a = Lit::positive(Var::new(0));
+    let mut solver = Solver::new();
+    solver.reserve_variables(1);
+    let interrupter = solver.interrupter();
+    interrupter.interrupt();
+    assert!(interrupter.is_interrupted());
+    assert_eq!(
+        solver.solve(),
+        SolveResult::Unknown(UnknownReason::Interrupted)
+    );
+
+    interrupter.clear();
+    assert!(!interrupter.is_interrupted());
+    let SolveResult::Sat(model) = solver.solve_assuming(&[a]) else {
+        panic!("clearing interruption should permit another query");
+    };
+    assert!(model.literal_value(a));
+}
+
+#[test]
+fn random_push_pop_add_and_check_sequences_match_brute_force() {
+    const USER_VARIABLES: usize = 5;
+    let mut random = XorShift64::new(0x3c6e_f372_fe94_f82b);
+
+    for case in 0..200 {
+        let mut solver = Solver::new();
+        solver.reserve_variables(USER_VARIABLES);
+        let mut frames = vec![Vec::<Vec<Lit>>::new()];
+
+        for operation in 0..100 {
+            match random.range(5) {
+                0 if frames.len() < 5 => {
+                    solver.push().unwrap();
+                    frames.push(Vec::new());
+                }
+                1 if frames.len() > 1 => {
+                    solver.pop(1).unwrap();
+                    frames.pop();
+                }
+                2 | 3 => {
+                    let length = random.range(5);
+                    let clause = (0..length)
+                        .map(|_| {
+                            let variable = Var::new(random.range(USER_VARIABLES) as u32);
+                            Lit::new(variable, random.next() & 1 == 0)
+                        })
+                        .collect::<Vec<_>>();
+                    solver.add_clause(&clause);
+                    frames
+                        .last_mut()
+                        .expect("base frame is permanent")
+                        .push(clause);
+                }
+                _ => {
+                    let active = frames
+                        .iter()
+                        .flat_map(|frame| frame.iter().cloned())
+                        .collect::<Vec<_>>();
+                    let expected = brute_force(USER_VARIABLES, &active);
+                    let actual = solver.solve();
+                    assert_eq!(
+                        actual.is_sat(),
+                        expected.is_some(),
+                        "scope mismatch in case {case}, operation {operation}: \
+                         depth={}, active={active:?}, stats={:?}",
+                        solver.scope_depth(),
+                        solver.stats()
+                    );
+                    if let SolveResult::Sat(model) = actual {
+                        assert!(
+                            satisfies(&model, &active),
+                            "invalid scoped model in case {case}, operation {operation}"
+                        );
+                    }
+                }
+            }
+        }
+    }
 }
 
 #[test]

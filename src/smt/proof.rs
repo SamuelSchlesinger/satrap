@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::error::Error;
 use std::fmt;
 use std::io::{self, Write};
@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 
 use crate::{Lit, SolveResult, Solver};
 
-use super::term::{SymbolId, TermId, TermKind, TermStore};
+use super::term::{FunctionId, Sort, SymbolId, TermId, TermKind, TermStore, UninterpretedSortId};
 
 #[derive(Clone, Debug)]
 pub(crate) struct BooleanRefutation {
@@ -62,31 +62,130 @@ impl BooleanRefutation {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ProofLogic {
-    QfBool,
-    QfBv,
+    Bool,
+    Bv,
+    Uf,
+    UfBv,
 }
 
 impl ProofLogic {
     pub(crate) fn from_name(name: &str) -> Option<Self> {
         match name {
-            "QF_BOOL" => Some(Self::QfBool),
-            "QF_BV" => Some(Self::QfBv),
+            "QF_BOOL" => Some(Self::Bool),
+            "QF_BV" => Some(Self::Bv),
+            "QF_UF" => Some(Self::Uf),
+            "QF_UFBV" => Some(Self::UfBv),
             _ => None,
         }
     }
 
     fn name(self) -> &'static str {
         match self {
-            Self::QfBool => "QF_BOOL",
-            Self::QfBv => "QF_BV",
+            Self::Bool => "QF_BOOL",
+            Self::Bv => "QF_BV",
+            Self::Uf => "QF_UF",
+            Self::UfBv => "QF_UFBV",
         }
+    }
+
+    fn admits_theory_clauses(self) -> bool {
+        matches!(self, Self::Uf | Self::UfBv)
     }
 }
 
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub(crate) enum ProofAtom {
+enum ProofAtom {
     Bool(String),
-    BitVecBit { name: String, index: u32 },
+    BitVecBit {
+        name: String,
+        index: u32,
+    },
+    ApplicationBit {
+        application: ProofApplication,
+        index: u32,
+    },
+    ClassBit {
+        sort: String,
+        term: AbstractExpr,
+        index: u32,
+    },
+}
+
+#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+enum ProofSort {
+    Bool,
+    BitVec(u32),
+    Uninterpreted(String),
+}
+
+#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+struct ProofApplication {
+    function: String,
+    domain: Vec<ProofSort>,
+    range: ProofSort,
+    arguments: Vec<ProofValue>,
+}
+
+#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+enum ProofValue {
+    Bool(BoolExpr),
+    BitVec(Vec<BoolExpr>),
+    Abstract(AbstractExpr),
+}
+
+#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+struct AbstractExpr(Arc<AbstractNode>);
+
+#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+enum AbstractNode {
+    Constant {
+        sort: String,
+        name: String,
+    },
+    Application(ProofApplication),
+    Ite {
+        sort: String,
+        condition: BoolExpr,
+        then_term: AbstractExpr,
+        else_term: AbstractExpr,
+    },
+}
+
+impl AbstractExpr {
+    fn node(&self) -> &AbstractNode {
+        &self.0
+    }
+}
+
+#[derive(Clone, Debug, Default)]
+pub(crate) struct ProofNames {
+    atoms: HashMap<SymbolId, ProofAtom>,
+    constants: HashMap<TermId, String>,
+    functions: HashMap<FunctionId, String>,
+    sorts: HashMap<UninterpretedSortId, String>,
+}
+
+impl ProofNames {
+    pub(crate) fn insert_bool(&mut self, symbol: SymbolId, name: String) {
+        self.atoms.insert(symbol, ProofAtom::Bool(name));
+    }
+
+    pub(crate) fn insert_bit(&mut self, symbol: SymbolId, name: String, index: u32) {
+        self.atoms
+            .insert(symbol, ProofAtom::BitVecBit { name, index });
+    }
+
+    pub(crate) fn insert_constant(&mut self, term: TermId, name: String) {
+        self.constants.insert(term, name);
+    }
+
+    pub(crate) fn insert_function(&mut self, function: FunctionId, name: String) {
+        self.functions.insert(function, name);
+    }
+
+    pub(crate) fn insert_sort(&mut self, sort: UninterpretedSortId, name: String) {
+        self.sorts.insert(sort, name);
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -106,20 +205,23 @@ impl fmt::Display for ProofError {
 
 impl Error for ProofError {}
 
-/// Re-encodes one active QF_BOOL query in a fresh, non-incremental SAT solver.
+/// Re-encodes one active proof-bearing query in a fresh, non-incremental SAT
+/// solver.
 ///
 /// Turning every active assertion into a permanent unit avoids the unsound
 /// "global empty clause under temporary assumptions" problem. SMT-LIB permits
 /// `get-proof` only after a check with an empty explicit assumption set. A
-/// proof-specific canonical Boolean DAG makes the CNF independent of term-ID
-/// allocation history, so a separate checker can reconstruct it from the
-/// original SMT-LIB query before validating the DRAT suffix.
+/// proof-specific canonical lowering makes the CNF independent of term-ID
+/// allocation history. Ground UF is reduced to finite class bits plus
+/// congruence axioms. A separate checker can therefore reconstruct the entire
+/// propositional input from the original SMT-LIB query before validating the
+/// DRAT suffix.
 pub(crate) fn prove_boolean_unsat(
     logic: ProofLogic,
     terms: &TermStore,
     roots: &[TermId],
     premises: &[String],
-    atom_names: &HashMap<SymbolId, ProofAtom>,
+    names: &ProofNames,
 ) -> Result<BooleanRefutation, ProofError> {
     if roots.len() != premises.len() {
         return Err(ProofError::new(
@@ -127,11 +229,16 @@ pub(crate) fn prove_boolean_unsat(
         ));
     }
 
-    let mut canonicalizer = Canonicalizer::default();
-    let roots = roots
+    let mut canonicalizer = Canonicalizer::new(terms)?;
+    let raw_roots = roots
         .iter()
-        .map(|&root| canonicalizer.convert(terms, root, atom_names))
+        .map(|&root| canonicalizer.convert(terms, root, names))
         .collect::<Result<Vec<_>, _>>()?;
+    let roots = raw_roots
+        .iter()
+        .map(|root| canonicalizer.lower(root))
+        .collect::<Result<Vec<_>, _>>()?;
+    let theory_axioms = canonicalizer.congruence_axioms()?;
 
     let output = SharedBuffer::default();
     let mut solver = Solver::new();
@@ -143,6 +250,12 @@ pub(crate) fn prove_boolean_unsat(
             .try_add_clause(&[literal])
             .map_err(|error| ProofError::new(error.to_string()))?;
     }
+    for axiom in &theory_axioms {
+        let literal = encoder.encode(&mut solver, axiom)?;
+        solver
+            .add_theory_clause(&[literal])
+            .map_err(|error| ProofError::new(error.to_string()))?;
+    }
     let clauses = solver
         .proof_input()
         .expect("proof recording was enabled")
@@ -151,11 +264,13 @@ pub(crate) fn prove_boolean_unsat(
         !matches!(
             clause.kind,
             crate::solver::ProofClauseKind::Formula | crate::solver::ProofClauseKind::Encoding
-        )
+        ) && !(logic.admits_theory_clauses()
+            && clause.kind == crate::solver::ProofClauseKind::Theory)
     }) {
         return Err(ProofError::new(format!(
-            "QF_BOOL proof replay produced an unsupported {:?} clause",
-            clause.kind
+            "{} proof replay produced an unsupported {:?} clause",
+            logic.name(),
+            clause.kind,
         )));
     }
     solver.enable_drat_proof(output.clone());
@@ -164,18 +279,18 @@ pub(crate) fn prove_boolean_unsat(
         SolveResult::Unsat => {}
         SolveResult::Sat(_) => {
             return Err(ProofError::new(
-                "fresh Boolean proof replay unexpectedly found a model",
+                "fresh SMT proof replay unexpectedly found a model",
             ));
         }
         SolveResult::Unknown(reason) => {
             return Err(ProofError::new(format!(
-                "fresh Boolean proof replay stopped with {reason:?}"
+                "fresh SMT proof replay stopped with {reason:?}"
             )));
         }
     }
     if let Some(error) = solver.proof_error() {
         return Err(ProofError::new(format!(
-            "could not finish Boolean DRAT proof: {error}"
+            "could not finish SMT DRAT proof: {error}"
         )));
     }
 
@@ -202,6 +317,7 @@ enum BoolNode {
     Xor(BoolExpr, BoolExpr),
     Iff(BoolExpr, BoolExpr),
     Ite(BoolExpr, BoolExpr, BoolExpr),
+    TheoryEquality(AbstractExpr, AbstractExpr),
 }
 
 impl BoolExpr {
@@ -210,18 +326,67 @@ impl BoolExpr {
     }
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 struct Canonicalizer {
     converted: HashMap<TermId, BoolExpr>,
+    abstract_converted: HashMap<TermId, AbstractExpr>,
+    application_converted: HashMap<usize, ProofApplication>,
+    application_results: HashMap<TermId, usize>,
+    application_bits: HashMap<TermId, (usize, u32)>,
+    abstract_terms: BTreeMap<String, BTreeSet<AbstractExpr>>,
+    applications: BTreeSet<ProofApplication>,
+    lowered: HashMap<BoolExpr, BoolExpr>,
+    lowered_abstract: HashMap<AbstractExpr, Vec<BoolExpr>>,
     interned: HashMap<BoolNode, BoolExpr>,
 }
 
 impl Canonicalizer {
+    fn new(terms: &TermStore) -> Result<Self, ProofError> {
+        let mut application_bits = HashMap::new();
+        let mut application_results = HashMap::new();
+        for (application_index, application) in terms.applications().iter().enumerate() {
+            application_results.insert(application.result, application_index);
+            match terms
+                .sort(application.result)
+                .map_err(|error| ProofError::new(error.to_string()))?
+            {
+                Sort::Bool => {
+                    application_bits.insert(application.result, (application_index, 0));
+                }
+                Sort::BitVec(_) => {
+                    for (bit_index, &bit) in terms
+                        .bitvec_bits(application.result)
+                        .map_err(|error| ProofError::new(error.to_string()))?
+                        .iter()
+                        .enumerate()
+                    {
+                        let bit_index = u32::try_from(bit_index)
+                            .map_err(|_| ProofError::new("proof application result is too wide"))?;
+                        application_bits.insert(bit, (application_index, bit_index));
+                    }
+                }
+                Sort::Int | Sort::Real | Sort::Uninterpreted(_) | Sort::Array(_) => {}
+            }
+        }
+        Ok(Self {
+            converted: HashMap::new(),
+            abstract_converted: HashMap::new(),
+            application_converted: HashMap::new(),
+            application_results,
+            application_bits,
+            abstract_terms: BTreeMap::new(),
+            applications: BTreeSet::new(),
+            lowered: HashMap::new(),
+            lowered_abstract: HashMap::new(),
+            interned: HashMap::new(),
+        })
+    }
+
     fn convert(
         &mut self,
         terms: &TermStore,
         term: TermId,
-        atom_names: &HashMap<SymbolId, ProofAtom>,
+        names: &ProofNames,
     ) -> Result<BoolExpr, ProofError> {
         if let Some(expression) = self.converted.get(&term) {
             return Ok(expression.clone());
@@ -230,50 +395,64 @@ impl Canonicalizer {
             TermKind::Bool(false) => self.intern(BoolNode::False),
             TermKind::Bool(true) => self.intern(BoolNode::True),
             TermKind::Atom(symbol) => {
-                let name = atom_names.get(&symbol).ok_or_else(|| {
-                    ProofError::new(format!(
-                        "Boolean proof atom {} has no active declaration",
+                let atom = if let Some(name) = names.atoms.get(&symbol) {
+                    name.clone()
+                } else if let Some((application_index, bit_index)) =
+                    self.application_bits.get(&term).copied()
+                {
+                    ProofAtom::ApplicationBit {
+                        application: self.convert_application(terms, application_index, names)?,
+                        index: bit_index,
+                    }
+                } else {
+                    return Err(ProofError::new(format!(
+                        "proof atom {} has no active declaration or application",
                         symbol.0
-                    ))
-                })?;
-                self.intern(BoolNode::Atom(name.clone()))
+                    )));
+                };
+                self.intern(BoolNode::Atom(atom))
             }
             TermKind::Not(inner) => {
-                let inner = self.convert(terms, inner, atom_names)?;
+                let inner = self.convert(terms, inner, names)?;
                 self.not(inner)
             }
             TermKind::And(items) => {
                 let items = items
                     .iter()
-                    .map(|&item| self.convert(terms, item, atom_names))
+                    .map(|&item| self.convert(terms, item, names))
                     .collect::<Result<Vec<_>, _>>()?;
                 self.junction(items, true)
             }
             TermKind::Or(items) => {
                 let items = items
                     .iter()
-                    .map(|&item| self.convert(terms, item, atom_names))
+                    .map(|&item| self.convert(terms, item, names))
                     .collect::<Result<Vec<_>, _>>()?;
                 self.junction(items, false)
             }
             TermKind::Xor(left, right) => {
-                let left = self.convert(terms, left, atom_names)?;
-                let right = self.convert(terms, right, atom_names)?;
+                let left = self.convert(terms, left, names)?;
+                let right = self.convert(terms, right, names)?;
                 self.xor(left, right)
             }
             TermKind::Iff(left, right) => {
-                let left = self.convert(terms, left, atom_names)?;
-                let right = self.convert(terms, right, atom_names)?;
+                let left = self.convert(terms, left, names)?;
+                let right = self.convert(terms, right, names)?;
                 self.iff(left, right)
             }
             TermKind::Ite(condition, then_term, else_term) => {
-                let condition = self.convert(terms, condition, atom_names)?;
-                let then_term = self.convert(terms, then_term, atom_names)?;
-                let else_term = self.convert(terms, else_term, atom_names)?;
+                let condition = self.convert(terms, condition, names)?;
+                let then_term = self.convert(terms, then_term, names)?;
+                let else_term = self.convert(terms, else_term, names)?;
                 self.ite(condition, then_term, else_term)
             }
-            TermKind::TheoryEquality(_, _, _)
-            | TermKind::ArithmeticPredicate(_, _, _)
+            TermKind::TheoryEquality(_, left, right) => {
+                let left = self.convert_abstract(terms, left, names)?;
+                let right = self.convert_abstract(terms, right, names)?;
+                let (left, right) = ordered_abstract_pair(left, right);
+                self.intern(BoolNode::TheoryEquality(left, right))
+            }
+            TermKind::ArithmeticPredicate(_, _, _)
             | TermKind::UfConstant(_)
             | TermKind::UfApplication(_, _)
             | TermKind::UfIte(_, _, _)
@@ -282,12 +461,444 @@ impl Canonicalizer {
             | TermKind::ArrayStore(_, _, _)
             | TermKind::BitVec(_) => {
                 return Err(ProofError::new(
-                    "QF_BOOL proof replay encountered a non-Boolean-theory node",
+                    "SMT proof replay encountered an unsupported non-Boolean node",
                 ));
             }
         };
         self.converted.insert(term, expression.clone());
         Ok(expression)
+    }
+
+    fn convert_value(
+        &mut self,
+        terms: &TermStore,
+        term: TermId,
+        expected: Sort,
+        names: &ProofNames,
+    ) -> Result<ProofValue, ProofError> {
+        let actual = terms
+            .sort(term)
+            .map_err(|error| ProofError::new(error.to_string()))?;
+        if actual != expected {
+            return Err(ProofError::new(
+                "proof application argument has an inconsistent sort",
+            ));
+        }
+        match expected {
+            Sort::Bool => Ok(ProofValue::Bool(self.convert(terms, term, names)?)),
+            Sort::BitVec(_) => Ok(ProofValue::BitVec(
+                terms
+                    .bitvec_bits(term)
+                    .map_err(|error| ProofError::new(error.to_string()))?
+                    .iter()
+                    .map(|&bit| self.convert(terms, bit, names))
+                    .collect::<Result<Vec<_>, _>>()?,
+            )),
+            Sort::Uninterpreted(_) => Ok(ProofValue::Abstract(
+                self.convert_abstract(terms, term, names)?,
+            )),
+            Sort::Int | Sort::Real | Sort::Array(_) => Err(ProofError::new(
+                "proof replay encountered an unsupported application sort",
+            )),
+        }
+    }
+
+    fn convert_application(
+        &mut self,
+        terms: &TermStore,
+        application_index: usize,
+        names: &ProofNames,
+    ) -> Result<ProofApplication, ProofError> {
+        if let Some(application) = self.application_converted.get(&application_index) {
+            return Ok(application.clone());
+        }
+        let application = terms
+            .applications()
+            .get(application_index)
+            .ok_or_else(|| ProofError::new("proof application index is invalid"))?;
+        let signature = terms
+            .function_signature(application.function)
+            .map_err(|error| ProofError::new(error.to_string()))?;
+        let function = names
+            .functions
+            .get(&application.function)
+            .ok_or_else(|| {
+                ProofError::new(format!(
+                    "proof application {:?} has no active function declaration",
+                    application.function
+                ))
+            })?
+            .clone();
+        let arguments = application
+            .arguments
+            .iter()
+            .zip(signature.domain.iter())
+            .map(|(&argument, &sort)| self.convert_value(terms, argument, sort, names))
+            .collect::<Result<Vec<_>, _>>()?;
+        let converted = ProofApplication {
+            function,
+            domain: signature
+                .domain
+                .iter()
+                .map(|&sort| self.proof_sort(sort, names))
+                .collect::<Result<Vec<_>, _>>()?,
+            range: self.proof_sort(signature.range, names)?,
+            arguments,
+        };
+        self.application_converted
+            .insert(application_index, converted.clone());
+        self.applications.insert(converted.clone());
+        if let ProofSort::Uninterpreted(sort) = &converted.range {
+            self.register_abstract(
+                sort,
+                AbstractExpr(Arc::new(AbstractNode::Application(converted.clone()))),
+            );
+        }
+        Ok(converted)
+    }
+
+    fn convert_abstract(
+        &mut self,
+        terms: &TermStore,
+        term: TermId,
+        names: &ProofNames,
+    ) -> Result<AbstractExpr, ProofError> {
+        if let Some(expression) = self.abstract_converted.get(&term) {
+            return Ok(expression.clone());
+        }
+        let sort = match self.proof_sort(
+            terms
+                .sort(term)
+                .map_err(|error| ProofError::new(error.to_string()))?,
+            names,
+        )? {
+            ProofSort::Uninterpreted(sort) => sort,
+            ProofSort::Bool | ProofSort::BitVec(_) => {
+                return Err(ProofError::new(
+                    "abstract proof term has a lowered Boolean sort",
+                ));
+            }
+        };
+        let expression = match terms.node(term).kind.clone() {
+            TermKind::UfConstant(_) => {
+                let name = names.constants.get(&term).ok_or_else(|| {
+                    ProofError::new("abstract proof constant has no active declaration")
+                })?;
+                AbstractExpr(Arc::new(AbstractNode::Constant {
+                    sort: sort.clone(),
+                    name: name.clone(),
+                }))
+            }
+            TermKind::UfApplication(_, _) => {
+                let application_index =
+                    self.application_results
+                        .get(&term)
+                        .copied()
+                        .ok_or_else(|| {
+                            ProofError::new("abstract proof application has no application record")
+                        })?;
+                AbstractExpr(Arc::new(AbstractNode::Application(
+                    self.convert_application(terms, application_index, names)?,
+                )))
+            }
+            TermKind::UfIte(condition, then_term, else_term) => {
+                let condition = self.convert(terms, condition, names)?;
+                let then_term = self.convert_abstract(terms, then_term, names)?;
+                let else_term = self.convert_abstract(terms, else_term, names)?;
+                AbstractExpr(Arc::new(AbstractNode::Ite {
+                    sort: sort.clone(),
+                    condition,
+                    then_term,
+                    else_term,
+                }))
+            }
+            _ => {
+                return Err(ProofError::new(
+                    "proof replay encountered a non-UF abstract term",
+                ));
+            }
+        };
+        self.register_abstract(&sort, expression.clone());
+        self.abstract_converted.insert(term, expression.clone());
+        Ok(expression)
+    }
+
+    fn proof_sort(&self, sort: Sort, names: &ProofNames) -> Result<ProofSort, ProofError> {
+        match sort {
+            Sort::Bool => Ok(ProofSort::Bool),
+            Sort::BitVec(width) => Ok(ProofSort::BitVec(width)),
+            Sort::Uninterpreted(sort) => names
+                .sorts
+                .get(&sort)
+                .cloned()
+                .map(ProofSort::Uninterpreted)
+                .ok_or_else(|| {
+                    ProofError::new(format!(
+                        "uninterpreted proof sort {} has no active declaration",
+                        sort.index()
+                    ))
+                }),
+            Sort::Int | Sort::Real | Sort::Array(_) => Err(ProofError::new(
+                "proof replay encountered an unsupported sort",
+            )),
+        }
+    }
+
+    fn register_abstract(&mut self, sort: &str, expression: AbstractExpr) {
+        // A ground EUF model needs at most one class per constant/application
+        // term. An ite denotes one of its branches, so counting it as another
+        // possible class would only widen the encoding without adding models.
+        if matches!(
+            expression.node(),
+            AbstractNode::Constant { .. } | AbstractNode::Application(_)
+        ) {
+            self.abstract_terms
+                .entry(sort.to_owned())
+                .or_default()
+                .insert(expression);
+        }
+    }
+
+    fn lower(&mut self, expression: &BoolExpr) -> Result<BoolExpr, ProofError> {
+        if let Some(lowered) = self.lowered.get(expression) {
+            return Ok(lowered.clone());
+        }
+        let lowered = match expression.node() {
+            BoolNode::False | BoolNode::True | BoolNode::Atom(_) => expression.clone(),
+            BoolNode::Not(inner) => {
+                let inner = self.lower(inner)?;
+                self.not(inner)
+            }
+            BoolNode::And(items) => {
+                let items = items
+                    .iter()
+                    .map(|item| self.lower(item))
+                    .collect::<Result<Vec<_>, _>>()?;
+                self.junction(items, true)
+            }
+            BoolNode::Or(items) => {
+                let items = items
+                    .iter()
+                    .map(|item| self.lower(item))
+                    .collect::<Result<Vec<_>, _>>()?;
+                self.junction(items, false)
+            }
+            BoolNode::Xor(left, right) => {
+                let left = self.lower(left)?;
+                let right = self.lower(right)?;
+                self.xor(left, right)
+            }
+            BoolNode::Iff(left, right) => {
+                let left = self.lower(left)?;
+                let right = self.lower(right)?;
+                self.iff(left, right)
+            }
+            BoolNode::Ite(condition, then_term, else_term) => {
+                let condition = self.lower(condition)?;
+                let then_term = self.lower(then_term)?;
+                let else_term = self.lower(else_term)?;
+                self.ite(condition, then_term, else_term)
+            }
+            BoolNode::TheoryEquality(left, right) => self.abstract_equal(left, right)?,
+        };
+        self.lowered.insert(expression.clone(), lowered.clone());
+        Ok(lowered)
+    }
+
+    fn abstract_bits(&mut self, expression: &AbstractExpr) -> Result<Vec<BoolExpr>, ProofError> {
+        if let Some(bits) = self.lowered_abstract.get(expression) {
+            return Ok(bits.clone());
+        }
+        let (sort, bits) = match expression.node() {
+            AbstractNode::Constant { sort, .. }
+            | AbstractNode::Application(ProofApplication {
+                range: ProofSort::Uninterpreted(sort),
+                ..
+            }) => {
+                let width = self.class_width(sort)?;
+                let bits = (0..width)
+                    .map(|index| {
+                        let index = u32::try_from(index)
+                            .map_err(|_| ProofError::new("proof class encoding is too wide"))?;
+                        Ok(self.intern(BoolNode::Atom(ProofAtom::ClassBit {
+                            sort: sort.clone(),
+                            term: expression.clone(),
+                            index,
+                        })))
+                    })
+                    .collect::<Result<Vec<_>, ProofError>>()?;
+                (sort.clone(), bits)
+            }
+            AbstractNode::Application(_) => {
+                return Err(ProofError::new(
+                    "abstract proof application has a non-abstract result",
+                ));
+            }
+            AbstractNode::Ite {
+                sort,
+                condition,
+                then_term,
+                else_term,
+            } => {
+                let condition = self.lower(condition)?;
+                let then_bits = self.abstract_bits(then_term)?;
+                let else_bits = self.abstract_bits(else_term)?;
+                if then_bits.len() != else_bits.len() {
+                    return Err(ProofError::new(
+                        "abstract ite branches have inconsistent class encodings",
+                    ));
+                }
+                let bits = then_bits
+                    .into_iter()
+                    .zip(else_bits)
+                    .map(|(then_bit, else_bit)| self.ite(condition.clone(), then_bit, else_bit))
+                    .collect();
+                (sort.clone(), bits)
+            }
+        };
+        if abstract_sort(expression) != sort {
+            return Err(ProofError::new(
+                "abstract term and class encoding sorts disagree",
+            ));
+        }
+        self.lowered_abstract
+            .insert(expression.clone(), bits.clone());
+        Ok(bits)
+    }
+
+    fn class_width(&self, sort: &str) -> Result<usize, ProofError> {
+        let count = self
+            .abstract_terms
+            .get(sort)
+            .map(BTreeSet::len)
+            .unwrap_or(0);
+        if count == 0 {
+            return Err(ProofError::new(
+                "abstract proof sort has no canonical ground terms",
+            ));
+        }
+        // ceil(log2(count)) bits can name every equivalence class in the
+        // finite projection of any model onto these ground terms.
+        let width = usize::BITS - (count.saturating_sub(1)).leading_zeros();
+        Ok(usize::try_from(width.max(1)).expect("usize bit width always fits in usize"))
+    }
+
+    fn abstract_equal(
+        &mut self,
+        left: &AbstractExpr,
+        right: &AbstractExpr,
+    ) -> Result<BoolExpr, ProofError> {
+        if abstract_sort(left) != abstract_sort(right) {
+            return Err(ProofError::new(
+                "abstract equality operands have different sorts",
+            ));
+        }
+        let left_bits = self.abstract_bits(left)?;
+        let right_bits = self.abstract_bits(right)?;
+        let equalities = left_bits
+            .into_iter()
+            .zip(right_bits)
+            .map(|(left, right)| self.iff(left, right))
+            .collect();
+        Ok(self.junction(equalities, true))
+    }
+
+    fn value_equal(
+        &mut self,
+        left: &ProofValue,
+        right: &ProofValue,
+    ) -> Result<BoolExpr, ProofError> {
+        match (left, right) {
+            (ProofValue::Bool(left), ProofValue::Bool(right)) => {
+                let left = self.lower(left)?;
+                let right = self.lower(right)?;
+                Ok(self.iff(left, right))
+            }
+            (ProofValue::BitVec(left), ProofValue::BitVec(right)) => {
+                if left.len() != right.len() {
+                    return Err(ProofError::new(
+                        "bit-vector proof values have different widths",
+                    ));
+                }
+                let mut equalities = Vec::with_capacity(left.len());
+                for (left, right) in left.iter().zip(right) {
+                    let left = self.lower(left)?;
+                    let right = self.lower(right)?;
+                    equalities.push(self.iff(left, right));
+                }
+                Ok(self.junction(equalities, true))
+            }
+            (ProofValue::Abstract(left), ProofValue::Abstract(right)) => {
+                self.abstract_equal(left, right)
+            }
+            _ => Err(ProofError::new(
+                "proof values with different sorts were compared",
+            )),
+        }
+    }
+
+    fn application_result(
+        &mut self,
+        application: &ProofApplication,
+    ) -> Result<ProofValue, ProofError> {
+        match &application.range {
+            ProofSort::Bool => Ok(ProofValue::Bool(self.intern(BoolNode::Atom(
+                ProofAtom::ApplicationBit {
+                    application: application.clone(),
+                    index: 0,
+                },
+            )))),
+            ProofSort::BitVec(width) => Ok(ProofValue::BitVec(
+                (0..*width)
+                    .map(|index| {
+                        self.intern(BoolNode::Atom(ProofAtom::ApplicationBit {
+                            application: application.clone(),
+                            index,
+                        }))
+                    })
+                    .collect(),
+            )),
+            ProofSort::Uninterpreted(sort) => {
+                let expression =
+                    AbstractExpr(Arc::new(AbstractNode::Application(application.clone())));
+                self.register_abstract(sort, expression.clone());
+                Ok(ProofValue::Abstract(expression))
+            }
+        }
+    }
+
+    fn congruence_axioms(&mut self) -> Result<Vec<BoolExpr>, ProofError> {
+        let applications = self.applications.iter().cloned().collect::<Vec<_>>();
+        let mut axioms = BTreeSet::new();
+        // This is ground Ackermannization: equal argument tuples must have
+        // equal results. Class bits already supply reflexive, symmetric, and
+        // transitive equality, so no separate cubic equality axioms are
+        // needed.
+        for (left_index, left) in applications.iter().enumerate() {
+            for right in &applications[left_index + 1..] {
+                if left.function != right.function {
+                    continue;
+                }
+                if left.domain != right.domain || left.range != right.range {
+                    return Err(ProofError::new(
+                        "proof function name has inconsistent signatures",
+                    ));
+                }
+                let argument_equalities = left
+                    .arguments
+                    .iter()
+                    .zip(&right.arguments)
+                    .map(|(left, right)| self.value_equal(left, right))
+                    .collect::<Result<Vec<_>, _>>()?;
+                let arguments_equal = self.junction(argument_equalities, true);
+                let left_result = self.application_result(left)?;
+                let right_result = self.application_result(right)?;
+                let results_equal = self.value_equal(&left_result, &right_result)?;
+                let not_arguments_equal = self.not(arguments_equal);
+                axioms.insert(self.junction(vec![not_arguments_equal, results_equal], false));
+            }
+        }
+        Ok(axioms.into_iter().collect())
     }
 
     fn intern(&mut self, node: BoolNode) -> BoolExpr {
@@ -413,6 +1024,26 @@ fn ordered_pair(left: BoolExpr, right: BoolExpr) -> (BoolExpr, BoolExpr) {
     }
 }
 
+fn abstract_sort(expression: &AbstractExpr) -> &str {
+    match expression.node() {
+        AbstractNode::Constant { sort, .. } | AbstractNode::Ite { sort, .. } => sort,
+        AbstractNode::Application(application) => match &application.range {
+            ProofSort::Uninterpreted(sort) => sort,
+            ProofSort::Bool | ProofSort::BitVec(_) => {
+                unreachable!("abstract applications have uninterpreted range")
+            }
+        },
+    }
+}
+
+fn ordered_abstract_pair(left: AbstractExpr, right: AbstractExpr) -> (AbstractExpr, AbstractExpr) {
+    if left <= right {
+        (left, right)
+    } else {
+        (right, left)
+    }
+}
+
 #[derive(Debug, Default)]
 struct ProofEncoder {
     literals: HashMap<BoolExpr, Lit>,
@@ -506,6 +1137,11 @@ impl ProofEncoder {
                 }
                 output
             }
+            BoolNode::TheoryEquality(_, _) => {
+                return Err(ProofError::new(
+                    "unlowered theory equality reached the proof encoder",
+                ));
+            }
         };
         self.literals.insert(expression.clone(), literal);
         Ok(literal)
@@ -578,10 +1214,12 @@ mod tests {
         let either = terms.or(&[a, b]).unwrap();
         let not_a = terms.not(a).unwrap();
         let not_b = terms.not(b).unwrap();
-        let names = HashMap::from([(a_symbol, "a".to_owned()), (b_symbol, "b".to_owned())]);
+        let mut names = ProofNames::default();
+        names.insert_bool(a_symbol, "a".to_owned());
+        names.insert_bool(b_symbol, "b".to_owned());
 
         let proof = prove_boolean_unsat(
-            ProofLogic::QfBool,
+            ProofLogic::Bool,
             &terms,
             &[either, not_a, not_b],
             &[
@@ -589,10 +1227,7 @@ mod tests {
                 "(not a)".to_owned(),
                 "(not b)".to_owned(),
             ],
-            &names
-                .into_iter()
-                .map(|(symbol, name)| (symbol, ProofAtom::Bool(name)))
-                .collect(),
+            &names,
         )
         .unwrap();
 
@@ -624,9 +1259,11 @@ mod tests {
             let either = terms.or(&[b, a]).unwrap();
             let not_a = terms.not(a).unwrap();
             let not_b = terms.not(b).unwrap();
-            let names = HashMap::from([(a_symbol, "a".to_owned()), (b_symbol, "b".to_owned())]);
+            let mut names = ProofNames::default();
+            names.insert_bool(a_symbol, "a".to_owned());
+            names.insert_bool(b_symbol, "b".to_owned());
             prove_boolean_unsat(
-                ProofLogic::QfBool,
+                ProofLogic::Bool,
                 &terms,
                 &[either, not_a, not_b],
                 &[
@@ -634,10 +1271,7 @@ mod tests {
                     "(not a)".to_owned(),
                     "(not b)".to_owned(),
                 ],
-                &names
-                    .into_iter()
-                    .map(|(symbol, name)| (symbol, ProofAtom::Bool(name)))
-                    .collect(),
+                &names,
             )
             .unwrap()
         }

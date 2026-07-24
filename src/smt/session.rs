@@ -12,7 +12,7 @@ use crate::{Lit, Model, SolveLimits, Solver, UnknownReason};
 use super::arithmetic::rational_from_decimal;
 use super::encode::BoolEncoder;
 use super::engine::{SmtSolveResult, solve as solve_smt};
-use super::proof::{BooleanRefutation, ProofAtom, ProofLogic, prove_boolean_unsat};
+use super::proof::{BooleanRefutation, ProofLogic, ProofNames, prove_boolean_unsat};
 use super::sexpr::{Reader, SExpr};
 use super::term::{
     ArraySortId, FunctionId, Sort, SymbolId, TermId, TermKind, TermStore, UninterpretedSortId,
@@ -710,14 +710,14 @@ impl Session {
             }
             SmtSolveResult::Unsat => {
                 let proof = if let Some(premises) = proof_premises.as_deref() {
-                    let atom_names = self.active_proof_atom_names()?;
+                    let names = self.active_proof_names()?;
                     Some(
                         prove_boolean_unsat(
                             proof_logic.expect("proof premises require a proof logic"),
                             &self.terms,
                             &roots,
                             premises,
-                            &atom_names,
+                            &names,
                         )
                         .map_err(CommandError::from)?,
                     )
@@ -2043,12 +2043,12 @@ impl Session {
         }
     }
 
-    fn active_proof_atom_names(&self) -> Result<HashMap<SymbolId, ProofAtom>, CommandError> {
-        let mut names = HashMap::new();
+    fn active_proof_names(&self) -> Result<ProofNames, CommandError> {
+        let mut names = ProofNames::default();
         for declaration in self.active_declarations() {
             match &self.terms.node(declaration.term).kind {
                 TermKind::Atom(symbol) => {
-                    names.insert(*symbol, ProofAtom::Bool(declaration.name.clone()));
+                    names.insert_bool(*symbol, declaration.name.clone());
                 }
                 TermKind::BitVec(bits) => {
                     for (index, &bit) in bits.iter().enumerate() {
@@ -2064,22 +2064,25 @@ impl Session {
                                 declaration.name
                             ))
                         })?;
-                        names.insert(
-                            symbol,
-                            ProofAtom::BitVecBit {
-                                name: declaration.name.clone(),
-                                index,
-                            },
-                        );
+                        names.insert_bit(symbol, declaration.name.clone(), index);
                     }
+                }
+                TermKind::UfConstant(_) => {
+                    names.insert_constant(declaration.term, declaration.name.clone());
                 }
                 _ => {
                     return Err(CommandError::message(format!(
-                        "proof declaration `{}` is neither Boolean nor bit-vector",
+                        "proof declaration `{}` has an unsupported sort",
                         declaration.name
                     )));
                 }
             }
+        }
+        for declaration in self.active_function_declarations() {
+            names.insert_function(declaration.function, declaration.name.clone());
+        }
+        for (&sort, name) in &self.sort_names {
+            names.insert_sort(sort, name.clone());
         }
         Ok(names)
     }
@@ -2559,10 +2562,10 @@ mod tests {
     }
 
     #[test]
-    fn proof_mode_rejects_theory_logics_until_theory_certificates_exist() {
+    fn proof_mode_rejects_uncertified_theory_logics() {
         let output = execute(
             "(set-option :produce-proofs true)
-             (set-logic QF_UF)
+             (set-logic QF_ABV)
              (set-logic QF_BOOL)
              (check-sat)
              (get-proof)",
@@ -2572,6 +2575,75 @@ mod tests {
             "unsupported\nsat\n\
              (error \"get-proof requires a preceding unsat result\")\n"
         );
+    }
+
+    #[test]
+    fn qf_uf_proofs_include_canonical_congruence_axioms() {
+        let output = execute(
+            "(set-option :produce-proofs true)
+             (set-logic QF_UF)
+             (declare-sort U 0)
+             (declare-const a U)
+             (declare-const b U)
+             (declare-fun f (U) U)
+             (assert (= a b))
+             (assert (distinct (f a) (f b)))
+             (check-sat)
+             (get-proof)",
+        );
+        assert!(output.starts_with("unsat\n(satrap-edrat :version 1 :logic QF_UF"));
+        assert!(output.contains(":premises (\"(= a b)\" \"(distinct (f a) (f b))\")"));
+        assert!(output.contains("(theory "));
+        assert!(output.ends_with("0\n\")\n"));
+    }
+
+    #[test]
+    fn qf_uf_proofs_ignore_unrelated_internal_allocation_history() {
+        let query = "
+             (declare-sort U 0)
+             (declare-const a U)
+             (declare-const b U)
+             (declare-fun f (U) U)
+             (assert (= a b))
+             (assert (distinct (f a) (f b)))
+             (check-sat)
+             (get-proof)";
+        let baseline = execute(&format!(
+            "(set-option :produce-proofs true)
+             (set-logic QF_UF)
+             {query}"
+        ));
+        let shifted = execute(&format!(
+            "(set-option :produce-proofs true)
+             (set-logic QF_UF)
+             (declare-sort Unused 0)
+             (declare-const unused Unused)
+             (declare-fun unused-function (Unused) Unused)
+             {query}"
+        ));
+        assert_eq!(baseline, shifted);
+    }
+
+    #[test]
+    fn qf_ufbv_proofs_combine_congruence_with_named_bits() {
+        let output = execute(
+            "(set-option :produce-proofs true)
+             (set-logic QF_UFBV)
+             (declare-sort U 0)
+             (declare-const a U)
+             (declare-const b U)
+             (declare-const x (_ BitVec 2))
+             (declare-const y (_ BitVec 2))
+             (declare-fun f (U (_ BitVec 2)) (_ BitVec 2))
+             (assert (= a b))
+             (assert (= x y))
+             (assert (distinct (f a x) (f b y)))
+             (check-sat)
+             (get-proof)",
+        );
+        assert!(output.starts_with("unsat\n(satrap-edrat :version 1 :logic QF_UFBV"));
+        assert!(output.contains("(theory "));
+        assert!(output.ends_with("0\n\")\n"));
     }
 
     #[test]

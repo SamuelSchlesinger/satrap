@@ -22,8 +22,8 @@ claim.
 
 | Gate | Command | Purpose |
 | --- | --- | --- |
-| Commit | `make check-fast` | Formatting, compilation, shell syntax, and repository hygiene |
-| Quality | `make quality` | Strict Clippy, rustdoc, ShellCheck, Actionlint, lockfile, and structural checks |
+| Commit | `make check-fast` | Rust/Python formatting and lint, compilation, shell syntax, and repository hygiene |
+| Quality | `make quality` | Strict Clippy, rustdoc, Ruff, ShellCheck, Actionlint, lockfile, and structural checks |
 | Fuzz | `make check-fuzz` | Locked format/Clippy/sanitizer build plus bounded parser, incremental SMT, and SAT proof campaigns |
 | Proof | `make check-proofs` | Release SAT certificates checked by pinned DRAT-trim across every proof-sensitive mode |
 | Integration | `make check` | Quality plus required three-oracle differential/model checks, Rust/Python tests, fuzz smoke, proof-checked benchmark smoke, and a release build |
@@ -36,21 +36,28 @@ CI independently calls the same integration and compatibility scripts and
 runs the RustSec audit on every push and pull request, plus weekly, so a newly
 published advisory is caught even when the repository is unchanged.
 
-The pre-push gate requires `cargo-audit`, ShellCheck, Actionlint, Z3 4.16.0,
-cvc5 1.3.3, Bitwuzla 0.9.1, nightly-2026-06-01, cargo-fuzz 0.13.2, and
-DRAT-trim commit `2e5e29cb0019d5cfd547d4208dca1b3ec290349f`. The three SMT
-oracles, all three fuzz targets, and the independent SAT proof checks are
-mandatory here even though a direct `cargo test` does not require them:
-neither the local integration gate nor hosted CI may silently lose one.
-Install the tools with:
+The pre-push gate requires `cargo-audit`, ShellCheck, Actionlint, Ruff 0.15.22,
+Z3 4.16.0, cvc5 1.3.3, Bitwuzla 0.9.1, nightly-2026-06-01, cargo-fuzz 0.13.2,
+and DRAT-trim commit `2e5e29cb0019d5cfd547d4208dca1b3ec290349f`.
+The Python lint/format checks, three SMT oracles, all three fuzz targets, and
+the independent SAT proof checks are mandatory here even though a direct
+`cargo test` does not require them: neither the local integration gate nor
+hosted CI may silently lose one. Install the tools with:
 
 ```sh
 cargo install cargo-audit --version 0.22.2 --locked
 brew install actionlint shellcheck  # macOS; use your package manager elsewhere
+make install-python-tools
 make install-oracles
 make install-fuzz-tools
 make install-proof-checkers
 ```
+
+`make install-python-tools` creates an ignored repository-local virtual
+environment and installs Ruff from a platform wheel whose version and SHA-256
+digest are checked in. Both the fast commit gate and full quality gate require
+that exact version, run the selected correctness-oriented lint families, and
+verify canonical formatting across every Python tool and test.
 
 `make install-oracles` downloads official release archives into the ignored
 `.cache/smt-oracles` directory and verifies every SHA-256 digest before making
@@ -79,10 +86,11 @@ suite and a claim-bearing benchmark campaign are documented in
 `tools/check_hygiene.py` enforces the small but easy-to-forget invariants:
 UTF-8/LF text, final newlines, no trailing whitespace, valid local Markdown
 links, executable scripts, synchronized MSRV/oracle/fuzz-tool declarations, and
-identical top-level CI/pre-push entrypoints. It also verifies that the
-integration script still includes the quality and fuzz gates, all three oracle
-version checks, every fuzz target, the proof-checked benchmark smoke, and that
-the security workflow remains wired to RustSec.
+synchronized Ruff declarations. It verifies identical top-level CI/pre-push
+entrypoints and that the integration script still includes the quality and
+fuzz gates, all three oracle version checks, every fuzz target, the
+proof-checked benchmark smoke, and that the security workflow remains wired to
+RustSec.
 
 The ordinary gate deliberately does not enable every `clippy::pedantic` or
 `clippy::nursery` lint. Solver code contains exact numeric conversions,

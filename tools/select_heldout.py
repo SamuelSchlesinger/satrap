@@ -11,7 +11,6 @@ import sys
 from collections import Counter
 from pathlib import Path
 
-
 DEFAULT_SEED = "sat-rs-main-2025-heldout-v1"
 
 

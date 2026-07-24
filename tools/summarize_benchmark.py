@@ -8,9 +8,8 @@ import collections
 import json
 import math
 import statistics
+from collections.abc import Iterable
 from pathlib import Path
-from typing import Iterable
-
 
 SOLVED = {"SAT", "UNSAT"}
 
@@ -27,12 +26,8 @@ def variable_count(path: Path) -> int:
     raise ValueError(f"{path}: missing p cnf header")
 
 
-def median_record(
-    rows: list[dict[str, object]], timeout_seconds: float
-) -> dict[str, object]:
-    completed_statuses = {
-        str(row["status"]) for row in rows if str(row["status"]) in SOLVED
-    }
+def median_record(rows: list[dict[str, object]], timeout_seconds: float) -> dict[str, object]:
+    completed_statuses = {str(row["status"]) for row in rows if str(row["status"]) in SOLVED}
     if len(completed_statuses) > 1:
         raise ValueError(f"contradictory completed statuses: {completed_statuses}")
     completed = sum(str(row["status"]) in SOLVED for row in rows)
@@ -43,9 +38,7 @@ def median_record(
         else "TIMEOUT"
     )
     effective = [
-        float(row["wall_seconds"])
-        if str(row["status"]) in SOLVED
-        else 2.0 * timeout_seconds
+        float(row["wall_seconds"]) if str(row["status"]) in SOLVED else 2.0 * timeout_seconds
         for row in rows
     ]
     return {
@@ -71,9 +64,7 @@ def summarize(
     left: str,
     right: str,
 ) -> dict[str, object]:
-    grouped: dict[tuple[str, str], list[dict[str, object]]] = collections.defaultdict(
-        list
-    )
+    grouped: dict[tuple[str, str], list[dict[str, object]]] = collections.defaultdict(list)
     for row in rows:
         grouped[(str(row["solver"]), str(row["instance"]))].append(row)
 
@@ -103,9 +94,7 @@ def summarize(
     def solver_summary(solver: str, subset: list[str]) -> dict[str, object]:
         subset_records = [records[solver][instance] for instance in subset]
         statuses = collections.Counter(str(record["status"]) for record in subset_records)
-        effective = [
-            float(record["median_effective_seconds"]) for record in subset_records
-        ]
+        effective = [float(record["median_effective_seconds"]) for record in subset_records]
         return {
             "instances": len(subset),
             "solved": sum(statuses[status] for status in SOLVED),
@@ -123,10 +112,7 @@ def summarize(
         jointly_solved = [
             instance
             for instance in subset
-            if all(
-                str(records[solver][instance]["status"]) in SOLVED
-                for solver in (left, right)
-            )
+            if all(str(records[solver][instance]["status"]) in SOLVED for solver in (left, right))
         ]
         by_size[str(size)] = {
             left: solver_summary(left, subset),
@@ -145,10 +131,7 @@ def summarize(
     jointly_solved = [
         instance
         for instance in instances
-        if all(
-            str(records[solver][instance]["status"]) in SOLVED
-            for solver in (left, right)
-        )
+        if all(str(records[solver][instance]["status"]) in SOLVED for solver in (left, right))
     ]
     left_only = [
         instance
@@ -172,9 +155,7 @@ def summarize(
     practical = {
         f"{left}_wins": sum(ratio > 1.1 for ratio in ratios.values()),
         f"{right}_wins": sum(ratio < 1.0 / 1.1 for ratio in ratios.values()),
-        "within_ten_percent": sum(
-            1.0 / 1.1 <= ratio <= 1.1 for ratio in ratios.values()
-        ),
+        "within_ten_percent": sum(1.0 / 1.1 <= ratio <= 1.1 for ratio in ratios.values()),
     }
 
     return {
@@ -187,9 +168,7 @@ def summarize(
         f"{left}_only": left_only,
         f"{right}_only": right_only,
         "practical_joint_wins": practical,
-        f"{right}_over_{left}_median_speed_ratio_geomean": geometric_mean(
-            ratios.values()
-        ),
+        f"{right}_over_{left}_median_speed_ratio_geomean": geometric_mean(ratios.values()),
         "by_size": by_size,
         "per_instance": {
             instance: {
@@ -217,8 +196,7 @@ def main() -> int:
     arguments = parse_arguments()
     try:
         rows = [
-            json.loads(line)
-            for line in arguments.input.read_text(encoding="utf-8").splitlines()
+            json.loads(line) for line in arguments.input.read_text(encoding="utf-8").splitlines()
         ]
         summary = summarize(rows, arguments.timeout, arguments.left, arguments.right)
         rendered = json.dumps(summary, indent=2, sort_keys=True) + "\n"

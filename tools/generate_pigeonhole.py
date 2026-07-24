@@ -18,9 +18,7 @@ def clauses(pigeons: int, holes: int) -> list[list[int]]:
         result.append([variable(pigeon, hole) for hole in range(holes)])
         for left in range(holes):
             for right in range(left + 1, holes):
-                result.append(
-                    [-variable(pigeon, left), -variable(pigeon, right)]
-                )
+                result.append([-variable(pigeon, left), -variable(pigeon, right)])
     for hole in range(holes):
         for first in range(pigeons):
             for second in range(first + 1, pigeons):

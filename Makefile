@@ -1,4 +1,4 @@
-.PHONY: audit check check-fast check-fuzz check-msrv check-proofs install-fuzz-tools install-hooks install-oracles install-proof-checkers profiling proof-smoke quality release smoke test
+.PHONY: audit check check-fast check-fuzz check-msrv check-proofs check-python install-fuzz-tools install-hooks install-oracles install-proof-checkers install-python-tools profiling proof-smoke quality release smoke test
 
 PYTHON ?= python3
 PROOF_CHECKER_CACHE ?= .cache/proof-checkers
@@ -22,6 +22,9 @@ check-msrv:
 check-proofs:
 	./scripts/check-proofs.sh
 
+check-python:
+	./scripts/check-python.sh
+
 audit:
 	./scripts/check-security.sh
 
@@ -36,6 +39,9 @@ install-oracles:
 
 install-proof-checkers:
 	./scripts/install-proof-checkers.sh
+
+install-python-tools:
+	./scripts/install-python-tools.sh
 
 test:
 	cargo test --all-targets --locked

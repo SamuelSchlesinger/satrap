@@ -19,8 +19,9 @@ import sys
 import tempfile
 import time
 from collections import Counter, defaultdict
+from collections.abc import Iterable
 from pathlib import Path
-from typing import IO, Iterable
+from typing import IO
 
 
 @dataclasses.dataclass(frozen=True)
@@ -111,9 +112,7 @@ def parse_arguments() -> argparse.Namespace:
 def parse_named_command(value: str, kind: str) -> tuple[str, tuple[str, ...]]:
     name, separator, command_text = value.partition("=")
     if not separator or not name.strip() or not command_text.strip():
-        raise ValueError(
-            f"invalid {kind} specification {value!r}; expected NAME=COMMAND"
-        )
+        raise ValueError(f"invalid {kind} specification {value!r}; expected NAME=COMMAND")
     command = tuple(shlex.split(command_text))
     if not command:
         raise ValueError(f"{kind} {name!r} has an empty command")
@@ -136,9 +135,7 @@ def parse_solver(value: str) -> SolverSpec:
     )
 
 
-def attach_proof_checkers(
-    solvers: list[SolverSpec], values: list[str]
-) -> list[SolverSpec]:
+def attach_proof_checkers(solvers: list[SolverSpec], values: list[str]) -> list[SolverSpec]:
     checkers: dict[str, ProofCheckerSpec] = {}
     solver_names = {solver.name for solver in solvers}
     for value in values:
@@ -164,8 +161,7 @@ def attach_proof_checkers(
             )
         if checker is None and has_proof_path:
             raise ValueError(
-                f"solver {solver.name!r} has a {{proof}} placeholder "
-                "but no proof checker"
+                f"solver {solver.name!r} has a {{proof}} placeholder but no proof checker"
             )
         result.append(dataclasses.replace(solver, proof_checker=checker))
     return result
@@ -239,9 +235,7 @@ def unchecked_proof_metadata(
     metadata = proof_artifact_metadata(proof_path, retained)
     metadata.update(
         {
-            "checker_command": render_command(
-                checker.command, formula.path, proof_path
-            ),
+            "checker_command": render_command(checker.command, formula.path, proof_path),
             "checker_binary_sha256": checker.binary_sha256,
             "checker_status": "not-run",
             "checker_timeout_seconds": None,
@@ -267,9 +261,7 @@ def validate_unsat_proof(
     command = render_command(checker.command, formula.path, proof_path)
     before = proof_artifact_metadata(proof_path, retained)
     if not before["present"]:
-        metadata = unchecked_proof_metadata(
-            checker, formula, proof_path, retained
-        )
+        metadata = unchecked_proof_metadata(checker, formula, proof_path, retained)
         metadata["checker_status"] = "missing-proof"
         metadata["checker_timeout_seconds"] = timeout
         return "invalid: missing proof artifact", metadata
@@ -279,8 +271,7 @@ def validate_unsat_proof(
         completed = subprocess.run(
             command,
             stdin=subprocess.DEVNULL,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            capture_output=True,
             text=True,
             errors="replace",
             timeout=timeout,
@@ -376,8 +367,7 @@ def run_solver(
         completed = subprocess.run(
             command,
             stdin=subprocess.DEVNULL,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            capture_output=True,
             text=True,
             errors="replace",
             timeout=timeout,
@@ -566,10 +556,7 @@ def validate_model(formula: Formula, stdout: str) -> str:
     if clause_open:
         return "invalid: unterminated final clause"
     if clause_count != formula.clause_count:
-        return (
-            f"invalid: header declares {formula.clause_count} clauses, "
-            f"found {clause_count}"
-        )
+        return f"invalid: header declares {formula.clause_count} clauses, found {clause_count}"
     return "valid"
 
 
@@ -663,11 +650,7 @@ def summarize(
             failed_validation = True
         if status == "UNSAT" and validation.startswith("invalid:"):
             failed_proof = True
-        if (
-            status == "UNSAT"
-            and require_unsat_proofs
-            and validation != "valid"
-        ):
+        if status == "UNSAT" and require_unsat_proofs and validation != "valid":
             failed_proof = True
         if status == "INVALID":
             invalid_execution = True
@@ -688,10 +671,7 @@ def summarize(
     if invalid_execution:
         print("one or more solver executions had invalid status or exit behavior", file=sys.stderr)
     return (
-        not disagreements
-        and not failed_validation
-        and not failed_proof
-        and not invalid_execution
+        not disagreements and not failed_validation and not failed_proof and not invalid_execution
     )
 
 
@@ -707,9 +687,7 @@ def main() -> int:
         instances = collect_instances(arguments.instances)
         formulas = {instance: parse_formula(instance) for instance in instances}
         if arguments.output != "-" and Path(arguments.output).exists():
-            raise ValueError(
-                f"refusing to overwrite existing output: {arguments.output}"
-            )
+            raise ValueError(f"refusing to overwrite existing output: {arguments.output}")
 
         proof_enabled = any(solver.proof_checker is not None for solver in solvers)
         if arguments.artifacts is not None and not proof_enabled:
@@ -722,15 +700,11 @@ def main() -> int:
                 artifact_root = Path(f"{arguments.output}.artifacts").resolve()
                 retain_artifacts = True
             else:
-                temporary_artifacts = tempfile.TemporaryDirectory(
-                    prefix="sat-benchmark-proofs-"
-                )
+                temporary_artifacts = tempfile.TemporaryDirectory(prefix="sat-benchmark-proofs-")
                 artifact_root = Path(temporary_artifacts.name)
                 retain_artifacts = False
             if artifact_root.exists() and retain_artifacts:
-                raise ValueError(
-                    f"refusing to overwrite artifact directory: {artifact_root}"
-                )
+                raise ValueError(f"refusing to overwrite artifact directory: {artifact_root}")
             artifact_root.mkdir(parents=True, exist_ok=not retain_artifacts)
             if retain_artifacts:
                 created_artifact_root = artifact_root

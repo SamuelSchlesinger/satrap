@@ -25,4 +25,5 @@ RUSTDOCFLAGS="-D warnings" cargo doc \
 sh -n scripts/*.sh .githooks/*
 shellcheck scripts/*.sh .githooks/*
 actionlint .github/workflows/*.yml
+"$repo_root/scripts/check-python.sh"
 "${PYTHON:-python3}" tools/check_hygiene.py

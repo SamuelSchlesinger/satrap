@@ -86,38 +86,36 @@ class HygieneChecksTests(unittest.TestCase):
             ),
             ".github/workflows/ci.yml": (
                 "actions/checkout@v6\nscripts/install-fuzz-tools.sh\n"
+                "scripts/install-python-tools.sh\n"
                 "scripts/install-smt-oracles.sh\nscripts/install-proof-checkers.sh\n"
                 "scripts/ci.sh\nscripts/check-msrv.sh\n"
             ),
-            ".github/workflows/security.yml": (
-                "actions/checkout@v6\nscripts/check-security.sh\n"
-            ),
+            ".github/workflows/security.yml": ("actions/checkout@v6\nscripts/check-security.sh\n"),
             "scripts/ci.sh": (
                 "scripts/quality.sh\nscripts/check-fuzz.sh\nscripts/check-proofs.sh\n"
                 "make smoke\nz3 --version\ncvc5 --version\n"
                 "bitwuzla --version\n"
             ),
             "scripts/check-fuzz.sh": (
-                "--locked\nclippy\nsmt_session_bytes\n"
-                "smt_structured_session\nsat_proof\n"
+                "--locked\nclippy\nsmt_session_bytes\nsmt_structured_session\nsat_proof\n"
             ),
-            "scripts/install-smt-oracles.sh": (
-                "Z3Prover/z3\ncvc5/cvc5\nbitwuzla/bitwuzla\n"
-            ),
+            "scripts/install-smt-oracles.sh": ("Z3Prover/z3\ncvc5/cvc5\nbitwuzla/bitwuzla\n"),
             "scripts/install-fuzz-tools.sh": (
                 "--component clippy\n--component rust-src\n--component rustfmt\n"
             ),
-            "scripts/install-proof-checkers.sh": (
-                "marijnheule/drat-trim\ndrat_trim_sha256\n"
-            ),
+            "scripts/install-python-tools.sh": "--require-hashes\nruff-requirements.txt\n",
+            "scripts/install-proof-checkers.sh": ("marijnheule/drat-trim\ndrat_trim_sha256\n"),
             "scripts/check-proofs.sh": (
                 "tools/proof_smoke.py\n--probe\n--vivify\n--subsume\n"
                 "--binary-minimize\n--eliminate\n--factor\n--factor-macro\n"
             ),
-            "scripts/quality.sh": "shellcheck\nactionlint\ntools/check_hygiene.py\n",
+            "scripts/check-python.sh": "ruff check\nruff format --check\n",
+            "scripts/check-fast.sh": "scripts/check-python.sh\n",
+            "scripts/quality.sh": (
+                "shellcheck\nactionlint\nscripts/check-python.sh\ntools/check_hygiene.py\n"
+            ),
             "Makefile": (
-                "tools/benchmark.py\n--proof {proof}\n"
-                "--proof-checker\n--require-unsat-proofs\n"
+                "tools/benchmark.py\n--proof {proof}\n--proof-checker\n--require-unsat-proofs\n"
             ),
         }
         with directory, patch.object(check_hygiene, "ROOT", root):
@@ -152,13 +150,11 @@ class HygieneChecksTests(unittest.TestCase):
             installer = root / "scripts/install-proof-checkers.sh"
             gate.parent.mkdir(parents=True)
             gate.write_text(
-                "required_drat_trim_revision="
-                "2e5e29cb0019d5cfd547d4208dca1b3ec290349f\n",
+                "required_drat_trim_revision=2e5e29cb0019d5cfd547d4208dca1b3ec290349f\n",
                 encoding="utf-8",
             )
             installer.write_text(
-                "drat_trim_revision="
-                "1111111111111111111111111111111111111111\n",
+                "drat_trim_revision=1111111111111111111111111111111111111111\n",
                 encoding="utf-8",
             )
             errors: list[str] = []
@@ -210,9 +206,7 @@ class HygieneChecksTests(unittest.TestCase):
                 encoding="utf-8",
             )
             installer.write_text(
-                "z3_version=4.15.8\n"
-                "cvc5_version=1.3.3\n"
-                "bitwuzla_version=0.9.1\n",
+                "z3_version=4.15.8\ncvc5_version=1.3.3\nbitwuzla_version=0.9.1\n",
                 encoding="utf-8",
             )
             errors: list[str] = []
@@ -233,13 +227,11 @@ class HygieneChecksTests(unittest.TestCase):
             installer = root / "scripts/install-fuzz-tools.sh"
             gate.parent.mkdir(parents=True)
             gate.write_text(
-                "fuzz_nightly=nightly-2026-06-01\n"
-                "required_cargo_fuzz_version=0.13.2\n",
+                "fuzz_nightly=nightly-2026-06-01\nrequired_cargo_fuzz_version=0.13.2\n",
                 encoding="utf-8",
             )
             installer.write_text(
-                "fuzz_nightly=nightly-2026-05-01\n"
-                "cargo_fuzz_version=0.13.2\n",
+                "fuzz_nightly=nightly-2026-05-01\ncargo_fuzz_version=0.13.2\n",
                 encoding="utf-8",
             )
             errors: list[str] = []
@@ -250,6 +242,28 @@ class HygieneChecksTests(unittest.TestCase):
                     "fuzz nightly versions disagree: "
                     "scripts/check-fuzz.sh=2026.6.1, "
                     "scripts/install-fuzz-tools.sh=2026.5.1"
+                ],
+            )
+
+    def test_python_tool_version_check_detects_installer_drift(self) -> None:
+        directory, root = self.temporary_root()
+        with directory, patch.object(check_hygiene, "ROOT", root):
+            gate = root / "scripts/check-python.sh"
+            installer = root / "scripts/install-python-tools.sh"
+            requirements = root / "scripts/ruff-requirements.txt"
+            gate.parent.mkdir(parents=True)
+            gate.write_text("required_ruff_version=0.15.22\n", encoding="utf-8")
+            installer.write_text("ruff_version=0.15.21\n", encoding="utf-8")
+            requirements.write_text("ruff==0.15.22\n", encoding="utf-8")
+            errors: list[str] = []
+            check_hygiene.check_python_tool_versions(errors)
+            self.assertEqual(
+                errors,
+                [
+                    "Ruff versions disagree: "
+                    "scripts/check-python.sh=0.15.22, "
+                    "scripts/install-python-tools.sh=0.15.21, "
+                    "scripts/ruff-requirements.txt=0.15.22"
                 ],
             )
 

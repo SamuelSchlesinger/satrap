@@ -20,7 +20,9 @@ class StreamingModelValidationTests(unittest.TestCase):
     def test_accepts_valid_model_and_multiline_clause(self) -> None:
         directory, formula = self.formula("c example\np cnf 3 2\n1 -2\n3 0\n2 0\n")
         with directory:
-            self.assertEqual(benchmark.validate_model(formula, "s SATISFIABLE\nv 1 2 -3 0\n"), "valid")
+            self.assertEqual(
+                benchmark.validate_model(formula, "s SATISFIABLE\nv 1 2 -3 0\n"), "valid"
+            )
 
     def test_rejects_unsatisfied_clause(self) -> None:
         directory, formula = self.formula("p cnf 2 2\n1 0\n-1 2 0\n")
@@ -120,9 +122,7 @@ class ProofValidationTests(unittest.TestCase):
                 "print('s UNSATISFIABLE'); raise SystemExit(20)"
             )
         else:
-            solver_program = (
-                "print('s UNSATISFIABLE'); raise SystemExit(20)"
-            )
+            solver_program = "print('s UNSATISFIABLE'); raise SystemExit(20)"
         solver_command = (
             sys.executable,
             "-c",
@@ -194,9 +194,7 @@ class ProofValidationTests(unittest.TestCase):
             self.assertTrue(Path(str(proof["path"])).is_file())
 
     def test_rejects_failed_checker(self) -> None:
-        checker_program = (
-            "import sys; print('s NOT VERIFIED'); raise SystemExit(1)"
-        )
+        checker_program = "import sys; print('s NOT VERIFIED'); raise SystemExit(1)"
         with tempfile.TemporaryDirectory() as temporary:
             row = self.run_benchmark(
                 Path(temporary),
@@ -269,9 +267,7 @@ class ProofValidationTests(unittest.TestCase):
         }
         with contextlib.redirect_stderr(io.StringIO()):
             self.assertTrue(benchmark.summarize([row]))
-            self.assertFalse(
-                benchmark.summarize([row], require_unsat_proofs=True)
-            )
+            self.assertFalse(benchmark.summarize([row], require_unsat_proofs=True))
 
 
 if __name__ == "__main__":

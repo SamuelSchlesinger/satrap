@@ -45,6 +45,7 @@ The crate requires Rust 1.85 or newer.
 ```sh
 cargo build --release
 cargo test --all-targets
+make install-python-tools
 make install-oracles
 make install-fuzz-tools
 make install-proof-checkers
@@ -137,13 +138,13 @@ Deterministic tests cover the SAT kernel against brute force and exercise the
 implemented SMT fragments against pinned Z3, cvc5, and Bitwuzla releases.
 Arithmetic models and representative named cores are replayed independently
 through both Z3 and cvc5; finite core cases also pass Bitwuzla. Run
-`make install-oracles`, `make install-fuzz-tools`, and
-`make install-proof-checkers` once per clone before `make check`; the shared
-integration gate requires exact versions of all three solvers and the proof
-checker, runs bounded coverage-guided parser, session, and proof fuzzing, and
-independently checks the SAT proof-mode matrix. It never silently skips an
-oracle, fuzz target, or proof check. These generated checks are correctness
-evidence, not representative performance benchmarks. See the
+`make install-python-tools`, `make install-oracles`, `make install-fuzz-tools`,
+and `make install-proof-checkers` once per clone before `make check`; the
+shared integration gate requires exact versions of Ruff, all three solvers,
+and the proof checker, runs bounded coverage-guided parser, session, and proof
+fuzzing, and independently checks the SAT proof-mode matrix. It never silently
+skips a linter, oracle, fuzz target, or proof check. These generated checks are
+correctness evidence, not representative performance benchmarks. See the
 [fuzzing guide](docs/FUZZING.md) and [proof-checking guide](docs/PROOF_CHECKING.md)
 for the exact boundaries and longer-running work.
 

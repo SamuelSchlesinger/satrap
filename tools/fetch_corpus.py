@@ -41,7 +41,11 @@ def sha256_path(path: Path) -> str:
 
 
 def verified(path: Path, expected_size: int, expected_hash: str) -> bool:
-    return path.is_file() and path.stat().st_size == expected_size and sha256_path(path) == expected_hash
+    return (
+        path.is_file()
+        and path.stat().st_size == expected_size
+        and sha256_path(path) == expected_hash
+    )
 
 
 def temporary_file(directory: Path, suffix: str) -> tuple[Path, BinaryIO]:

@@ -36,11 +36,7 @@ def repository_files() -> list[Path]:
         check=True,
         capture_output=True,
     )
-    return [
-        ROOT / Path(raw.decode("utf-8"))
-        for raw in result.stdout.split(b"\0")
-        if raw
-    ]
+    return [ROOT / Path(raw.decode("utf-8")) for raw in result.stdout.split(b"\0") if raw]
 
 
 def is_text_file(path: Path) -> bool:
@@ -115,9 +111,7 @@ def check_markdown_links(files: list[Path], errors: list[str]) -> None:
                     continue
                 if not destination.exists():
                     relative = path.relative_to(ROOT)
-                    errors.append(
-                        f"{relative}:{line_number}: broken local link {target!r}"
-                    )
+                    errors.append(f"{relative}:{line_number}: broken local link {target!r}")
 
 
 def normalized_version(value: str) -> tuple[int, int, int] | None:
@@ -125,7 +119,7 @@ def normalized_version(value: str) -> tuple[int, int, int] | None:
     if match is None:
         return None
     parts = tuple(int(part) for part in re.split(r"[.-]", match.group(0)))
-    return (parts + (0, 0, 0))[:3]
+    return (*parts, 0, 0, 0)[:3]
 
 
 def extract_version(path: Path, pattern: str, errors: list[str]) -> tuple[int, int, int] | None:
@@ -211,9 +205,7 @@ def check_oracle_versions(errors: list[str]) -> None:
                 errors,
             ),
         }
-        versions = {
-            version for version in declarations.values() if version is not None
-        }
+        versions = {version for version in declarations.values() if version is not None}
         if len(versions) > 1:
             rendered = ", ".join(
                 f"{path}={'.'.join(map(str, version))}"
@@ -240,9 +232,7 @@ def check_fuzz_tool_versions(errors: list[str]) -> None:
                 errors,
             ),
         }
-        versions = {
-            version for version in declarations.values() if version is not None
-        }
+        versions = {version for version in declarations.values() if version is not None}
         if len(versions) > 1:
             rendered = ", ".join(
                 f"{path}={'.'.join(map(str, version))}"
@@ -250,6 +240,34 @@ def check_fuzz_tool_versions(errors: list[str]) -> None:
                 if version is not None
             )
             errors.append(f"{name} versions disagree: {rendered}")
+
+
+def check_python_tool_versions(errors: list[str]) -> None:
+    declarations = {
+        "scripts/check-python.sh": extract_version(
+            ROOT / "scripts/check-python.sh",
+            r"^required_ruff_version=([0-9.]+)",
+            errors,
+        ),
+        "scripts/install-python-tools.sh": extract_version(
+            ROOT / "scripts/install-python-tools.sh",
+            r"^ruff_version=([0-9.]+)",
+            errors,
+        ),
+        "scripts/ruff-requirements.txt": extract_version(
+            ROOT / "scripts/ruff-requirements.txt",
+            r"^ruff==([0-9.]+)",
+            errors,
+        ),
+    }
+    versions = {version for version in declarations.values() if version is not None}
+    if len(versions) > 1:
+        rendered = ", ".join(
+            f"{path}={'.'.join(map(str, version))}"
+            for path, version in declarations.items()
+            if version is not None
+        )
+        errors.append(f"Ruff versions disagree: {rendered}")
 
 
 def extract_revision(path: Path, pattern: str, errors: list[str]) -> str | None:
@@ -276,14 +294,10 @@ def check_proof_checker_revision(errors: list[str]) -> None:
             errors,
         ),
     }
-    revisions = {
-        revision for revision in declarations.values() if revision is not None
-    }
+    revisions = {revision for revision in declarations.values() if revision is not None}
     if len(revisions) > 1:
         rendered = ", ".join(
-            f"{path}={revision}"
-            for path, revision in declarations.items()
-            if revision is not None
+            f"{path}={revision}" for path, revision in declarations.items() if revision is not None
         )
         errors.append(f"DRAT-trim revisions disagree: {rendered}")
 
@@ -301,6 +315,11 @@ def check_gate_wiring(errors: list[str]) -> None:
     require_commands(
         ROOT / ".githooks/pre-commit",
         ("scripts/check-fast.sh",),
+        errors,
+    )
+    require_commands(
+        ROOT / "scripts/check-fast.sh",
+        ("scripts/check-python.sh",),
         errors,
     )
     shared_gates = ("scripts/ci.sh", "scripts/check-msrv.sh")
@@ -326,7 +345,12 @@ def check_gate_wiring(errors: list[str]) -> None:
     )
     require_commands(
         ROOT / "scripts/quality.sh",
-        ("shellcheck", "actionlint", "tools/check_hygiene.py"),
+        (
+            "shellcheck",
+            "actionlint",
+            "scripts/check-python.sh",
+            "tools/check_hygiene.py",
+        ),
         errors,
     )
     require_commands(
@@ -339,6 +363,7 @@ def check_gate_wiring(errors: list[str]) -> None:
         (
             "actions/checkout@v6",
             "scripts/install-fuzz-tools.sh",
+            "scripts/install-python-tools.sh",
             "scripts/install-smt-oracles.sh",
             "scripts/install-proof-checkers.sh",
         ),
@@ -384,6 +409,16 @@ def check_gate_wiring(errors: list[str]) -> None:
         errors,
     )
     require_commands(
+        ROOT / "scripts/install-python-tools.sh",
+        ("--require-hashes", "ruff-requirements.txt"),
+        errors,
+    )
+    require_commands(
+        ROOT / "scripts/check-python.sh",
+        ("ruff check", "ruff format --check"),
+        errors,
+    )
+    require_commands(
         ROOT / "scripts/check-fuzz.sh",
         (
             "--locked",
@@ -413,6 +448,7 @@ def main() -> int:
     check_audit_version(errors)
     check_oracle_versions(errors)
     check_fuzz_tool_versions(errors)
+    check_python_tool_versions(errors)
     check_proof_checker_revision(errors)
     check_gate_wiring(errors)
     check_executable_scripts(errors)

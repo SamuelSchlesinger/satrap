@@ -66,12 +66,6 @@ pub struct Model {
 }
 
 impl Model {
-    pub(crate) fn arbitrary(variable_count: usize) -> Self {
-        Self {
-            values: vec![false; variable_count],
-        }
-    }
-
     /// Number of variables in the model.
     #[must_use]
     pub fn len(&self) -> usize {
@@ -153,6 +147,9 @@ pub enum UnknownReason {
     /// A theory combination or operator was parsed safely but its complete
     /// decision procedure is not implemented.
     IncompleteTheory,
+    /// A candidate theory model failed the solver's exact validation pass and
+    /// was therefore not returned as satisfiable.
+    ModelValidationFailure,
 }
 
 /// Deterministic CDCL work limits for one query.

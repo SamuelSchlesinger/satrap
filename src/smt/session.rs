@@ -94,8 +94,6 @@ enum LastCheck {
     },
     Unknown {
         reason: UnknownReason,
-        boolean: Model,
-        theory: TheoryModel,
     },
 }
 
@@ -358,6 +356,7 @@ impl Session {
                     UnknownReason::Interrupted => "interrupted",
                     UnknownReason::ConflictLimit | UnknownReason::PropagationLimit => "resourceout",
                     UnknownReason::IncompleteTheory => "incomplete",
+                    UnknownReason::ModelValidationFailure => "model-validation-failure",
                 };
                 format!("(:reason-unknown {reason})")
             }
@@ -696,11 +695,7 @@ impl Session {
                 "unsat"
             }
             SmtSolveResult::Unknown(reason) => {
-                self.last_check = LastCheck::Unknown {
-                    reason,
-                    boolean: Model::arbitrary(self.solver.variable_count()),
-                    theory: TheoryModel::default(),
-                };
+                self.last_check = LastCheck::Unknown { reason };
                 "unknown"
             }
         };
@@ -1293,18 +1288,18 @@ impl Session {
 
     fn sat_model(&self) -> Result<&Model, CommandError> {
         match &self.last_check {
-            LastCheck::Sat { boolean, .. } | LastCheck::Unknown { boolean, .. } => Ok(boolean),
+            LastCheck::Sat { boolean, .. } => Ok(boolean),
             _ => Err(CommandError::message(
-                "model inspection requires a preceding sat or unknown result",
+                "model inspection requires a preceding sat result",
             )),
         }
     }
 
     fn sat_theory_model(&self) -> Result<&TheoryModel, CommandError> {
         match &self.last_check {
-            LastCheck::Sat { theory, .. } | LastCheck::Unknown { theory, .. } => Ok(theory),
+            LastCheck::Sat { theory, .. } => Ok(theory),
             _ => Err(CommandError::message(
-                "model inspection requires a preceding sat or unknown result",
+                "model inspection requires a preceding sat result",
             )),
         }
     }
@@ -2363,9 +2358,7 @@ mod tests {
              (assert p)
              (get-model)",
         );
-        assert!(output.ends_with(
-            "(error \"model inspection requires a preceding sat or unknown result\")\n"
-        ));
+        assert!(output.ends_with("(error \"model inspection requires a preceding sat result\")\n"));
     }
 
     #[test]
@@ -2392,7 +2385,7 @@ mod tests {
     }
 
     #[test]
-    fn resource_unknown_supports_reason_model_and_a_later_unlimited_check() {
+    fn resource_unknown_rejects_an_unvalidated_model_and_remains_reusable() {
         let output = execute(
             "(set-option :produce-models true)
              (set-logic QF_BOOL)
@@ -2409,8 +2402,12 @@ mod tests {
              (set-option :reproducible-resource-limit 0)
              (check-sat)",
         );
-        assert!(output.starts_with("unknown\n(:reason-unknown resourceout)\n(\n"));
-        assert!(output.ends_with(")\nunsat\n"));
+        assert_eq!(
+            output,
+            "unknown\n(:reason-unknown resourceout)\n\
+             (error \"model inspection requires a preceding sat result\")\n\
+             unsat\n"
+        );
     }
 
     #[test]
@@ -2698,6 +2695,21 @@ mod tests {
         );
         assert_eq!(lines.next(), Some("unsat"));
         assert_eq!(lines.next(), Some("sat"));
+    }
+
+    #[test]
+    fn qf_lra_model_validation_checks_the_selected_ite_branch() {
+        let output = execute(
+            "(set-option :produce-models true)
+             (set-logic QF_LRA)
+             (declare-const p Bool)
+             (declare-const x Real)
+             (assert p)
+             (assert (= x (ite p 1.0 2.0)))
+             (check-sat)
+             (get-value (p x (ite p 1.0 2.0)))",
+        );
+        assert_eq!(output, "sat\n((p true) (x 1.0) ((ite p 1.0 2.0) 1.0))\n");
     }
 
     #[test]

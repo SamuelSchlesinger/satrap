@@ -3,6 +3,10 @@ use std::error::Error;
 use std::fmt;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use num_bigint::BigInt;
+use num_rational::BigRational;
+use num_traits::Zero;
+
 use crate::{IncrementalError, Interrupter, Lit, Model, SolveLimits, Solver, UnknownReason};
 
 use super::encode::BoolEncoder;
@@ -34,6 +38,23 @@ impl BitVecTerm {
     pub const fn width(self) -> u32 {
         self.width
     }
+}
+
+/// An exact integer term owned by one [`Context`].
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub struct IntTerm {
+    context: u64,
+    id: TermId,
+}
+
+/// An exact real term owned by one [`Context`].
+///
+/// Real constants and model values are represented by arbitrary-precision
+/// rationals; no floating-point approximation enters the arithmetic API.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub struct RealTerm {
+    context: u64,
+    id: TermId,
 }
 
 /// An uninterpreted sort owned by one [`Context`].
@@ -85,6 +106,8 @@ impl ArrayTerm {
 pub enum SmtSort {
     Bool,
     BitVec(u32),
+    Int,
+    Real,
     Uninterpreted(UninterpretedSort),
     Array(ArraySort),
 }
@@ -101,6 +124,8 @@ pub struct Function {
 pub enum AnyTerm {
     Bool(BoolTerm),
     BitVec(BitVecTerm),
+    Int(IntTerm),
+    Real(RealTerm),
     Uninterpreted(UninterpretedTerm),
     Array(ArrayTerm),
 }
@@ -114,6 +139,18 @@ impl From<BoolTerm> for AnyTerm {
 impl From<BitVecTerm> for AnyTerm {
     fn from(term: BitVecTerm) -> Self {
         Self::BitVec(term)
+    }
+}
+
+impl From<IntTerm> for AnyTerm {
+    fn from(term: IntTerm) -> Self {
+        Self::Int(term)
+    }
+}
+
+impl From<RealTerm> for AnyTerm {
+    fn from(term: RealTerm) -> Self {
+        Self::Real(term)
     }
 }
 
@@ -134,6 +171,8 @@ impl From<ArrayTerm> for AnyTerm {
 pub enum Value {
     Bool(bool),
     BitVec(BitVecValue),
+    Int(BigInt),
+    Real(BigRational),
     Uninterpreted(UninterpretedValue),
     Array(ArrayValue),
 }
@@ -246,7 +285,7 @@ impl fmt::Display for ContextError {
             }
             Self::ScopeUnderflow => formatter.write_str("cannot pop beyond the base scope"),
             Self::NoModel => {
-                formatter.write_str("model inspection requires a preceding sat or unknown result")
+                formatter.write_str("model inspection requires a preceding sat result")
             }
             Self::NoUnsatResult => {
                 formatter.write_str("unsat information requires a preceding unsat result")
@@ -306,12 +345,11 @@ enum LastCheck {
     },
     Unknown {
         reason: UnknownReason,
-        boolean: Model,
-        theory: TheoryModel,
     },
 }
 
-/// A persistent typed SMT context for Core, bit-vectors, UF, and arrays.
+/// A persistent typed SMT context for Core, bit-vectors, exact linear
+/// arithmetic, UF, and arrays.
 ///
 /// Declarations and definitions are global, as in an SMT-LIB session with
 /// `:global-declarations true`; `push` and `pop` scope assertions. A full
@@ -382,6 +420,28 @@ impl Context {
         self.ensure_fresh_name(&name)?;
         let id = self.terms.fresh_term(Sort::BitVec(width))?;
         let term = self.wrap_bitvec(id)?;
+        self.bindings.insert(name.clone(), term.into());
+        self.declarations.push((name, term.into()));
+        self.invalidate_check();
+        Ok(term)
+    }
+
+    pub fn declare_int(&mut self, name: impl Into<String>) -> Result<IntTerm, ContextError> {
+        let name = name.into();
+        self.ensure_fresh_name(&name)?;
+        let id = self.terms.fresh_term(Sort::Int)?;
+        let term = self.wrap_int(id)?;
+        self.bindings.insert(name.clone(), term.into());
+        self.declarations.push((name, term.into()));
+        self.invalidate_check();
+        Ok(term)
+    }
+
+    pub fn declare_real(&mut self, name: impl Into<String>) -> Result<RealTerm, ContextError> {
+        let name = name.into();
+        self.ensure_fresh_name(&name)?;
+        let id = self.terms.fresh_term(Sort::Real)?;
+        let term = self.wrap_real(id)?;
         self.bindings.insert(name.clone(), term.into());
         self.declarations.push((name, term.into()));
         self.invalidate_check();
@@ -688,11 +748,7 @@ impl Context {
                 CheckResult::Unsat
             }
             SmtSolveResult::Unknown(reason) => {
-                self.last_check = LastCheck::Unknown {
-                    reason,
-                    boolean: Model::arbitrary(self.solver.variable_count()),
-                    theory: TheoryModel::default(),
-                };
+                self.last_check = LastCheck::Unknown { reason };
                 CheckResult::Unknown(reason)
             }
         })
@@ -708,6 +764,28 @@ impl Context {
                     .terms
                     .evaluate_bitvec(term.id, |symbol| self.symbol_value(model, symbol))?;
                 Ok(Value::BitVec(BitVecValue { bits }))
+            }
+            AnyTerm::Int(term) => {
+                let id = self.int_id(term)?;
+                let value = self
+                    .theory_model_ref()?
+                    .arithmetic
+                    .expression_value(self.terms.arithmetic_expression_for_term(id)?);
+                if !value.is_integer() {
+                    return Err(TermError::new(
+                        "validated integer model contains a non-integral value",
+                    )
+                    .into());
+                }
+                Ok(Value::Int(value.to_integer()))
+            }
+            AnyTerm::Real(term) => {
+                let id = self.real_id(term)?;
+                let value = self
+                    .theory_model_ref()?
+                    .arithmetic
+                    .expression_value(self.terms.arithmetic_expression_for_term(id)?);
+                Ok(Value::Real(value))
             }
             AnyTerm::Uninterpreted(term) => {
                 let id = self.uninterpreted_id(term)?;
@@ -903,6 +981,155 @@ impl Context {
         let else_term = self.array_id(else_term)?;
         let result = self.terms.ite(condition, then_term, else_term)?;
         self.wrap_array(result)
+    }
+
+    pub fn int_value(&mut self, value: impl Into<BigInt>) -> Result<IntTerm, ContextError> {
+        let result = self.terms.arithmetic_integer(value.into())?;
+        self.wrap_int(result)
+    }
+
+    pub fn real_value(&mut self, value: BigRational) -> Result<RealTerm, ContextError> {
+        let result = self.terms.arithmetic_real(value)?;
+        self.wrap_real(result)
+    }
+
+    pub fn real_integer(&mut self, value: impl Into<BigInt>) -> Result<RealTerm, ContextError> {
+        self.real_value(BigRational::from_integer(value.into()))
+    }
+
+    pub fn real_ratio(
+        &mut self,
+        numerator: impl Into<BigInt>,
+        denominator: impl Into<BigInt>,
+    ) -> Result<RealTerm, ContextError> {
+        let denominator = denominator.into();
+        if denominator.is_zero() {
+            return Err(TermError::new("real denominator must be nonzero").into());
+        }
+        self.real_value(BigRational::new(numerator.into(), denominator))
+    }
+
+    pub fn int_to_real(&mut self, term: IntTerm) -> Result<RealTerm, ContextError> {
+        let term = self.int_id(term)?;
+        let result = self.terms.arithmetic_to_real(term)?;
+        self.wrap_real(result)
+    }
+
+    pub fn int_add(&mut self, terms: &[IntTerm]) -> Result<IntTerm, ContextError> {
+        let terms = self.int_ids(terms)?;
+        let result = self.terms.arithmetic_add(&terms)?;
+        self.wrap_int(result)
+    }
+
+    pub fn real_add(&mut self, terms: &[RealTerm]) -> Result<RealTerm, ContextError> {
+        let terms = self.real_ids(terms)?;
+        let result = self.terms.arithmetic_add(&terms)?;
+        self.wrap_real(result)
+    }
+
+    pub fn int_neg(&mut self, term: IntTerm) -> Result<IntTerm, ContextError> {
+        let term = self.int_id(term)?;
+        let result = self.terms.arithmetic_negate(term)?;
+        self.wrap_int(result)
+    }
+
+    pub fn real_neg(&mut self, term: RealTerm) -> Result<RealTerm, ContextError> {
+        let term = self.real_id(term)?;
+        let result = self.terms.arithmetic_negate(term)?;
+        self.wrap_real(result)
+    }
+
+    pub fn int_sub(&mut self, terms: &[IntTerm]) -> Result<IntTerm, ContextError> {
+        let terms = self.int_ids(terms)?;
+        let result = self.terms.arithmetic_sub(&terms)?;
+        self.wrap_int(result)
+    }
+
+    pub fn real_sub(&mut self, terms: &[RealTerm]) -> Result<RealTerm, ContextError> {
+        let terms = self.real_ids(terms)?;
+        let result = self.terms.arithmetic_sub(&terms)?;
+        self.wrap_real(result)
+    }
+
+    pub fn int_mul(&mut self, terms: &[IntTerm]) -> Result<IntTerm, ContextError> {
+        let terms = self.int_ids(terms)?;
+        let result = self.terms.arithmetic_mul(&terms)?;
+        self.wrap_int(result)
+    }
+
+    pub fn real_mul(&mut self, terms: &[RealTerm]) -> Result<RealTerm, ContextError> {
+        let terms = self.real_ids(terms)?;
+        let result = self.terms.arithmetic_mul(&terms)?;
+        self.wrap_real(result)
+    }
+
+    pub fn real_div(
+        &mut self,
+        numerator: RealTerm,
+        denominator: RealTerm,
+    ) -> Result<RealTerm, ContextError> {
+        let numerator = self.real_id(numerator)?;
+        let denominator = self.real_id(denominator)?;
+        let result = self.terms.arithmetic_divide(numerator, denominator)?;
+        self.wrap_real(result)
+    }
+
+    pub fn int_ite(
+        &mut self,
+        condition: BoolTerm,
+        then_term: IntTerm,
+        else_term: IntTerm,
+    ) -> Result<IntTerm, ContextError> {
+        let condition = self.bool_id(condition)?;
+        let then_term = self.int_id(then_term)?;
+        let else_term = self.int_id(else_term)?;
+        let result = self.terms.ite(condition, then_term, else_term)?;
+        self.wrap_int(result)
+    }
+
+    pub fn real_ite(
+        &mut self,
+        condition: BoolTerm,
+        then_term: RealTerm,
+        else_term: RealTerm,
+    ) -> Result<RealTerm, ContextError> {
+        let condition = self.bool_id(condition)?;
+        let then_term = self.real_id(then_term)?;
+        let else_term = self.real_id(else_term)?;
+        let result = self.terms.ite(condition, then_term, else_term)?;
+        self.wrap_real(result)
+    }
+
+    pub fn int_lt(&mut self, left: IntTerm, right: IntTerm) -> Result<BoolTerm, ContextError> {
+        self.int_predicate(left, right, TermStore::arithmetic_lt)
+    }
+
+    pub fn int_le(&mut self, left: IntTerm, right: IntTerm) -> Result<BoolTerm, ContextError> {
+        self.int_predicate(left, right, TermStore::arithmetic_le)
+    }
+
+    pub fn int_gt(&mut self, left: IntTerm, right: IntTerm) -> Result<BoolTerm, ContextError> {
+        self.int_predicate(left, right, TermStore::arithmetic_gt)
+    }
+
+    pub fn int_ge(&mut self, left: IntTerm, right: IntTerm) -> Result<BoolTerm, ContextError> {
+        self.int_predicate(left, right, TermStore::arithmetic_ge)
+    }
+
+    pub fn real_lt(&mut self, left: RealTerm, right: RealTerm) -> Result<BoolTerm, ContextError> {
+        self.real_predicate(left, right, TermStore::arithmetic_lt)
+    }
+
+    pub fn real_le(&mut self, left: RealTerm, right: RealTerm) -> Result<BoolTerm, ContextError> {
+        self.real_predicate(left, right, TermStore::arithmetic_le)
+    }
+
+    pub fn real_gt(&mut self, left: RealTerm, right: RealTerm) -> Result<BoolTerm, ContextError> {
+        self.real_predicate(left, right, TermStore::arithmetic_gt)
+    }
+
+    pub fn real_ge(&mut self, left: RealTerm, right: RealTerm) -> Result<BoolTerm, ContextError> {
+        self.real_predicate(left, right, TermStore::arithmetic_ge)
     }
 
     pub fn bitvec_binary(&mut self, literal: &str) -> Result<BitVecTerm, ContextError> {
@@ -1290,10 +1517,34 @@ impl Context {
         Ok(term.id)
     }
 
+    fn int_ids(&self, terms: &[IntTerm]) -> Result<Vec<TermId>, ContextError> {
+        terms.iter().map(|&term| self.int_id(term)).collect()
+    }
+
+    fn int_id(&self, term: IntTerm) -> Result<TermId, ContextError> {
+        if term.context != self.id || self.terms.sort(term.id)? != Sort::Int {
+            return Err(ContextError::ForeignTerm);
+        }
+        Ok(term.id)
+    }
+
+    fn real_ids(&self, terms: &[RealTerm]) -> Result<Vec<TermId>, ContextError> {
+        terms.iter().map(|&term| self.real_id(term)).collect()
+    }
+
+    fn real_id(&self, term: RealTerm) -> Result<TermId, ContextError> {
+        if term.context != self.id || self.terms.sort(term.id)? != Sort::Real {
+            return Err(ContextError::ForeignTerm);
+        }
+        Ok(term.id)
+    }
+
     fn any_id(&self, term: AnyTerm) -> Result<TermId, ContextError> {
         match term {
             AnyTerm::Bool(term) => self.bool_id(term),
             AnyTerm::BitVec(term) => self.bitvec_id(term),
+            AnyTerm::Int(term) => self.int_id(term),
+            AnyTerm::Real(term) => self.real_id(term),
             AnyTerm::Uninterpreted(term) => self.uninterpreted_id(term),
             AnyTerm::Array(term) => self.array_id(term),
         }
@@ -1336,6 +1587,26 @@ impl Context {
         })
     }
 
+    fn wrap_int(&self, id: TermId) -> Result<IntTerm, ContextError> {
+        if self.terms.sort(id)? != Sort::Int {
+            return Err(TermError::new("expected an integer term").into());
+        }
+        Ok(IntTerm {
+            context: self.id,
+            id,
+        })
+    }
+
+    fn wrap_real(&self, id: TermId) -> Result<RealTerm, ContextError> {
+        if self.terms.sort(id)? != Sort::Real {
+            return Err(TermError::new("expected a real term").into());
+        }
+        Ok(RealTerm {
+            context: self.id,
+            id,
+        })
+    }
+
     fn wrap_uninterpreted(&self, id: TermId) -> Result<UninterpretedTerm, ContextError> {
         let Sort::Uninterpreted(sort) = self.terms.sort(id)? else {
             return Err(TermError::new("expected an uninterpreted term").into());
@@ -1368,9 +1639,8 @@ impl Context {
         match self.terms.sort(id)? {
             Sort::Bool => self.wrap_bool(id).map(AnyTerm::Bool),
             Sort::BitVec(_) => self.wrap_bitvec(id).map(AnyTerm::BitVec),
-            Sort::Int | Sort::Real => {
-                Err(TermError::new("typed arithmetic terms are not exposed yet").into())
-            }
+            Sort::Int => self.wrap_int(id).map(AnyTerm::Int),
+            Sort::Real => self.wrap_real(id).map(AnyTerm::Real),
             Sort::Uninterpreted(_) => self.wrap_uninterpreted(id).map(AnyTerm::Uninterpreted),
             Sort::Array(_) => self.wrap_array(id).map(AnyTerm::Array),
         }
@@ -1380,6 +1650,8 @@ impl Context {
         match sort {
             SmtSort::Bool => Ok(Sort::Bool),
             SmtSort::BitVec(width) => Ok(Sort::BitVec(width)),
+            SmtSort::Int => Ok(Sort::Int),
+            SmtSort::Real => Ok(Sort::Real),
             SmtSort::Uninterpreted(sort) if sort.context == self.id => {
                 Ok(Sort::Uninterpreted(sort.id))
             }
@@ -1426,6 +1698,30 @@ impl Context {
         self.wrap_bool(result)
     }
 
+    fn int_predicate(
+        &mut self,
+        left: IntTerm,
+        right: IntTerm,
+        operation: impl FnOnce(&mut TermStore, TermId, TermId) -> Result<TermId, TermError>,
+    ) -> Result<BoolTerm, ContextError> {
+        let left = self.int_id(left)?;
+        let right = self.int_id(right)?;
+        let result = operation(&mut self.terms, left, right)?;
+        self.wrap_bool(result)
+    }
+
+    fn real_predicate(
+        &mut self,
+        left: RealTerm,
+        right: RealTerm,
+        operation: impl FnOnce(&mut TermStore, TermId, TermId) -> Result<TermId, TermError>,
+    ) -> Result<BoolTerm, ContextError> {
+        let left = self.real_id(left)?;
+        let right = self.real_id(right)?;
+        let result = operation(&mut self.terms, left, right)?;
+        self.wrap_bool(result)
+    }
+
     fn ensure_fresh_name(&self, name: &str) -> Result<(), ContextError> {
         if self.bindings.contains_key(name) || self.function_bindings.contains_key(name) {
             Err(ContextError::DuplicateName(name.to_owned()))
@@ -1436,14 +1732,14 @@ impl Context {
 
     fn model_ref(&self) -> Result<&Model, ContextError> {
         match &self.last_check {
-            LastCheck::Sat { boolean, .. } | LastCheck::Unknown { boolean, .. } => Ok(boolean),
+            LastCheck::Sat { boolean, .. } => Ok(boolean),
             _ => Err(ContextError::NoModel),
         }
     }
 
     fn theory_model_ref(&self) -> Result<&TheoryModel, ContextError> {
         match &self.last_check {
-            LastCheck::Sat { theory, .. } | LastCheck::Unknown { theory, .. } => Ok(theory),
+            LastCheck::Sat { theory, .. } => Ok(theory),
             _ => Err(ContextError::NoModel),
         }
     }
@@ -1468,9 +1764,77 @@ impl Context {
 
 #[cfg(test)]
 mod tests {
+    use num_bigint::BigInt;
+    use num_rational::BigRational;
+
     use crate::{SolveLimits, UnknownReason};
 
     use super::{AnyTerm, CheckResult, Context, ContextError, Value};
+
+    #[test]
+    fn typed_real_context_builds_exact_lra_and_returns_rational_values() {
+        let mut context = Context::new();
+        let x = context.declare_real("x").unwrap();
+        let y = context.declare_real("y").unwrap();
+        let zero = context.real_integer(0).unwrap();
+        let one = context.real_integer(1).unwrap();
+        let sum = context.real_add(&[x, y]).unwrap();
+        let x_positive = context.real_gt(x, zero).unwrap();
+        let y_positive = context.real_gt(y, zero).unwrap();
+        let sum_is_one = context.equal(&[sum.into(), one.into()]).unwrap();
+        context.assert(x_positive).unwrap();
+        context.assert(y_positive).unwrap();
+        context.assert(sum_is_one).unwrap();
+
+        assert_eq!(context.check().unwrap(), CheckResult::Sat);
+        let Value::Real(x_value) = context.value(x).unwrap() else {
+            panic!("x must have an exact real value");
+        };
+        let Value::Real(y_value) = context.value(y).unwrap() else {
+            panic!("y must have an exact real value");
+        };
+        let Value::Real(sum_value) = context.value(sum).unwrap() else {
+            panic!("x + y must have an exact real value");
+        };
+        assert!(x_value > BigRational::from_integer(BigInt::from(0)));
+        assert!(y_value > BigRational::from_integer(BigInt::from(0)));
+        assert_eq!(sum_value, BigRational::from_integer(BigInt::from(1)));
+
+        context.push(1).unwrap();
+        let three = context.real_integer(3).unwrap();
+        let impossible = context.real_gt(sum, three).unwrap();
+        context.assert(impossible).unwrap();
+        assert_eq!(context.check().unwrap(), CheckResult::Unsat);
+        context.pop(1).unwrap();
+        assert_eq!(context.check().unwrap(), CheckResult::Sat);
+    }
+
+    #[test]
+    fn typed_integer_context_is_exact_and_rejects_nonlinearity() {
+        let mut context = Context::new();
+        let x = context.declare_int("x").unwrap();
+        let y = context.declare_int("y").unwrap();
+        let two = context.int_value(2).unwrap();
+        let difference = context.int_sub(&[x, y]).unwrap();
+        let bound = context.int_le(difference, two).unwrap();
+        context.assert(bound).unwrap();
+
+        assert_eq!(context.check().unwrap(), CheckResult::Sat);
+        assert!(matches!(context.value(x).unwrap(), Value::Int(_)));
+        assert!(matches!(context.value(y).unwrap(), Value::Int(_)));
+
+        context.push(1).unwrap();
+        let reverse = context.int_sub(&[y, x]).unwrap();
+        let minus_three = context.int_value(-3).unwrap();
+        let contradiction = context.int_le(reverse, minus_three).unwrap();
+        context.assert(contradiction).unwrap();
+        assert_eq!(context.check().unwrap(), CheckResult::Unsat);
+        context.pop(1).unwrap();
+
+        let error = context.int_mul(&[x, y]).unwrap_err();
+        assert!(error.to_string().contains("nonlinear multiplication"));
+        assert!(context.real_ratio(1, 0).is_err());
+    }
 
     #[test]
     fn typed_bitvector_context_is_incremental_and_reconstructs_models() {

@@ -7,6 +7,7 @@ use crate::{IncrementalError, Lit, Model, SolveLimits, SolveResult, Solver, Unkn
 use super::encode::BoolEncoder;
 use super::term::{TermError, TermStore};
 use super::theory::{SignedTerm, TheoryCheck, TheoryManager, TheoryModel};
+use super::validate::validate_model;
 
 #[derive(Clone, Debug)]
 pub(crate) enum SmtSolveResult {
@@ -85,6 +86,16 @@ pub(crate) fn solve(
             .collect::<HashMap<_, _>>();
         match theories.check_model(terms, &values) {
             TheoryCheck::Consistent(theory) => {
+                let validation = validate_model(terms, &theory, roots, |symbol| {
+                    encoder
+                        .atom_literal(symbol)
+                        .is_some_and(|literal| model.literal_value(literal))
+                });
+                if validation.is_err() {
+                    return Ok(SmtSolveResult::Unknown(
+                        UnknownReason::ModelValidationFailure,
+                    ));
+                }
                 return Ok(SmtSolveResult::Sat {
                     boolean: model,
                     theory,

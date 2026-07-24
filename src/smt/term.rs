@@ -456,6 +456,10 @@ impl TermStore {
         self.make_arithmetic_term(Sort::Real, expression)
     }
 
+    pub(crate) fn arithmetic_to_real(&mut self, term: TermId) -> Result<TermId, TermError> {
+        self.coerce_arithmetic_term(term, Sort::Real)
+    }
+
     pub(crate) fn arithmetic_le(
         &mut self,
         left: TermId,

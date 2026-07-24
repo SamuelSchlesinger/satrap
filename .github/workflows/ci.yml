@@ -27,6 +27,8 @@ jobs:
           echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
       - name: Install pinned SMT differential oracles
         run: ./scripts/install-smt-oracles.sh
+      - name: Install pinned proof checker
+        run: ./scripts/install-proof-checkers.sh
       - name: Repository CI gate
         run: ./scripts/ci.sh
         env:

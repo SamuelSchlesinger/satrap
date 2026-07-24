@@ -252,6 +252,42 @@ def check_fuzz_tool_versions(errors: list[str]) -> None:
             errors.append(f"{name} versions disagree: {rendered}")
 
 
+def extract_revision(path: Path, pattern: str, errors: list[str]) -> str | None:
+    text = read_text(path, errors)
+    if text is None:
+        return None
+    match = re.search(pattern, text, flags=re.MULTILINE)
+    if match is None:
+        errors.append(f"{path.relative_to(ROOT)}: revision declaration not found")
+        return None
+    return match.group(1)
+
+
+def check_proof_checker_revision(errors: list[str]) -> None:
+    declarations = {
+        "scripts/check-proofs.sh": extract_revision(
+            ROOT / "scripts/check-proofs.sh",
+            r"^required_drat_trim_revision=([0-9a-f]{40})",
+            errors,
+        ),
+        "scripts/install-proof-checkers.sh": extract_revision(
+            ROOT / "scripts/install-proof-checkers.sh",
+            r"^drat_trim_revision=([0-9a-f]{40})",
+            errors,
+        ),
+    }
+    revisions = {
+        revision for revision in declarations.values() if revision is not None
+    }
+    if len(revisions) > 1:
+        rendered = ", ".join(
+            f"{path}={revision}"
+            for path, revision in declarations.items()
+            if revision is not None
+        )
+        errors.append(f"DRAT-trim revisions disagree: {rendered}")
+
+
 def require_commands(path: Path, commands: tuple[str, ...], errors: list[str]) -> None:
     text = read_text(path, errors)
     if text is None:
@@ -280,6 +316,7 @@ def check_gate_wiring(errors: list[str]) -> None:
         (
             "scripts/quality.sh",
             "scripts/check-fuzz.sh",
+            "scripts/check-proofs.sh",
             "z3 --version",
             "cvc5 --version",
             "bitwuzla --version",
@@ -302,12 +339,32 @@ def check_gate_wiring(errors: list[str]) -> None:
             "actions/checkout@v6",
             "scripts/install-fuzz-tools.sh",
             "scripts/install-smt-oracles.sh",
+            "scripts/install-proof-checkers.sh",
         ),
         errors,
     )
     require_commands(
         ROOT / "scripts/install-smt-oracles.sh",
         ("Z3Prover/z3", "cvc5/cvc5", "bitwuzla/bitwuzla"),
+        errors,
+    )
+    require_commands(
+        ROOT / "scripts/install-proof-checkers.sh",
+        ("marijnheule/drat-trim", "drat_trim_sha256"),
+        errors,
+    )
+    require_commands(
+        ROOT / "scripts/check-proofs.sh",
+        (
+            "tools/proof_smoke.py",
+            "--probe",
+            "--vivify",
+            "--subsume",
+            "--binary-minimize",
+            "--eliminate",
+            "--factor",
+            "--factor-macro",
+        ),
         errors,
     )
     require_commands(
@@ -345,6 +402,7 @@ def main() -> int:
     check_audit_version(errors)
     check_oracle_versions(errors)
     check_fuzz_tool_versions(errors)
+    check_proof_checker_revision(errors)
     check_gate_wiring(errors)
     check_executable_scripts(errors)
 

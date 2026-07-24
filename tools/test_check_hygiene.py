@@ -86,14 +86,14 @@ class HygieneChecksTests(unittest.TestCase):
             ),
             ".github/workflows/ci.yml": (
                 "actions/checkout@v6\nscripts/install-fuzz-tools.sh\n"
-                "scripts/install-smt-oracles.sh\n"
+                "scripts/install-smt-oracles.sh\nscripts/install-proof-checkers.sh\n"
                 "scripts/ci.sh\nscripts/check-msrv.sh\n"
             ),
             ".github/workflows/security.yml": (
                 "actions/checkout@v6\nscripts/check-security.sh\n"
             ),
             "scripts/ci.sh": (
-                "scripts/quality.sh\nscripts/check-fuzz.sh\n"
+                "scripts/quality.sh\nscripts/check-fuzz.sh\nscripts/check-proofs.sh\n"
                 "z3 --version\ncvc5 --version\n"
                 "bitwuzla --version\n"
             ),
@@ -106,6 +106,13 @@ class HygieneChecksTests(unittest.TestCase):
             ),
             "scripts/install-fuzz-tools.sh": (
                 "--component clippy\n--component rust-src\n--component rustfmt\n"
+            ),
+            "scripts/install-proof-checkers.sh": (
+                "marijnheule/drat-trim\ndrat_trim_sha256\n"
+            ),
+            "scripts/check-proofs.sh": (
+                "tools/proof_smoke.py\n--probe\n--vivify\n--subsume\n"
+                "--binary-minimize\n--eliminate\n--factor\n--factor-macro\n"
             ),
             "scripts/quality.sh": "shellcheck\nactionlint\ntools/check_hygiene.py\n",
         }
@@ -126,9 +133,39 @@ class HygieneChecksTests(unittest.TestCase):
                 [
                     "scripts/ci.sh: must invoke scripts/quality.sh",
                     "scripts/ci.sh: must invoke scripts/check-fuzz.sh",
+                    "scripts/ci.sh: must invoke scripts/check-proofs.sh",
                     "scripts/ci.sh: must invoke z3 --version",
                     "scripts/ci.sh: must invoke cvc5 --version",
                     "scripts/ci.sh: must invoke bitwuzla --version",
+                ],
+            )
+
+    def test_proof_checker_revision_check_detects_installer_drift(self) -> None:
+        directory, root = self.temporary_root()
+        with directory, patch.object(check_hygiene, "ROOT", root):
+            gate = root / "scripts/check-proofs.sh"
+            installer = root / "scripts/install-proof-checkers.sh"
+            gate.parent.mkdir(parents=True)
+            gate.write_text(
+                "required_drat_trim_revision="
+                "2e5e29cb0019d5cfd547d4208dca1b3ec290349f\n",
+                encoding="utf-8",
+            )
+            installer.write_text(
+                "drat_trim_revision="
+                "1111111111111111111111111111111111111111\n",
+                encoding="utf-8",
+            )
+            errors: list[str] = []
+            check_hygiene.check_proof_checker_revision(errors)
+            self.assertEqual(
+                errors,
+                [
+                    "DRAT-trim revisions disagree: "
+                    "scripts/check-proofs.sh="
+                    "2e5e29cb0019d5cfd547d4208dca1b3ec290349f, "
+                    "scripts/install-proof-checkers.sh="
+                    "1111111111111111111111111111111111111111"
                 ],
             )
 

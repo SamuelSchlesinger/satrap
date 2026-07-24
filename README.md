@@ -23,8 +23,8 @@ is not yet a general or state-of-the-art SMT solver. The
   strategies.
 - Compact hot-path data structures: packed watches and reasons, separate binary
   storage, and a contiguous long-clause arena.
-- SAT models and streaming DRAT proofs, with independent validation in the
-  benchmark workflow.
+- SAT models and streaming DRAT proofs, checked by pinned DRAT-trim in the
+  local and hosted integration gates.
 - Interactive SMT-LIB with `push`/`pop`, `check-sat-assuming`, models, values,
   assignments, named unsat cores, resource limits, and interruption.
 - Complete fixed-width QF_BV lowering, congruence closure for QF_UF, and
@@ -47,6 +47,7 @@ cargo build --release
 cargo test --all-targets
 make install-oracles
 make install-fuzz-tools
+make install-proof-checkers
 make install-hooks
 ```
 
@@ -136,12 +137,15 @@ Deterministic tests cover the SAT kernel against brute force and exercise the
 implemented SMT fragments against pinned Z3, cvc5, and Bitwuzla releases.
 Arithmetic models and representative named cores are replayed independently
 through both Z3 and cvc5; finite core cases also pass Bitwuzla. Run
-`make install-oracles` and `make install-fuzz-tools` once per clone before
-`make check`; the shared integration gate requires exact versions of all three
-solvers and runs bounded coverage-guided parser, session, and proof fuzzing.
-It never silently skips an oracle or fuzz target. These generated checks are
-correctness evidence, not representative performance benchmarks. See the
-[fuzzing guide](docs/FUZZING.md) for longer campaigns and crash reproduction.
+`make install-oracles`, `make install-fuzz-tools`, and
+`make install-proof-checkers` once per clone before `make check`; the shared
+integration gate requires exact versions of all three solvers and the proof
+checker, runs bounded coverage-guided parser, session, and proof fuzzing, and
+independently checks the SAT proof-mode matrix. It never silently skips an
+oracle, fuzz target, or proof check. These generated checks are correctness
+evidence, not representative performance benchmarks. See the
+[fuzzing guide](docs/FUZZING.md) and [proof-checking guide](docs/PROOF_CHECKING.md)
+for the exact boundaries and longer-running work.
 
 For controlled solver comparisons:
 

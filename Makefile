@@ -1,4 +1,4 @@
-.PHONY: audit check check-fast check-fuzz check-msrv install-fuzz-tools install-hooks install-oracles profiling proof-smoke quality release smoke test
+.PHONY: audit check check-fast check-fuzz check-msrv check-proofs install-fuzz-tools install-hooks install-oracles install-proof-checkers profiling proof-smoke quality release smoke test
 
 PYTHON ?= python3
 DRAT_TRIM ?= drat-trim
@@ -18,6 +18,9 @@ quality:
 check-msrv:
 	./scripts/check-msrv.sh
 
+check-proofs:
+	./scripts/check-proofs.sh
+
 audit:
 	./scripts/check-security.sh
 
@@ -29,6 +32,9 @@ install-fuzz-tools:
 
 install-oracles:
 	./scripts/install-smt-oracles.sh
+
+install-proof-checkers:
+	./scripts/install-proof-checkers.sh
 
 test:
 	cargo test --all-targets --locked

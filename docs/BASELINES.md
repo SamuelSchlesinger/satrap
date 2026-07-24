@@ -37,8 +37,9 @@ Reference sources:
 - <https://satcompetition.github.io/2025/satcomp25slides.pdf>
 
 For proof development, DRAT-trim is pinned at tag `v05.22.2023`, commit
-`2e5e29cb0019d5cfd547d4208dca1b3ec290349f`. After building it with `make`, run
-`make proof-smoke DRAT_TRIM=/path/to/drat-trim`.
+`2e5e29cb0019d5cfd547d4208dca1b3ec290349f`. Install the hash-checked source
+and run the mandatory proof matrix with `make install-proof-checkers` followed
+by `make check-proofs`. See [Proof checking](PROOF_CHECKING.md).
 
 The default learned-clause reducer follows Cai, Zhang, Shi, Tao, and Xu,
 “Rethinking Clause Management for CDCL SAT Solvers,” arXiv:2602.20829v2

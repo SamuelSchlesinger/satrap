@@ -123,10 +123,13 @@ the world-class benchmark gates are tracked candidly in
 [the roadmap](ROADMAP.md) and [fuzzing guide](FUZZING.md).
 
 The SAT proof stream has been checked with DRAT-trim on smoke and real
-competition instances. A targeted REGN comparison is now competitive with
+competition instances. The pinned checker now runs on every push against the
+baseline, deep chronological backtracking, and every proof-sensitive
+preprocessing/minimization mode. A targeted REGN comparison is competitive with
 pinned Kissat 4.0.4, but the small corpus and a failed mixed-family promotion
 gate do not support a general competitiveness claim. The benchmark runner also
-does not yet validate every UNSAT row.
+does not yet validate every UNSAT row; see
+[Proof checking](PROOF_CHECKING.md).
 
 ## Build and run
 

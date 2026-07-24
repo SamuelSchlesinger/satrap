@@ -21,8 +21,10 @@ Passing this gate means “worth iterating on,” not “competitive.”
   monotone post-query clause addition, and activation-literal scopes are
   implemented and differentially checked against brute force; scope-aware
   irreversible preprocessing and an incremental proof container remain;
-- extend the implemented textual DRAT stream with deletion/binary modes and an
-  automated independent checker in every UNSAT benchmark run;
+- the textual DRAT stream includes deletion steps, and the baseline plus every
+  proof-sensitive SAT mode is checked by pinned DRAT-trim on every push;
+  automatic validation and artifact retention for every UNSAT benchmark row
+  remain;
 - model checking integrated into every benchmark run;
 - named core subsets now have deterministic independent replay cases in every
   advertised fragment, including a combined core/assumption query; integrating

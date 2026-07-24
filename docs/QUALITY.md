@@ -25,6 +25,7 @@ claim.
 | Commit | `make check-fast` | Formatting, compilation, shell syntax, and repository hygiene |
 | Quality | `make quality` | Strict Clippy, rustdoc, ShellCheck, Actionlint, lockfile, and structural checks |
 | Fuzz | `make check-fuzz` | Locked format/Clippy/sanitizer build plus bounded parser, incremental SMT, and SAT proof campaigns |
+| Proof | `make check-proofs` | Release SAT certificates checked by pinned DRAT-trim across every proof-sensitive mode |
 | Integration | `make check` | Quality plus required three-oracle differential/model checks, Rust/Python tests, fuzz smoke, and a release build |
 | Compatibility | `make check-msrv` | Full tests on the declared minimum Rust version |
 | Dependencies | `make audit` | RustSec advisory audit; requires `cargo-audit` and network access |
@@ -36,17 +37,19 @@ runs the RustSec audit on every push and pull request, plus weekly, so a newly
 published advisory is caught even when the repository is unchanged.
 
 The pre-push gate requires `cargo-audit`, ShellCheck, Actionlint, Z3 4.16.0,
-cvc5 1.3.3, Bitwuzla 0.9.1, nightly-2026-06-01, and cargo-fuzz 0.13.2. The
-three SMT oracles and all three fuzz targets are mandatory here even though a
-direct `cargo test` does not require them: neither the local integration gate
-nor hosted CI may silently lose an independent comparison or sanitizer-backed
-campaign. Install the tools with:
+cvc5 1.3.3, Bitwuzla 0.9.1, nightly-2026-06-01, cargo-fuzz 0.13.2, and
+DRAT-trim commit `2e5e29cb0019d5cfd547d4208dca1b3ec290349f`. The three SMT
+oracles, all three fuzz targets, and the independent SAT proof checks are
+mandatory here even though a direct `cargo test` does not require them:
+neither the local integration gate nor hosted CI may silently lose one.
+Install the tools with:
 
 ```sh
 cargo install cargo-audit --version 0.22.2 --locked
 brew install actionlint shellcheck  # macOS; use your package manager elsewhere
 make install-oracles
 make install-fuzz-tools
+make install-proof-checkers
 ```
 
 `make install-oracles` downloads official release archives into the ignored
@@ -62,6 +65,13 @@ every push, not a substitute for sustained campaigns. Failure artifacts are
 kept outside the checked-in corpus and uploaded by hosted CI. Target scope,
 long-running commands, corpus policy, and reproduction steps are in
 [Fuzzing](FUZZING.md).
+
+The proof gate builds the release solver and validates certificates for the
+baseline plus each proof-sensitive preprocessing and minimization mode. The
+checker source archive is hash-pinned and its declared revision is synchronized
+by the hygiene gate. Scope, assumptions, SMT theory certificates, and the
+difference between a push smoke suite and benchmark-wide proof retention are
+documented in [Proof checking](PROOF_CHECKING.md).
 
 `tools/check_hygiene.py` enforces the small but easy-to-forget invariants:
 UTF-8/LF text, final newlines, no trailing whitespace, valid local Markdown

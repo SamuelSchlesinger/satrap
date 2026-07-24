@@ -106,8 +106,11 @@ covers 3,744, and Bitwuzla 0.9.1 covers 800 finite QF_BV/QF_AUFBV queries.
 The harness rejects `unknown` rather than counting it as agreement. Generated
 corpora are not representative benchmarks, the 72 scalar and 16 full
 combination models are replayed through both Z3 and cvc5 but are not yet
-fragment-complete, and theory UNSAT results do not yet carry independently
-checkable proofs.
+fragment-complete, and named core subsets have representative independent
+replays in all 14 advertised fragments. The finite core cases additionally
+pass Bitwuzla, and a core produced with a failed assumption is replayed with
+that assumption. This is not yet generated or benchmark-wide core validation,
+and theory UNSAT results do not yet carry independently checkable proofs.
 
 Coverage-guided smoke campaigns now run on every push. One target passes
 arbitrary bytes through the public SMT-LIB session, another generates

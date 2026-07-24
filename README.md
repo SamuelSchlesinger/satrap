@@ -134,7 +134,8 @@ For the gate breakdown, lint rationale, and small-commit procedure, see the
 
 Deterministic tests cover the SAT kernel against brute force and exercise the
 implemented SMT fragments against pinned Z3, cvc5, and Bitwuzla releases.
-Arithmetic models are replayed independently through both Z3 and cvc5. Run
+Arithmetic models and representative named cores are replayed independently
+through both Z3 and cvc5; finite core cases also pass Bitwuzla. Run
 `make install-oracles` and `make install-fuzz-tools` once per clone before
 `make check`; the shared integration gate requires exact versions of all three
 solvers and runs bounded coverage-guided parser, session, and proof fuzzing.

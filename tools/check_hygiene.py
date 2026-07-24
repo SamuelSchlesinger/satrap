@@ -43,6 +43,8 @@ REQUIRED_QUALITY_ASSETS = (
     Path("benchmarks/smt-proof-smoke/qf-ufbv-congruence.smt2"),
     Path("benchmarks/smt-proof-smoke/qf-idl-cycle.smt2"),
     Path("benchmarks/smt-proof-smoke/qf-idl-ite.smt2"),
+    Path("benchmarks/smt-proof-smoke/qf-lia-ite.smt2"),
+    Path("benchmarks/smt-proof-smoke/qf-lia-parity.smt2"),
     Path("benchmarks/smt-proof-smoke/qf-lra-ite.smt2"),
     Path("benchmarks/smt-proof-smoke/qf-lra-linear.smt2"),
     Path("benchmarks/smt-proof-smoke/qf-rdl-rational.smt2"),
@@ -324,6 +326,45 @@ def check_proof_checker_revision(errors: list[str]) -> None:
         errors.append(f"DRAT-trim revisions disagree: {rendered}")
 
 
+def extract_integer_declaration(
+    path: Path,
+    pattern: str,
+    errors: list[str],
+) -> int | None:
+    text = read_text(path, errors)
+    if text is None:
+        return None
+    match = re.search(pattern, text, flags=re.MULTILINE)
+    if match is None:
+        errors.append(f"{path.relative_to(ROOT)}: integer declaration not found")
+        return None
+    return int(match.group(1).replace("_", ""))
+
+
+def check_integer_proof_limits(errors: list[str]) -> None:
+    rust = ROOT / "src/smt/proof.rs"
+    python = ROOT / "tools/check_smt_proof.py"
+    for name in ("MAX_INTEGER_PROOF_VARIABLES", "MAX_INTEGER_PROOF_WORK"):
+        declarations = {
+            "src/smt/proof.rs": extract_integer_declaration(
+                rust,
+                rf"^const {name}: usize = ([0-9_]+);",
+                errors,
+            ),
+            "tools/check_smt_proof.py": extract_integer_declaration(
+                python,
+                rf"^{name} = ([0-9_]+)",
+                errors,
+            ),
+        }
+        values = {value for value in declarations.values() if value is not None}
+        if len(values) > 1:
+            rendered = ", ".join(
+                f"{path}={value}" for path, value in declarations.items() if value is not None
+            )
+            errors.append(f"{name} declarations disagree: {rendered}")
+
+
 def require_commands(path: Path, commands: tuple[str, ...], errors: list[str]) -> None:
     text = read_text(path, errors)
     if text is None:
@@ -483,6 +524,7 @@ def main() -> int:
     check_fuzz_tool_versions(errors)
     check_python_tool_versions(errors)
     check_proof_checker_revision(errors)
+    check_integer_proof_limits(errors)
     check_required_quality_assets(errors)
     check_gate_wiring(errors)
     check_executable_scripts(errors)

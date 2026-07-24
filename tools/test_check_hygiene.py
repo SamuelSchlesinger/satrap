@@ -193,6 +193,32 @@ class HygieneChecksTests(unittest.TestCase):
                 ],
             )
 
+    def test_integer_proof_limit_check_detects_checker_drift(self) -> None:
+        directory, root = self.temporary_root()
+        with directory, patch.object(check_hygiene, "ROOT", root):
+            rust = root / "src/smt/proof.rs"
+            python = root / "tools/check_smt_proof.py"
+            rust.parent.mkdir(parents=True)
+            python.parent.mkdir(parents=True)
+            rust.write_text(
+                "const MAX_INTEGER_PROOF_VARIABLES: usize = 512;\n"
+                "const MAX_INTEGER_PROOF_WORK: usize = 1_000_000;\n",
+                encoding="utf-8",
+            )
+            python.write_text(
+                "MAX_INTEGER_PROOF_VARIABLES = 512\nMAX_INTEGER_PROOF_WORK = 999_999\n",
+                encoding="utf-8",
+            )
+            errors: list[str] = []
+            check_hygiene.check_integer_proof_limits(errors)
+            self.assertEqual(
+                errors,
+                [
+                    "MAX_INTEGER_PROOF_WORK declarations disagree: "
+                    "src/smt/proof.rs=1000000, tools/check_smt_proof.py=999999"
+                ],
+            )
+
     def test_audit_version_check_detects_ci_drift(self) -> None:
         directory, root = self.temporary_root()
         with directory, patch.object(check_hygiene, "ROOT", root):

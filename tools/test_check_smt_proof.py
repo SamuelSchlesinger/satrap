@@ -1,11 +1,15 @@
 import unittest
 
 from check_smt_proof import (
+    INT_SORT,
     CnfEncoder,
+    LinearConstraint,
     ProofCheckError,
     ProofSession,
     SExprReader,
     UfLowering,
+    integer_linear_constraints_unsat,
+    linear_expression,
     validate_encoding,
 )
 
@@ -42,6 +46,25 @@ IDL_PROOF = """unsat
 (satrap-edrat :version 1 :logic QF_IDL :variables 2
  :premises ("(<= (- x y) 1)" "(<= (- y x) (- 2))")
  :clauses ((formula 1) (formula 2) (theory -1 -2))
+ :drat "0
+")
+"""
+
+LIA_SCRIPT = """
+(set-option :produce-proofs true)
+(set-logic QF_LIA)
+(declare-const x Int)
+(declare-const y Int)
+(assert (= (+ (* 2 x) (* 4 y)) 1))
+(check-sat)
+(get-proof)
+"""
+
+LIA_PROOF = """unsat
+(satrap-edrat :version 1 :logic QF_LIA :variables 3
+ :premises ("(= (+ (* 2 x) (* 4 y)) 1)")
+ :clauses ((encoding 1 -3) (encoding 2 -3) (encoding -1 -2 3)
+           (formula 3) (theory -1 -2))
  :drat "0
 ")
 """
@@ -351,6 +374,56 @@ class SmtProofCheckerTests(unittest.TestCase):
     def test_real_strict_cycle_is_independently_validated(self):
         certificate = validate_encoding(RDL_SCRIPT, RDL_PROOF)
         self.assertEqual(certificate.logic, "QF_RDL")
+
+    def test_general_linear_integer_clause_is_independently_validated(self):
+        certificate = validate_encoding(LIA_SCRIPT, LIA_PROOF)
+        self.assertEqual(certificate.logic, "QF_LIA")
+        self.assertEqual(certificate.clauses[-1], ("theory", (-1, -2)))
+
+    def test_rejects_a_linear_integer_clause_that_blocks_a_satisfiable_assignment(self):
+        with self.assertRaisesRegex(
+            ProofCheckError,
+            "blocks a satisfiable theory assignment",
+        ):
+            validate_encoding(
+                LIA_SCRIPT,
+                LIA_PROOF.replace("(theory -1 -2)", "(theory 1 -2)"),
+            )
+
+    def test_cooper_checker_matches_bounded_exhaustive_search(self):
+        x = (0, INT_SORT, "x")
+        y = (0, INT_SORT, "y")
+        bounds = [
+            LinearConstraint(INT_SORT, linear_expression(-2, {x: 1}), False),
+            LinearConstraint(INT_SORT, linear_expression(-2, {x: -1}), False),
+            LinearConstraint(INT_SORT, linear_expression(-2, {y: 1}), False),
+            LinearConstraint(INT_SORT, linear_expression(-2, {y: -1}), False),
+        ]
+        for left in range(-3, 4):
+            for right in range(-3, 4):
+                if left == 0 and right == 0:
+                    continue
+                for target in range(-6, 7):
+                    equation = linear_expression(-target, {x: left, y: right})
+                    constraints = [
+                        *bounds,
+                        LinearConstraint(INT_SORT, equation, False),
+                        LinearConstraint(
+                            INT_SORT,
+                            linear_expression(target, {x: -left, y: -right}),
+                            False,
+                        ),
+                    ]
+                    expected = not any(
+                        left * x_value + right * y_value == target
+                        for x_value in range(-2, 3)
+                        for y_value in range(-2, 3)
+                    )
+                    self.assertEqual(
+                        integer_linear_constraints_unsat(constraints),
+                        expected,
+                        f"{left}*x + {right}*y = {target}",
+                    )
 
     def test_general_linear_real_clause_is_independently_validated(self):
         certificate = validate_encoding(LRA_SCRIPT, LRA_PROOF)

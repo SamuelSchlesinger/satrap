@@ -37,6 +37,8 @@ FALSE: BoolExpr = (0,)
 TRUE: BoolExpr = (1,)
 MAX_BITVECTOR_WIDTH = 1_048_576
 MAX_QUADRATIC_LOWERING_WORK = 16_000_000
+MAX_INTEGER_PROOF_VARIABLES = 512
+MAX_INTEGER_PROOF_WORK = 1_000_000
 
 
 @dataclass(frozen=True, order=True)
@@ -1082,6 +1084,7 @@ class ProofSession:
                 "QF_ABV",
                 "QF_AUFBV",
                 "QF_IDL",
+                "QF_LIA",
                 "QF_RDL",
                 "QF_LRA",
             }:
@@ -1547,8 +1550,8 @@ class ProofSession:
             raise ProofCheckError(f"{self.logic} proof contains an uninterpreted declaration")
         if self.logic == "QF_UF" and isinstance(parsed_sort, (BitVecSort, ArraySort)):
             raise ProofCheckError("QF_UF proof contains a non-UF declaration")
-        if self.logic == "QF_IDL" and not isinstance(parsed_sort, (BoolSort, IntSort)):
-            raise ProofCheckError("QF_IDL proof contains a declaration outside Bool or Int")
+        if self.logic in {"QF_IDL", "QF_LIA"} and not isinstance(parsed_sort, (BoolSort, IntSort)):
+            raise ProofCheckError(f"{self.logic} proof contains a declaration outside Bool or Int")
         if self.logic in {"QF_RDL", "QF_LRA"} and not isinstance(parsed_sort, (BoolSort, RealSort)):
             raise ProofCheckError(f"{self.logic} proof contains a declaration outside Bool or Real")
         if parsed_sort == BOOL_SORT:
@@ -1592,7 +1595,7 @@ class ProofSession:
             raise ProofCheckError("bit-vector term used outside a bit-vector proof logic")
 
     def _require_arithmetic(self) -> None:
-        if self.logic not in {"QF_IDL", "QF_RDL", "QF_LRA"}:
+        if self.logic not in {"QF_IDL", "QF_LIA", "QF_RDL", "QF_LRA"}:
             raise ProofCheckError("arithmetic term used outside an arithmetic proof logic")
 
     def _require_reals(self) -> None:
@@ -1621,7 +1624,7 @@ class ProofSession:
             if value == "Bool":
                 return BOOL_SORT
             if value == "Int":
-                if self.logic != "QF_IDL":
+                if self.logic not in {"QF_IDL", "QF_LIA"}:
                     raise ProofCheckError("Int sort used outside an integer proof logic")
                 return INT_SORT
             if value == "Real":
@@ -2494,6 +2497,394 @@ class ArithmeticProblem:
         return constraints
 
 
+@dataclass(frozen=True, order=True)
+class IntegerExpr:
+    constant: int
+    coefficients: tuple[tuple[ArithmeticVariable, int], ...]
+
+
+def integer_expression(
+    constant: int = 0,
+    coefficients: dict[ArithmeticVariable, int] | None = None,
+) -> IntegerExpr:
+    return IntegerExpr(
+        constant,
+        tuple(
+            sorted(
+                (
+                    (variable, coefficient)
+                    for variable, coefficient in (coefficients or {}).items()
+                    if coefficient
+                ),
+                key=lambda item: item[0],
+            )
+        ),
+    )
+
+
+def integer_from_linear(expression: LinearExpr) -> IntegerExpr | None:
+    if expression.constant.denominator != 1 or any(
+        coefficient.denominator != 1 for _, coefficient in expression.coefficients
+    ):
+        return None
+    return integer_expression(
+        expression.constant.numerator,
+        {variable: coefficient.numerator for variable, coefficient in expression.coefficients},
+    )
+
+
+def integer_coefficient(expression: IntegerExpr, variable: ArithmeticVariable) -> int:
+    return dict(expression.coefficients).get(variable, 0)
+
+
+def integer_without(expression: IntegerExpr, variable: ArithmeticVariable) -> IntegerExpr:
+    return integer_expression(
+        expression.constant,
+        {
+            candidate: coefficient
+            for candidate, coefficient in expression.coefficients
+            if candidate != variable
+        },
+    )
+
+
+def integer_scaled(expression: IntegerExpr, scale: int) -> IntegerExpr:
+    return integer_expression(
+        expression.constant * scale,
+        {variable: coefficient * scale for variable, coefficient in expression.coefficients},
+    )
+
+
+def integer_add_scaled(left: IntegerExpr, right: IntegerExpr, scale: int) -> IntegerExpr:
+    coefficients = dict(left.coefficients)
+    for variable, coefficient in right.coefficients:
+        coefficients[variable] = coefficients.get(variable, 0) + coefficient * scale
+    return integer_expression(left.constant + right.constant * scale, coefficients)
+
+
+def integer_substitute(
+    expression: IntegerExpr,
+    variable: ArithmeticVariable,
+    value: IntegerExpr,
+) -> IntegerExpr:
+    coefficient = integer_coefficient(expression, variable)
+    return integer_add_scaled(integer_without(expression, variable), value, coefficient)
+
+
+@dataclass(frozen=True, order=True)
+class IntegerInequality:
+    expression: IntegerExpr
+
+
+@dataclass(frozen=True, order=True)
+class DivisibilityConstraint:
+    modulus: int
+    expression: IntegerExpr
+
+
+@dataclass(frozen=True)
+class IntegerProblem:
+    inequalities: tuple[IntegerInequality, ...] = ()
+    divisibilities: tuple[DivisibilityConstraint, ...] = ()
+
+
+def substitute_integer_problem(
+    problem: IntegerProblem,
+    variable: ArithmeticVariable,
+    value: IntegerExpr,
+) -> IntegerProblem:
+    return IntegerProblem(
+        tuple(
+            IntegerInequality(integer_substitute(constraint.expression, variable, value))
+            for constraint in problem.inequalities
+        ),
+        tuple(
+            DivisibilityConstraint(
+                constraint.modulus,
+                integer_substitute(constraint.expression, variable, value),
+            )
+            for constraint in problem.divisibilities
+        ),
+    )
+
+
+def integer_problem_mentions(problem: IntegerProblem, variable: ArithmeticVariable) -> bool:
+    return any(
+        integer_coefficient(constraint.expression, variable) for constraint in problem.inequalities
+    ) or any(
+        integer_coefficient(constraint.expression, variable)
+        for constraint in problem.divisibilities
+    )
+
+
+@dataclass(frozen=True)
+class CooperElimination:
+    normalized: IntegerProblem
+    period: int
+    lower_bases: tuple[IntegerExpr, ...]
+    upper_bases: tuple[IntegerExpr, ...]
+
+
+@dataclass
+class IntegerProofBudget:
+    remaining: int = MAX_INTEGER_PROOF_WORK
+
+    def spend(self, amount: int) -> None:
+        if amount < 0 or amount > self.remaining:
+            raise ProofCheckError(
+                "linear-integer proof exceeded its deterministic work limit of "
+                f"{MAX_INTEGER_PROOF_WORK} steps"
+            )
+        self.remaining -= amount
+
+
+def integer_linear_constraints_unsat(constraints: list[LinearConstraint]) -> bool:
+    inequalities = []
+    for constraint in constraints:
+        if constraint.sort != INT_SORT:
+            raise ProofCheckError("linear-integer proof contains a constraint of the wrong sort")
+        expression = integer_from_linear(constraint.expression)
+        if expression is None:
+            raise ProofCheckError("linear-integer proof contains a non-integral affine expression")
+        if not constraint.strict:
+            expression = integer_expression(
+                expression.constant - 1,
+                dict(expression.coefficients),
+            )
+        inequalities.append(IntegerInequality(expression))
+    problem = IntegerProblem(tuple(inequalities))
+    variables = tuple(
+        sorted(
+            {
+                variable
+                for constraint in problem.inequalities
+                for variable, _ in constraint.expression.coefficients
+            }
+        )
+    )
+    if len(variables) > MAX_INTEGER_PROOF_VARIABLES:
+        raise ProofCheckError(
+            f"linear-integer proof has {len(variables)} variables; "
+            f"the deterministic proof limit is {MAX_INTEGER_PROOF_VARIABLES}"
+        )
+    return not integer_problem_satisfiable(problem, variables, IntegerProofBudget())
+
+
+def integer_problem_satisfiable(
+    problem: IntegerProblem,
+    variables: tuple[ArithmeticVariable, ...],
+    budget: IntegerProofBudget,
+) -> bool:
+    budget.spend(1)
+    problem = simplify_integer_problem(problem, budget)
+    if problem is None:
+        return False
+    if not variables:
+        return True
+    variable = min(
+        variables,
+        key=lambda candidate: (cooper_elimination_cost(problem, candidate), candidate),
+    )
+    remaining = tuple(candidate for candidate in variables if candidate != variable)
+    if not integer_problem_mentions(problem, variable):
+        return integer_problem_satisfiable(problem, remaining, budget)
+
+    elimination = normalize_cooper_variable(problem, variable, budget)
+    if elimination.lower_bases:
+        candidates = (
+            integer_expression(base.constant + offset, dict(base.coefficients))
+            for base in elimination.lower_bases
+            for offset in range(1, elimination.period + 1)
+        )
+    elif elimination.upper_bases:
+        candidates = (
+            integer_expression(base.constant - offset, dict(base.coefficients))
+            for base in elimination.upper_bases
+            for offset in range(1, elimination.period + 1)
+        )
+    else:
+        candidates = (integer_expression(value) for value in range(elimination.period))
+    for candidate in candidates:
+        budget.spend(1)
+        reduced = substitute_integer_problem(elimination.normalized, variable, candidate)
+        if integer_problem_satisfiable(reduced, remaining, budget):
+            return True
+    return False
+
+
+def cooper_elimination_cost(problem: IntegerProblem, variable: ArithmeticVariable) -> int:
+    scale = 1
+    lower_count = 0
+    upper_count = 0
+    mentioned = False
+    for constraint in problem.inequalities:
+        coefficient = integer_coefficient(constraint.expression, variable)
+        if coefficient == 0:
+            continue
+        mentioned = True
+        scale = integer_lcm(scale, abs(coefficient))
+        if coefficient < 0:
+            lower_count += 1
+        else:
+            upper_count += 1
+    for constraint in problem.divisibilities:
+        coefficient = integer_coefficient(constraint.expression, variable)
+        if coefficient == 0:
+            continue
+        mentioned = True
+        scale = integer_lcm(scale, abs(coefficient))
+    if not mentioned:
+        return 0
+
+    period = scale
+    for constraint in problem.divisibilities:
+        coefficient = integer_coefficient(constraint.expression, variable)
+        if coefficient:
+            transformed_modulus = (scale // abs(coefficient)) * abs(constraint.modulus)
+            period = integer_lcm(period, transformed_modulus)
+    candidate_count = lower_count or upper_count or 1
+    return period * candidate_count
+
+
+def normalize_cooper_variable(
+    problem: IntegerProblem,
+    variable: ArithmeticVariable,
+    budget: IntegerProofBudget,
+) -> CooperElimination:
+    budget.spend(len(problem.inequalities) + len(problem.divisibilities))
+    coefficients = [
+        coefficient
+        for constraint in (*problem.inequalities, *problem.divisibilities)
+        if (coefficient := integer_coefficient(constraint.expression, variable))
+    ]
+    if not coefficients:
+        raise ProofCheckError("linear-integer proof tried to eliminate an absent variable")
+    scale = 1
+    for coefficient in coefficients:
+        scale = integer_lcm(scale, abs(coefficient))
+
+    inequalities = []
+    divisibilities = []
+    lower_bases = []
+    upper_bases = []
+    for constraint in problem.inequalities:
+        coefficient = integer_coefficient(constraint.expression, variable)
+        if coefficient == 0:
+            inequalities.append(constraint)
+            continue
+        factor = scale // abs(coefficient)
+        expression = integer_scaled(integer_without(constraint.expression, variable), factor)
+        coefficients_by_variable = dict(expression.coefficients)
+        coefficients_by_variable[variable] = 1 if coefficient > 0 else -1
+        expression = integer_expression(expression.constant, coefficients_by_variable)
+        if coefficient > 0:
+            upper_bases.append(integer_scaled(integer_without(expression, variable), -1))
+        else:
+            lower_bases.append(integer_without(expression, variable))
+        inequalities.append(IntegerInequality(expression))
+    for constraint in problem.divisibilities:
+        coefficient = integer_coefficient(constraint.expression, variable)
+        if coefficient == 0:
+            divisibilities.append(constraint)
+            continue
+        factor = scale // abs(coefficient)
+        expression = integer_scaled(integer_without(constraint.expression, variable), factor)
+        coefficients_by_variable = dict(expression.coefficients)
+        coefficients_by_variable[variable] = 1 if coefficient > 0 else -1
+        divisibilities.append(
+            DivisibilityConstraint(
+                constraint.modulus * factor,
+                integer_expression(expression.constant, coefficients_by_variable),
+            )
+        )
+    divisibilities.append(
+        DivisibilityConstraint(
+            scale,
+            integer_expression(coefficients={variable: 1}),
+        )
+    )
+    period = 1
+    for constraint in divisibilities:
+        period = integer_lcm(period, constraint.modulus)
+    return CooperElimination(
+        IntegerProblem(tuple(inequalities), tuple(divisibilities)),
+        period,
+        tuple(lower_bases),
+        tuple(upper_bases),
+    )
+
+
+def simplify_integer_problem(
+    problem: IntegerProblem,
+    budget: IntegerProofBudget,
+) -> IntegerProblem | None:
+    budget.spend(len(problem.inequalities) + len(problem.divisibilities))
+    inequalities = set()
+    for constraint in problem.inequalities:
+        expression = constraint.expression
+        coefficient_gcd = 0
+        for _, coefficient in expression.coefficients:
+            coefficient_gcd = integer_gcd(coefficient_gcd, coefficient)
+        if coefficient_gcd > 1:
+            expression = integer_expression(
+                expression.constant // coefficient_gcd,
+                {
+                    variable: coefficient // coefficient_gcd
+                    for variable, coefficient in expression.coefficients
+                },
+            )
+            constraint = IntegerInequality(expression)
+        if not expression.coefficients:
+            if expression.constant >= 0:
+                return None
+        else:
+            inequalities.add(constraint)
+
+    divisibilities = set()
+    for constraint in problem.divisibilities:
+        modulus = abs(constraint.modulus)
+        if modulus == 0:
+            raise ProofCheckError("linear-integer proof produced a zero divisibility modulus")
+        expression = constraint.expression
+        common_gcd = modulus
+        for _, coefficient in expression.coefficients:
+            common_gcd = integer_gcd(common_gcd, coefficient)
+        if expression.constant % common_gcd:
+            return None
+        if common_gcd > 1:
+            modulus //= common_gcd
+            expression = integer_expression(
+                expression.constant // common_gcd,
+                {
+                    variable: coefficient // common_gcd
+                    for variable, coefficient in expression.coefficients
+                },
+            )
+        if modulus == 1:
+            continue
+        normalized = DivisibilityConstraint(modulus, expression)
+        if not expression.coefficients:
+            if expression.constant % modulus:
+                return None
+        else:
+            divisibilities.add(normalized)
+    return IntegerProblem(tuple(sorted(inequalities)), tuple(sorted(divisibilities)))
+
+
+def integer_gcd(left: int, right: int) -> int:
+    left = abs(left)
+    right = abs(right)
+    while right:
+        left, right = right, left % right
+    return left
+
+
+def integer_lcm(left: int, right: int) -> int:
+    if left == 0 or right == 0:
+        return 0
+    return abs((left // integer_gcd(left, right)) * right)
+
+
 def real_linear_constraints_unsat(constraints: list[LinearConstraint]) -> bool:
     simplified = simplify_real_constraints(constraints)
     if simplified is None:
@@ -2686,7 +3077,7 @@ def validate_arithmetic_encoding(
     certificate: Certificate,
     roots: tuple[BoolExpr, ...],
 ) -> None:
-    sort = INT_SORT if certificate.logic == "QF_IDL" else REAL_SORT
+    sort = INT_SORT if certificate.logic in {"QF_IDL", "QF_LIA"} else REAL_SORT
     problem = ArithmeticProblem(sort, roots)
     encoder = CnfEncoder()
     encoder.build(roots)
@@ -2731,11 +3122,12 @@ def validate_arithmetic_encoding(
             for expression, literal in required_literals.items()
         }
         constraints = problem.constraints(assignment)
-        unsatisfiable = (
-            real_linear_constraints_unsat(constraints)
-            if certificate.logic == "QF_LRA"
-            else difference_constraints_unsat(constraints, sort)
-        )
+        if certificate.logic == "QF_LIA":
+            unsatisfiable = integer_linear_constraints_unsat(constraints)
+        elif certificate.logic == "QF_LRA":
+            unsatisfiable = real_linear_constraints_unsat(constraints)
+        else:
+            unsatisfiable = difference_constraints_unsat(constraints, sort)
         if not unsatisfiable:
             raise ProofCheckError("arithmetic theory clause blocks a satisfiable theory assignment")
 
@@ -2794,6 +3186,7 @@ def parse_certificate(text: str) -> Certificate:
         "QF_ABV",
         "QF_AUFBV",
         "QF_IDL",
+        "QF_LIA",
         "QF_RDL",
         "QF_LRA",
     }:
@@ -2819,6 +3212,7 @@ def parse_certificate(text: str) -> Certificate:
                 "QF_ABV",
                 "QF_AUFBV",
                 "QF_IDL",
+                "QF_LIA",
                 "QF_RDL",
                 "QF_LRA",
             }
@@ -2860,7 +3254,7 @@ def validate_encoding(script: str, proof: str) -> Certificate:
     else:
         roots = raw_roots
         theory_axioms = ()
-    if certificate.logic in {"QF_IDL", "QF_RDL", "QF_LRA"}:
+    if certificate.logic in {"QF_IDL", "QF_LIA", "QF_RDL", "QF_LRA"}:
         validate_arithmetic_encoding(certificate, roots)
         return certificate
     encoder = CnfEncoder()

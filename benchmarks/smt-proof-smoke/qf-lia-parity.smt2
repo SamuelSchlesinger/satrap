@@ -1,0 +1,7 @@
+(set-option :produce-proofs true)
+(set-logic QF_LIA)
+(declare-const x Int)
+(declare-const y Int)
+(assert (= (+ (* 2 x) (* 4 y)) 1))
+(check-sat)
+(get-proof)

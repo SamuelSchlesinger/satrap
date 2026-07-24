@@ -728,10 +728,16 @@ impl Session {
         expect_arity(arguments, 1, "push")?;
         self.require_logic()?;
         let levels = parse_usize(&arguments[0], "push level count")?;
-        for _ in 0..levels {
-            self.solver.push().map_err(CommandError::from)?;
-            self.frames.push(Frame::default());
-        }
+        self.solver
+            .check_push_levels(levels)
+            .map_err(CommandError::from)?;
+        self.frames
+            .try_reserve(levels)
+            .map_err(|_| CommandError::from(crate::IncrementalError::ResourceExhausted))?;
+        self.solver
+            .push_levels(levels)
+            .map_err(CommandError::from)?;
+        self.frames.extend((0..levels).map(|_| Frame::default()));
         self.invalidate_check();
         Ok(CommandValue::Success)
     }
@@ -3552,6 +3558,23 @@ mod tests {
         assert!(output.contains(
             "(error \"option `:produce-models` can only be set before set-logic\")\nfalse\nsat\n"
         ));
+    }
+
+    #[test]
+    fn oversized_bulk_push_fails_before_changing_the_scope_stack() {
+        let output = execute(&format!(
+            "(set-logic QF_BOOL)
+             (push {})
+             (get-info :assertion-stack-levels)
+             (check-sat)",
+            usize::MAX
+        ));
+        assert_eq!(
+            output,
+            "(error \"packed Boolean variable limit exceeded\")\n\
+             (:assertion-stack-levels 0)\n\
+             sat\n"
+        );
     }
 
     #[test]

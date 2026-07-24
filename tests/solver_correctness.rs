@@ -1121,6 +1121,25 @@ fn nested_clause_scopes_deactivate_only_popped_assertions() {
 }
 
 #[test]
+fn bulk_scope_growth_is_atomic_at_the_variable_limit() {
+    let mut solver = Solver::new();
+    assert!(solver.solve().is_sat());
+    let variable_count = solver.variable_count();
+    assert_eq!(
+        solver.push_levels(usize::MAX),
+        Err(IncrementalError::VariableLimit)
+    );
+    assert_eq!(solver.variable_count(), variable_count);
+    assert_eq!(solver.scope_depth(), 0);
+    assert!(solver.solve().is_sat());
+
+    solver.push_levels(3).unwrap();
+    assert_eq!(solver.scope_depth(), 3);
+    solver.pop(3).unwrap();
+    assert_eq!(solver.scope_depth(), 0);
+}
+
+#[test]
 fn an_empty_scoped_clause_does_not_poison_the_base_context() {
     let mut solver = Solver::new();
     solver.push().unwrap();

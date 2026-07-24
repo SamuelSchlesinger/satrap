@@ -639,10 +639,12 @@ impl Context {
     }
 
     pub fn push(&mut self, levels: usize) -> Result<(), ContextError> {
-        for _ in 0..levels {
-            self.solver.push()?;
-            self.frames.push(Frame::default());
-        }
+        self.solver.check_push_levels(levels)?;
+        self.frames
+            .try_reserve(levels)
+            .map_err(|_| IncrementalError::ResourceExhausted)?;
+        self.solver.push_levels(levels)?;
+        self.frames.extend((0..levels).map(|_| Frame::default()));
         self.invalidate_check();
         Ok(())
     }
@@ -1767,9 +1769,24 @@ mod tests {
     use num_bigint::BigInt;
     use num_rational::BigRational;
 
-    use crate::{SolveLimits, UnknownReason};
+    use crate::{IncrementalError, SolveLimits, UnknownReason};
 
     use super::{AnyTerm, CheckResult, Context, ContextError, Value};
+
+    #[test]
+    fn bulk_scope_growth_fails_atomically_and_leaves_the_context_reusable() {
+        let mut context = Context::new();
+        assert_eq!(context.check().unwrap(), CheckResult::Sat);
+        assert_eq!(
+            context.push(usize::MAX),
+            Err(ContextError::Incremental(IncrementalError::VariableLimit))
+        );
+        assert_eq!(context.check().unwrap(), CheckResult::Sat);
+
+        context.push(3).unwrap();
+        context.pop(3).unwrap();
+        assert_eq!(context.check().unwrap(), CheckResult::Sat);
+    }
 
     #[test]
     fn typed_real_context_builds_exact_lra_and_returns_rational_values() {

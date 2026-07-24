@@ -198,6 +198,8 @@ pub enum IncrementalError {
     IrreversiblePreprocessing,
     /// More variables were requested than fit in the packed literal format.
     VariableLimit,
+    /// The process could not reserve storage for an incremental mutation.
+    ResourceExhausted,
     /// More scopes were popped than are currently active.
     ScopeUnderflow,
 }
@@ -209,6 +211,9 @@ impl fmt::Display for IncrementalError {
                 "incremental mutation is unavailable after variable elimination or addition",
             ),
             Self::VariableLimit => formatter.write_str("packed Boolean variable limit exceeded"),
+            Self::ResourceExhausted => {
+                formatter.write_str("insufficient memory for incremental mutation")
+            }
             Self::ScopeUnderflow => formatter.write_str("cannot pop beyond the base scope"),
         }
     }
@@ -1776,9 +1781,49 @@ impl Solver {
         if variable_count > MAX_VARIABLES {
             return Err(IncrementalError::VariableLimit);
         }
+        self.try_reserve_variable_capacity(variable_count)?;
         self.prepare_incremental_mutation()?;
         self.external_variable_count = variable_count;
         self.grow_variables(variable_count);
+        Ok(())
+    }
+
+    fn try_reserve_variable_capacity(
+        &mut self,
+        variable_count: usize,
+    ) -> Result<(), IncrementalError> {
+        let literal_count = variable_count
+            .checked_mul(2)
+            .ok_or(IncrementalError::VariableLimit)?;
+        try_reserve_len(&mut self.assignments, variable_count)?;
+        try_reserve_len(&mut self.levels, variable_count)?;
+        try_reserve_len(&mut self.reasons, variable_count)?;
+        try_reserve_len(&mut self.phase, variable_count)?;
+        if self.config.systematic_rephasing {
+            try_reserve_len(&mut self.best_phase, variable_count)?;
+        }
+        try_reserve_len(&mut self.activity, variable_count)?;
+        if self.maintains_lrb_scores() {
+            try_reserve_len(&mut self.lrb_assigned_at, variable_count)?;
+            try_reserve_len(&mut self.lrb_participated, variable_count)?;
+            try_reserve_len(&mut self.lrb_reasoned, variable_count)?;
+            try_reserve_len(&mut self.lrb_canceled_at, variable_count)?;
+            try_reserve_len(&mut self.lrb_marks, variable_count)?;
+        }
+        if self.uses_transfer_branching() {
+            try_reserve_len(&mut self.transfer_lrb_activity, variable_count)?;
+            self.transfer_lrb_order.try_reserve(variable_count)?;
+        }
+        if self.uses_chb_branching() {
+            try_reserve_len(&mut self.chb_last_conflict, variable_count)?;
+        }
+        try_reserve_len(&mut self.seen, variable_count)?;
+        if self.config.binary_resolution_minimization {
+            try_reserve_len(&mut self.binary_minimize_marks, variable_count)?;
+        }
+        try_reserve_len(&mut self.watches, literal_count)?;
+        self.order.try_reserve(variable_count)?;
+        self.vmtf.try_reserve(variable_count)?;
         Ok(())
     }
 
@@ -2038,11 +2083,55 @@ impl Solver {
     /// scope is active. Scope activation variables count toward
     /// [`Solver::variable_count`] but callers need not mention them.
     pub fn push(&mut self) -> Result<(), IncrementalError> {
+        self.push_levels(1)
+    }
+
+    /// Atomically opens `levels` clause scopes.
+    ///
+    /// The complete variable and selector capacity is checked before any
+    /// logical solver state changes, so a packed-variable or allocation limit
+    /// leaves the original scope stack intact.
+    pub fn push_levels(&mut self, levels: usize) -> Result<(), IncrementalError> {
+        self.check_push_levels(levels)?;
+        if levels == 0 {
+            return Ok(());
+        }
+        let old_count = self.external_variable_count;
+        let variable_count = old_count
+            .checked_add(levels)
+            .expect("bulk scope capacity checked before mutation");
+        self.try_reserve_variable_capacity(variable_count)?;
+        self.scope_selectors
+            .try_reserve(levels)
+            .map_err(|_| IncrementalError::ResourceExhausted)?;
+
+        self.prepare_incremental_mutation()?;
+        self.external_variable_count = variable_count;
+        self.grow_variables(variable_count);
+        self.scope_selectors
+            .extend((old_count..variable_count).map(|index| {
+                let variable = Var::new(
+                    u32::try_from(index).expect("variable count checked before scope growth"),
+                );
+                Lit::positive(variable)
+            }));
+        Ok(())
+    }
+
+    pub(crate) fn check_push_levels(&self, levels: usize) -> Result<(), IncrementalError> {
+        if levels == 0 {
+            return Ok(());
+        }
         if self.config.bounded_variable_elimination || self.config.bounded_variable_addition {
             return Err(IncrementalError::IrreversiblePreprocessing);
         }
-        let selector = Lit::positive(self.new_variable()?);
-        self.scope_selectors.push(selector);
+        let variable_count = self
+            .external_variable_count
+            .checked_add(levels)
+            .ok_or(IncrementalError::VariableLimit)?;
+        if variable_count > MAX_VARIABLES {
+            return Err(IncrementalError::VariableLimit);
+        }
         Ok(())
     }
 
@@ -5975,6 +6064,15 @@ fn luby(index: u32) -> u64 {
     1_u64 << sequence
 }
 
+fn try_reserve_len<T>(values: &mut Vec<T>, length: usize) -> Result<(), IncrementalError> {
+    if values.capacity() >= length {
+        return Ok(());
+    }
+    values
+        .try_reserve(length.saturating_sub(values.len()))
+        .map_err(|_| IncrementalError::ResourceExhausted)
+}
+
 #[derive(Debug, Default)]
 struct VarOrder {
     heap: Vec<Var>,
@@ -5982,6 +6080,11 @@ struct VarOrder {
 }
 
 impl VarOrder {
+    fn try_reserve(&mut self, variable_count: usize) -> Result<(), IncrementalError> {
+        try_reserve_len(&mut self.heap, variable_count)?;
+        try_reserve_len(&mut self.positions, variable_count)
+    }
+
     fn grow(&mut self, old_count: usize, new_count: usize, activity: &[f64]) {
         self.positions.resize(new_count, NO_POSITION);
         for index in old_count..new_count {
@@ -6111,6 +6214,10 @@ impl Default for VmtfOrder {
 }
 
 impl VmtfOrder {
+    fn try_reserve(&mut self, variable_count: usize) -> Result<(), IncrementalError> {
+        try_reserve_len(&mut self.links, variable_count)
+    }
+
     fn grow(&mut self, old_count: usize, new_count: usize) {
         debug_assert_eq!(old_count, self.links.len());
         for index in old_count..new_count {

@@ -311,6 +311,11 @@ def check_gate_wiring(errors: list[str]) -> None:
         errors,
     )
     require_commands(
+        ROOT / "scripts/install-fuzz-tools.sh",
+        ("--component clippy", "--component rust-src", "--component rustfmt"),
+        errors,
+    )
+    require_commands(
         ROOT / "scripts/check-fuzz.sh",
         (
             "--locked",

@@ -104,6 +104,9 @@ class HygieneChecksTests(unittest.TestCase):
             "scripts/install-smt-oracles.sh": (
                 "Z3Prover/z3\ncvc5/cvc5\nbitwuzla/bitwuzla\n"
             ),
+            "scripts/install-fuzz-tools.sh": (
+                "--component clippy\n--component rust-src\n--component rustfmt\n"
+            ),
             "scripts/quality.sh": "shellcheck\nactionlint\ntools/check_hygiene.py\n",
         }
         with directory, patch.object(check_hygiene, "ROOT", root):

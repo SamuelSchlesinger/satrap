@@ -24,12 +24,13 @@ make install-fuzz-tools
 make check-fuzz
 ```
 
-The installer pins both the nightly toolchain and cargo-fuzz version. The gate
-first rejects an out-of-date fuzz lockfile, then applies strict formatting and
-Clippy checks, sanitizer-builds the fuzz workspace, copies seeds into temporary
-writable corpora, and runs 256 iterations per target with fixed resource
-limits. Set `FUZZ_RUNS` to raise the iteration count without changing the
-checked-in policy:
+The installer pins the nightly toolchain, its Rust source, Rustfmt, and Clippy
+components, plus the cargo-fuzz version. The gate first rejects an out-of-date
+fuzz lockfile, then applies strict formatting and Clippy checks,
+sanitizer-builds the fuzz workspace, copies seeds into temporary writable
+corpora, and runs 256 iterations per target with fixed resource limits. Set
+`FUZZ_RUNS` to raise the iteration count without changing the checked-in
+policy:
 
 ```sh
 FUZZ_RUNS=10000 make check-fuzz

@@ -10,7 +10,11 @@ if ! command -v rustup >/dev/null 2>&1; then
     exit 1
 fi
 
-rustup toolchain install "$fuzz_nightly" --profile minimal --component rust-src
+rustup toolchain install "$fuzz_nightly" \
+    --profile minimal \
+    --component clippy \
+    --component rust-src \
+    --component rustfmt
 
 actual_cargo_fuzz_version=
 if cargo fuzz --version >/dev/null 2>&1; then

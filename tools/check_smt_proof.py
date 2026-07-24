@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Independently validate a satrap Boolean, BV, UF, or finite-array eDRAT certificate."""
+"""Independently validate a satrap ground SMT eDRAT certificate."""
 
 from __future__ import annotations
 
@@ -9,6 +9,7 @@ import subprocess
 import sys
 import tempfile
 from dataclasses import dataclass, field
+from fractions import Fraction
 from pathlib import Path
 from typing import TypeAlias
 
@@ -88,8 +89,20 @@ class ArraySort(OrderedSort):
     element: SortExpr
 
 
-SortExpr: TypeAlias = BoolSort | BitVecSort | UninterpretedSort | ArraySort
+@dataclass(frozen=True)
+class IntSort(OrderedSort):
+    pass
+
+
+@dataclass(frozen=True)
+class RealSort(OrderedSort):
+    pass
+
+
+SortExpr: TypeAlias = BoolSort | BitVecSort | UninterpretedSort | ArraySort | IntSort | RealSort
 BOOL_SORT = BoolSort()
+INT_SORT = IntSort()
+REAL_SORT = RealSort()
 
 
 def sort_order_key(sort: OrderedSort) -> tuple[object, ...]:
@@ -101,6 +114,10 @@ def sort_order_key(sort: OrderedSort) -> tuple[object, ...]:
         return (2, sort.name)
     if isinstance(sort, ArraySort):
         return (3, sort_order_key(sort.index), sort_order_key(sort.element))
+    if isinstance(sort, IntSort):
+        return (4,)
+    if isinstance(sort, RealSort):
+        return (5,)
     raise ProofCheckError("unknown proof sort")
 
 
@@ -160,7 +177,22 @@ class UfExpr:
     node: tuple[object, ...]
 
 
-TermExpr: TypeAlias = BoolExpr | BitVecExpr | UfExpr
+ArithmeticVariable: TypeAlias = tuple[object, ...]
+
+
+@dataclass(frozen=True, order=True)
+class LinearExpr:
+    constant: Fraction
+    coefficients: tuple[tuple[ArithmeticVariable, Fraction], ...]
+
+
+@dataclass(frozen=True, order=True)
+class ArithmeticExpr:
+    sort: SortExpr
+    linear: LinearExpr
+
+
+TermExpr: TypeAlias = BoolExpr | BitVecExpr | UfExpr | ArithmeticExpr
 
 
 class SExprReader:
@@ -365,7 +397,7 @@ def ite(condition: BoolExpr, then_term: BoolExpr, else_term: BoolExpr) -> BoolEx
 
 
 def expect_bool_term(value: TermExpr, role: str) -> BoolExpr:
-    if isinstance(value, (BitVecExpr, UfExpr)):
+    if isinstance(value, (BitVecExpr, UfExpr, ArithmeticExpr)):
         raise ProofCheckError(f"{role} must have sort Bool")
     return value
 
@@ -382,11 +414,19 @@ def expect_uf_term(value: TermExpr, role: str) -> UfExpr:
     return value
 
 
+def expect_arithmetic_term(value: TermExpr, role: str) -> ArithmeticExpr:
+    if not isinstance(value, ArithmeticExpr):
+        raise ProofCheckError(f"{role} must have sort Int or Real")
+    return value
+
+
 def term_sort(value: TermExpr) -> SortExpr:
     if isinstance(value, BitVecExpr):
         return BitVecSort(len(value.bits))
     if isinstance(value, UfExpr):
         return uf_sort(value)
+    if isinstance(value, ArithmeticExpr):
+        return value.sort
     return BOOL_SORT
 
 
@@ -404,6 +444,179 @@ def uf_sort(value: UfExpr) -> SortExpr:
     if not isinstance(sort, (UninterpretedSort, ArraySort)):
         raise ProofCheckError("abstract proof term has a lowered result sort")
     return sort
+
+
+def linear_expression(
+    constant: Fraction = Fraction(0),
+    coefficients: dict[ArithmeticVariable, Fraction] | None = None,
+) -> LinearExpr:
+    normalized = tuple(
+        sorted(
+            (
+                (variable, coefficient)
+                for variable, coefficient in (coefficients or {}).items()
+                if coefficient
+            ),
+            key=lambda item: item[0],
+        )
+    )
+    return LinearExpr(constant, normalized)
+
+
+def linear_variable(variable: ArithmeticVariable) -> LinearExpr:
+    return linear_expression(coefficients={variable: Fraction(1)})
+
+
+def linear_scaled(expression: LinearExpr, scale: Fraction) -> LinearExpr:
+    return linear_expression(
+        expression.constant * scale,
+        {variable: coefficient * scale for variable, coefficient in expression.coefficients},
+    )
+
+
+def linear_add_scaled(
+    left: LinearExpr,
+    right: LinearExpr,
+    scale: Fraction,
+) -> LinearExpr:
+    coefficients = dict(left.coefficients)
+    for variable, coefficient in right.coefficients:
+        coefficients[variable] = coefficients.get(variable, Fraction(0)) + coefficient * scale
+    return linear_expression(left.constant + right.constant * scale, coefficients)
+
+
+def arithmetic_constant(sort: SortExpr, value: Fraction) -> ArithmeticExpr:
+    if not isinstance(sort, (IntSort, RealSort)):
+        raise ProofCheckError("arithmetic constant has a non-arithmetic sort")
+    return ArithmeticExpr(sort, linear_expression(value))
+
+
+def arithmetic_variable(sort: SortExpr, variable: ArithmeticVariable) -> ArithmeticExpr:
+    if not isinstance(sort, (IntSort, RealSort)):
+        raise ProofCheckError("arithmetic variable has a non-arithmetic sort")
+    return ArithmeticExpr(sort, linear_variable(variable))
+
+
+def common_arithmetic_sort(terms: list[ArithmeticExpr]) -> SortExpr:
+    if not terms:
+        raise ProofCheckError("arithmetic operation has no operands")
+    if any(isinstance(term.sort, RealSort) for term in terms):
+        return REAL_SORT
+    if all(isinstance(term.sort, IntSort) for term in terms):
+        return INT_SORT
+    raise ProofCheckError("arithmetic operation has a non-arithmetic operand")
+
+
+def coerce_arithmetic(term: ArithmeticExpr, sort: SortExpr) -> ArithmeticExpr:
+    if term.sort == sort:
+        return term
+    if isinstance(term.sort, IntSort) and isinstance(sort, RealSort):
+        return ArithmeticExpr(REAL_SORT, term.linear)
+    raise ProofCheckError("cannot implicitly coerce Real to Int")
+
+
+def arithmetic_add(terms: list[ArithmeticExpr]) -> ArithmeticExpr:
+    minimum_arity(terms, 2, "+")
+    sort = common_arithmetic_sort(terms)
+    result = linear_expression()
+    for term in terms:
+        result = linear_add_scaled(result, coerce_arithmetic(term, sort).linear, Fraction(1))
+    return ArithmeticExpr(sort, result)
+
+
+def arithmetic_subtract(terms: list[ArithmeticExpr]) -> ArithmeticExpr:
+    minimum_arity(terms, 1, "-")
+    if len(terms) == 1:
+        return ArithmeticExpr(terms[0].sort, linear_scaled(terms[0].linear, Fraction(-1)))
+    sort = common_arithmetic_sort(terms)
+    result = coerce_arithmetic(terms[0], sort).linear
+    for term in terms[1:]:
+        result = linear_add_scaled(
+            result,
+            coerce_arithmetic(term, sort).linear,
+            Fraction(-1),
+        )
+    return ArithmeticExpr(sort, result)
+
+
+def arithmetic_multiply(terms: list[ArithmeticExpr]) -> ArithmeticExpr:
+    minimum_arity(terms, 2, "*")
+    sort = common_arithmetic_sort(terms)
+    scale = Fraction(1)
+    nonconstant: LinearExpr | None = None
+    for term in terms:
+        expression = coerce_arithmetic(term, sort).linear
+        if not expression.coefficients:
+            scale *= expression.constant
+        elif nonconstant is None:
+            nonconstant = expression
+        else:
+            raise ProofCheckError("nonlinear multiplication is outside the proof boundary")
+    result = linear_expression(scale) if nonconstant is None else linear_scaled(nonconstant, scale)
+    return ArithmeticExpr(sort, result)
+
+
+def arithmetic_divide(
+    numerator: ArithmeticExpr,
+    denominator: ArithmeticExpr,
+) -> ArithmeticExpr:
+    if denominator.linear.coefficients:
+        raise ProofCheckError("division by a nonconstant is outside the proof boundary")
+    if denominator.linear.constant == 0:
+        raise ProofCheckError("division by zero is outside the proof boundary")
+    numerator = coerce_arithmetic(numerator, REAL_SORT)
+    return ArithmeticExpr(
+        REAL_SORT,
+        linear_scaled(numerator.linear, Fraction(1, 1) / denominator.linear.constant),
+    )
+
+
+def arithmetic_comparison(
+    left: ArithmeticExpr,
+    right: ArithmeticExpr,
+    strict: bool,
+) -> BoolExpr:
+    sort = common_arithmetic_sort([left, right])
+    expression = linear_add_scaled(
+        coerce_arithmetic(left, sort).linear,
+        coerce_arithmetic(right, sort).linear,
+        Fraction(-1),
+    )
+    if not expression.coefficients:
+        return bool_constant(expression.constant < 0 if strict else expression.constant <= 0)
+    return (2, 5, sort, expression, strict)
+
+
+def arithmetic_equal(left: ArithmeticExpr, right: ArithmeticExpr) -> BoolExpr:
+    return junction(
+        [
+            arithmetic_comparison(left, right, False),
+            arithmetic_comparison(right, left, False),
+        ],
+        True,
+    )
+
+
+def arithmetic_ite(
+    condition: BoolExpr,
+    then_term: ArithmeticExpr,
+    else_term: ArithmeticExpr,
+) -> ArithmeticExpr:
+    sort = common_arithmetic_sort([then_term, else_term])
+    then_term = coerce_arithmetic(then_term, sort)
+    else_term = coerce_arithmetic(else_term, sort)
+    if condition == TRUE:
+        return then_term
+    if condition == FALSE:
+        return else_term
+    variable: ArithmeticVariable = (
+        1,
+        sort,
+        condition,
+        then_term.linear,
+        else_term.linear,
+    )
+    return arithmetic_variable(sort, variable)
 
 
 def check_bitvector_width(width: int) -> None:
@@ -791,7 +1004,8 @@ def render(expression: SExpr) -> str:
         if (
             expression.startswith(":")
             or expression.startswith(("#b", "#x"))
-            or expression.isdigit()
+            or is_numeral_text(expression)
+            or parse_decimal_text(expression) is not None
             or expression in {"_", "!", "as", "lambda", "let", "exists", "forall", "match", "par"}
         ):
             return expression
@@ -867,6 +1081,8 @@ class ProofSession:
                 "QF_UFBV",
                 "QF_ABV",
                 "QF_AUFBV",
+                "QF_IDL",
+                "QF_RDL",
             }:
                 raise ProofCheckError("proof script uses an unsupported logic")
             self.logic = logic
@@ -1085,6 +1301,15 @@ class ProofSession:
                 except ValueError as error:
                     raise ProofCheckError("invalid hexadecimal bit-vector literal") from error
                 return bitvector_constant(value, len(digits) * 4)
+            if not isinstance(expression, QuotedSymbol) and is_numeral_text(expression):
+                self._require_arithmetic()
+                return arithmetic_constant(INT_SORT, Fraction(int(expression)))
+            decimal = (
+                parse_decimal_text(expression) if not isinstance(expression, QuotedSymbol) else None
+            )
+            if decimal is not None:
+                self._require_reals()
+                return arithmetic_constant(REAL_SORT, decimal)
             for scope in reversed(locals_):
                 if expression in scope:
                     return scope[expression]
@@ -1165,6 +1390,8 @@ class ProofSession:
         if operator == "ite":
             exact_arity(terms, 3, operator)
             condition = expect_bool_term(terms[0], "ite condition")
+            if isinstance(terms[1], ArithmeticExpr) and isinstance(terms[2], ArithmeticExpr):
+                return arithmetic_ite(condition, terms[1], terms[2])
             if term_sort(terms[1]) != term_sort(terms[2]):
                 raise ProofCheckError("ite branches have different sorts")
             if isinstance(terms[1], BitVecExpr):
@@ -1182,6 +1409,32 @@ class ProofSession:
                     )
                 )
             return ite(condition, terms[1], expect_bool_term(terms[2], "ite branch"))
+        if operator in {"+", "-", "*"}:
+            self._require_arithmetic()
+            arithmetic_terms = [expect_arithmetic_term(term, operator) for term in terms]
+            if operator == "+":
+                return arithmetic_add(arithmetic_terms)
+            if operator == "-":
+                return arithmetic_subtract(arithmetic_terms)
+            return arithmetic_multiply(arithmetic_terms)
+        if operator == "/":
+            self._require_reals()
+            exact_arity(terms, 2, operator)
+            return arithmetic_divide(
+                expect_arithmetic_term(terms[0], operator),
+                expect_arithmetic_term(terms[1], operator),
+            )
+        if operator in {"<", "<=", ">", ">="}:
+            self._require_arithmetic()
+            minimum_arity(terms, 2, operator)
+            arithmetic_terms = [expect_arithmetic_term(term, operator) for term in terms]
+            comparisons = []
+            for left, right in itertools.pairwise(arithmetic_terms):
+                if operator in {"<", "<="}:
+                    comparisons.append(arithmetic_comparison(left, right, operator == "<"))
+                else:
+                    comparisons.append(arithmetic_comparison(right, left, operator == ">"))
+            return junction(comparisons, True)
         if operator == "select":
             exact_arity(terms, 2, operator)
             array = expect_uf_term(terms[0], "select source")
@@ -1293,10 +1546,16 @@ class ProofSession:
             raise ProofCheckError(f"{self.logic} proof contains an uninterpreted declaration")
         if self.logic == "QF_UF" and isinstance(parsed_sort, (BitVecSort, ArraySort)):
             raise ProofCheckError("QF_UF proof contains a non-UF declaration")
+        if self.logic == "QF_IDL" and not isinstance(parsed_sort, (BoolSort, IntSort)):
+            raise ProofCheckError("QF_IDL proof contains a declaration outside Bool or Int")
+        if self.logic == "QF_RDL" and not isinstance(parsed_sort, (BoolSort, RealSort)):
+            raise ProofCheckError("QF_RDL proof contains a declaration outside Bool or Real")
         if parsed_sort == BOOL_SORT:
             term: TermExpr = (2, 0, name)
         elif isinstance(parsed_sort, BitVecSort):
             term = BitVecExpr(tuple((2, 1, name, index) for index in range(parsed_sort.width)))
+        elif isinstance(parsed_sort, (IntSort, RealSort)):
+            term = arithmetic_variable(parsed_sort, (0, parsed_sort, name))
         else:
             term = UfExpr((0, parsed_sort, name))
         self._bind(name, term)
@@ -1311,7 +1570,11 @@ class ProofSession:
 
     def _declare_function(self, name: str, function: FunctionBinding) -> None:
         self._require_logic()
-        if self.logic not in {"QF_UF", "QF_UFBV", "QF_AUFBV"}:
+        if isinstance(function, DeclaredFunction) and self.logic not in {
+            "QF_UF",
+            "QF_UFBV",
+            "QF_AUFBV",
+        }:
             raise ProofCheckError("uninterpreted function used outside a UF proof logic")
         if name in self.bindings or name in self.functions:
             raise ProofCheckError(f"duplicate term symbol `{name}`")
@@ -1327,6 +1590,14 @@ class ProofSession:
         if self.logic not in {"QF_BV", "QF_UFBV", "QF_ABV", "QF_AUFBV"}:
             raise ProofCheckError("bit-vector term used outside a bit-vector proof logic")
 
+    def _require_arithmetic(self) -> None:
+        if self.logic not in {"QF_IDL", "QF_RDL"}:
+            raise ProofCheckError("arithmetic term used outside an arithmetic proof logic")
+
+    def _require_reals(self) -> None:
+        if self.logic != "QF_RDL":
+            raise ProofCheckError("real term used outside a real proof logic")
+
     @staticmethod
     def _placeholder_term(
         sort: SortExpr,
@@ -1340,12 +1611,22 @@ class ProofSession:
             return BitVecExpr(tuple((2, 1, name, bit) for bit in range(sort.width)))
         if isinstance(sort, (UninterpretedSort, ArraySort)):
             return UfExpr((0, sort, name))
+        if isinstance(sort, (IntSort, RealSort)):
+            return arithmetic_variable(sort, (0, sort, name))
         raise ProofCheckError("defined function parameter has an unsupported sort")
 
     def parse_sort(self, value: SExpr) -> SortExpr:
         if isinstance(value, str):
             if value == "Bool":
                 return BOOL_SORT
+            if value == "Int":
+                if self.logic != "QF_IDL":
+                    raise ProofCheckError("Int sort used outside an integer proof logic")
+                return INT_SORT
+            if value == "Real":
+                if self.logic != "QF_RDL":
+                    raise ProofCheckError("Real sort used outside a real proof logic")
+                return REAL_SORT
             if value in self.sorts:
                 return self.sorts[value]
             raise ProofCheckError(f"unsupported proof sort `{value}`")
@@ -1428,6 +1709,8 @@ class ProofSession:
         raise ProofCheckError("nested array elements are outside the proof boundary")
 
     def _equivalent(self, left: TermExpr, right: TermExpr) -> BoolExpr:
+        if isinstance(left, ArithmeticExpr) and isinstance(right, ArithmeticExpr):
+            return arithmetic_equal(left, right)
         if term_sort(left) != term_sort(right):
             raise ProofCheckError("equality operands have different sorts")
         if isinstance(left, BitVecExpr):
@@ -1509,9 +1792,29 @@ def peel_annotation(expression: SExpr) -> SExpr:
 
 def parse_numeral(value: SExpr, role: str) -> int:
     text = atom(value, role)
-    if not text.isdigit():
+    if not is_numeral_text(text):
         raise ProofCheckError(f"{role} must be a numeral")
     return int(text)
+
+
+def is_numeral_text(text: str) -> bool:
+    return text == "0" or (
+        bool(text)
+        and text[0] in "123456789"
+        and all(character.isascii() and character.isdigit() for character in text)
+    )
+
+
+def parse_decimal_text(text: str) -> Fraction | None:
+    if text.count(".") != 1:
+        return None
+    whole, fractional = text.split(".", 1)
+    if not is_numeral_text(whole) or not fractional:
+        return None
+    if not all(character.isascii() and character.isdigit() for character in fractional):
+        return None
+    denominator = 10 ** len(fractional)
+    return Fraction(int(whole) * denominator + int(fractional), denominator)
 
 
 class UfLowering:
@@ -2056,6 +2359,317 @@ def literal_index(literal: int) -> int:
 
 
 @dataclass(frozen=True)
+class LinearConstraint:
+    sort: SortExpr
+    expression: LinearExpr
+    strict: bool
+
+
+class DifferenceProblem:
+    def __init__(self, sort: SortExpr, roots: tuple[BoolExpr, ...]):
+        if not isinstance(sort, (IntSort, RealSort)):
+            raise ProofCheckError("difference problem has a non-arithmetic sort")
+        self.sort = sort
+        self.predicates: dict[BoolExpr, LinearConstraint] = {}
+        self.ites: set[ArithmeticVariable] = set()
+        self.required: set[BoolExpr] = set()
+        visited_boolean: set[BoolExpr] = set()
+        visited_variables: set[ArithmeticVariable] = set()
+        for root in roots:
+            self._collect_bool(root, visited_boolean, visited_variables)
+        self.required.update(self.predicates)
+
+    def _collect_bool(
+        self,
+        expression: BoolExpr,
+        visited_boolean: set[BoolExpr],
+        visited_variables: set[ArithmeticVariable],
+    ) -> None:
+        if expression in visited_boolean:
+            return
+        visited_boolean.add(expression)
+        kind = expression[0]
+        if kind in {0, 1}:
+            return
+        if kind == 2:
+            if len(expression) >= 2 and expression[1] == 5:
+                if len(expression) != 5:
+                    raise ProofCheckError("malformed arithmetic proof atom")
+                _, _, sort, linear, strict = expression
+                if sort != self.sort or not isinstance(linear, LinearExpr):
+                    raise ProofCheckError(
+                        "difference-logic proof contains a predicate of the wrong sort"
+                    )
+                if not isinstance(strict, bool):
+                    raise ProofCheckError("arithmetic proof predicate has a malformed strictness")
+                self.predicates[expression] = LinearConstraint(sort, linear, strict)
+                self._collect_linear(linear, visited_boolean, visited_variables)
+            return
+        if kind == 3:
+            self._collect_bool(expression[1], visited_boolean, visited_variables)
+            return
+        if kind in {4, 5}:
+            for item in expression[1]:
+                self._collect_bool(item, visited_boolean, visited_variables)
+            return
+        if kind in {6, 7}:
+            self._collect_bool(expression[1], visited_boolean, visited_variables)
+            self._collect_bool(expression[2], visited_boolean, visited_variables)
+            return
+        if kind == 8:
+            self._collect_bool(expression[1], visited_boolean, visited_variables)
+            self._collect_bool(expression[2], visited_boolean, visited_variables)
+            self._collect_bool(expression[3], visited_boolean, visited_variables)
+            return
+        if kind == 9:
+            raise ProofCheckError("difference-logic proof contains an unlowered theory equality")
+        raise ProofCheckError(f"unknown canonical Boolean node {kind}")
+
+    def _collect_linear(
+        self,
+        expression: LinearExpr,
+        visited_boolean: set[BoolExpr],
+        visited_variables: set[ArithmeticVariable],
+    ) -> None:
+        for variable, _ in expression.coefficients:
+            if variable in visited_variables:
+                continue
+            visited_variables.add(variable)
+            if not variable:
+                raise ProofCheckError("malformed arithmetic proof variable")
+            kind = variable[0]
+            if kind == 0:
+                if len(variable) != 3 or variable[1] != self.sort:
+                    raise ProofCheckError(
+                        "difference-logic proof contains a variable of the wrong sort"
+                    )
+                continue
+            if kind != 1 or len(variable) != 5:
+                raise ProofCheckError("malformed arithmetic proof variable")
+            _, sort, condition, then_expression, else_expression = variable
+            if (
+                sort != self.sort
+                or not isinstance(then_expression, LinearExpr)
+                or not isinstance(else_expression, LinearExpr)
+            ):
+                raise ProofCheckError("difference-logic proof contains an ite of the wrong sort")
+            self.ites.add(variable)
+            self.required.add(condition)
+            self._collect_bool(condition, visited_boolean, visited_variables)
+            self._collect_linear(then_expression, visited_boolean, visited_variables)
+            self._collect_linear(else_expression, visited_boolean, visited_variables)
+
+    def constraints(
+        self,
+        assignment: dict[BoolExpr, bool],
+    ) -> list[LinearConstraint]:
+        constraints = []
+        for term, predicate in sorted(self.predicates.items()):
+            if term not in assignment:
+                raise ProofCheckError("difference-logic predicate has no Boolean assignment")
+            positive = assignment[term]
+            expression = (
+                predicate.expression
+                if positive
+                else linear_scaled(predicate.expression, Fraction(-1))
+            )
+            constraints.append(
+                LinearConstraint(self.sort, expression, predicate.strict == positive)
+            )
+        for variable in sorted(self.ites):
+            _, _, condition, then_expression, else_expression = variable
+            if condition not in assignment:
+                raise ProofCheckError("difference-logic ite condition has no Boolean assignment")
+            selected = then_expression if assignment[condition] else else_expression
+            forward = linear_add_scaled(
+                linear_variable(variable),
+                selected,
+                Fraction(-1),
+            )
+            constraints.append(LinearConstraint(self.sort, forward, False))
+            constraints.append(
+                LinearConstraint(
+                    self.sort,
+                    linear_scaled(forward, Fraction(-1)),
+                    False,
+                )
+            )
+        return constraints
+
+
+@dataclass(frozen=True)
+class DifferenceEdge:
+    source: int
+    target: int
+    weight: Fraction
+    epsilon: int
+
+
+def difference_constraints_unsat(
+    constraints: list[LinearConstraint],
+    expected_sort: SortExpr,
+) -> bool:
+    variables = sorted(
+        {
+            variable
+            for constraint in constraints
+            for variable, _ in constraint.expression.coefficients
+        }
+    )
+    variable_indices = {variable: index for index, variable in enumerate(variables)}
+    zero = len(variable_indices)
+    edges = []
+    for constraint in constraints:
+        if constraint.sort != expected_sort:
+            raise ProofCheckError("difference-logic constraint has an inconsistent sort")
+        if not constraint.expression.coefficients:
+            satisfied = (
+                constraint.expression.constant < 0
+                if constraint.strict
+                else constraint.expression.constant <= 0
+            )
+            if not satisfied:
+                return True
+            continue
+        edges.append(difference_edge(constraint, expected_sort, variable_indices, zero))
+
+    vertex_count = len(variable_indices) + 1
+    distances = [(Fraction(0), 0) for _ in range(vertex_count)]
+    for iteration in range(vertex_count):
+        changed = False
+        for edge in edges:
+            candidate = (
+                distances[edge.source][0] + edge.weight,
+                distances[edge.source][1] + edge.epsilon,
+            )
+            if candidate < distances[edge.target]:
+                distances[edge.target] = candidate
+                changed = True
+        if not changed:
+            return False
+        if iteration + 1 == vertex_count:
+            return True
+    return False
+
+
+def difference_edge(
+    constraint: LinearConstraint,
+    expected_sort: SortExpr,
+    variable_indices: dict[ArithmeticVariable, int],
+    zero: int,
+) -> DifferenceEdge:
+    coefficients = list(constraint.expression.coefficients)
+    if len(coefficients) == 1 and coefficients[0][1] > 0:
+        positive = variable_indices[coefficients[0][0]]
+        negative = zero
+        scale = coefficients[0][1]
+    elif len(coefficients) == 1 and coefficients[0][1] < 0:
+        positive = zero
+        negative = variable_indices[coefficients[0][0]]
+        scale = -coefficients[0][1]
+    elif (
+        len(coefficients) == 2
+        and coefficients[0][1] > 0
+        and coefficients[0][1] == -coefficients[1][1]
+    ):
+        positive = variable_indices[coefficients[0][0]]
+        negative = variable_indices[coefficients[1][0]]
+        scale = coefficients[0][1]
+    elif (
+        len(coefficients) == 2
+        and coefficients[1][1] > 0
+        and coefficients[1][1] == -coefficients[0][1]
+    ):
+        positive = variable_indices[coefficients[1][0]]
+        negative = variable_indices[coefficients[0][0]]
+        scale = coefficients[1][1]
+    else:
+        raise ProofCheckError("proof predicate is outside the declared difference-logic fragment")
+
+    bound = -constraint.expression.constant / scale
+    if isinstance(expected_sort, IntSort):
+        integer_bound = fraction_ceil(bound) - 1 if constraint.strict else fraction_floor(bound)
+        weight = Fraction(integer_bound)
+        epsilon = 0
+    elif isinstance(expected_sort, RealSort):
+        weight = bound
+        epsilon = -1 if constraint.strict else 0
+    else:
+        raise ProofCheckError("difference-logic proof selected a non-arithmetic sort")
+    return DifferenceEdge(negative, positive, weight, epsilon)
+
+
+def fraction_floor(value: Fraction) -> int:
+    return value.numerator // value.denominator
+
+
+def fraction_ceil(value: Fraction) -> int:
+    return -((-value.numerator) // value.denominator)
+
+
+def normalized_clause(literals: tuple[int, ...]) -> tuple[int, ...] | None:
+    normalized = tuple(sorted(set(literals), key=literal_index))
+    for left, right in itertools.pairwise(normalized):
+        if abs(left) == abs(right):
+            return None
+    return normalized
+
+
+def validate_difference_encoding(
+    certificate: Certificate,
+    roots: tuple[BoolExpr, ...],
+) -> None:
+    sort = INT_SORT if certificate.logic == "QF_IDL" else REAL_SORT
+    problem = DifferenceProblem(sort, roots)
+    encoder = CnfEncoder()
+    encoder.build(roots)
+    for expression in sorted(problem.required):
+        encoder.encode(expression)
+    expected_prefix = tuple(encoder.clauses)
+    if encoder.variable_count != certificate.variable_count:
+        raise ProofCheckError(
+            "proof variable count does not match the independently reconstructed encoding"
+        )
+    if certificate.clauses[: len(expected_prefix)] != expected_prefix:
+        raise ProofCheckError(
+            f"proof clauses do not match the independently reconstructed {certificate.logic} "
+            "encoding prefix"
+        )
+
+    theory_clauses = certificate.clauses[len(expected_prefix) :]
+    required_literals = {
+        expression: encoder.encode(expression) for expression in sorted(problem.required)
+    }
+    required_variables = {abs(literal) for literal in required_literals.values()}
+    for kind, literals in theory_clauses:
+        if kind != "theory":
+            raise ProofCheckError(
+                "difference-logic proof has a non-theory clause after its encoding prefix"
+            )
+        if normalized_clause(literals) != literals:
+            raise ProofCheckError("difference-logic theory clause is not canonically normalized")
+        if any(abs(literal) > certificate.variable_count for literal in literals):
+            raise ProofCheckError("difference-logic theory clause uses an out-of-range variable")
+        if {abs(literal) for literal in literals} != required_variables:
+            raise ProofCheckError(
+                "difference-logic theory clause does not block a complete required assignment"
+            )
+        blocked_variables = {abs(literal): literal < 0 for literal in literals}
+        assignment = {
+            expression: (
+                blocked_variables[abs(literal)]
+                if literal > 0
+                else not blocked_variables[abs(literal)]
+            )
+            for expression, literal in required_literals.items()
+        }
+        if not difference_constraints_unsat(problem.constraints(assignment), sort):
+            raise ProofCheckError(
+                "difference-logic theory clause blocks a satisfiable theory assignment"
+            )
+
+
+@dataclass(frozen=True)
 class Certificate:
     logic: str
     variable_count: int
@@ -2108,6 +2722,8 @@ def parse_certificate(text: str) -> Certificate:
         "QF_UFBV",
         "QF_ABV",
         "QF_AUFBV",
+        "QF_IDL",
+        "QF_RDL",
     }:
         raise ProofCheckError(f"satrap-edrat checker does not accept logic `{logic}`")
     variable_count = parse_numeral(fields.get(":variables", []), "proof variable count")
@@ -2124,7 +2740,15 @@ def parse_certificate(text: str) -> Certificate:
         kind = atom(parts[0], "proof clause origin")
         allowed_kinds = (
             {"formula", "encoding", "theory"}
-            if logic in {"QF_UF", "QF_UFBV", "QF_ABV", "QF_AUFBV"}
+            if logic
+            in {
+                "QF_UF",
+                "QF_UFBV",
+                "QF_ABV",
+                "QF_AUFBV",
+                "QF_IDL",
+                "QF_RDL",
+            }
             else {"formula", "encoding"}
         )
         if kind not in allowed_kinds:
@@ -2163,6 +2787,9 @@ def validate_encoding(script: str, proof: str) -> Certificate:
     else:
         roots = raw_roots
         theory_axioms = ()
+    if certificate.logic in {"QF_IDL", "QF_RDL"}:
+        validate_difference_encoding(certificate, roots)
+        return certificate
     encoder = CnfEncoder()
     expected_clauses = tuple(encoder.build(roots, theory_axioms))
     if encoder.variable_count != certificate.variable_count:

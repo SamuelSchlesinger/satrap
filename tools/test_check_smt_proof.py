@@ -27,6 +27,44 @@ PROOF = """unsat
 ")
 """
 
+IDL_SCRIPT = """
+(set-option :produce-proofs true)
+(set-logic QF_IDL)
+(declare-const x Int)
+(declare-const y Int)
+(assert (<= (- x y) 1))
+(assert (<= (- y x) (- 2)))
+(check-sat)
+(get-proof)
+"""
+
+IDL_PROOF = """unsat
+(satrap-edrat :version 1 :logic QF_IDL :variables 2
+ :premises ("(<= (- x y) 1)" "(<= (- y x) (- 2))")
+ :clauses ((formula 1) (formula 2) (theory -1 -2))
+ :drat "0
+")
+"""
+
+RDL_SCRIPT = """
+(set-option :produce-proofs true)
+(set-logic QF_RDL)
+(declare-const x Real)
+(declare-const y Real)
+(assert (< x y))
+(assert (<= y x))
+(check-sat)
+(get-proof)
+"""
+
+RDL_PROOF = """unsat
+(satrap-edrat :version 1 :logic QF_RDL :variables 2
+ :premises ("(< x y)" "(<= y x)")
+ :clauses ((formula 1) (formula 2) (theory -1 -2))
+ :drat "0
+")
+"""
+
 
 def cnf_satisfiable(encoder: CnfEncoder, clauses) -> bool:
     pending = tuple(frozenset(literals) for _, literals in clauses)
@@ -284,6 +322,35 @@ class SmtProofCheckerTests(unittest.TestCase):
         encoder, clauses, axioms = lower_script(script)
         self.assertGreater(len(axioms), 0)
         self.assertTrue(cnf_satisfiable(encoder, clauses))
+
+    def test_integer_difference_theory_clause_is_independently_validated(self):
+        certificate = validate_encoding(IDL_SCRIPT, IDL_PROOF)
+        self.assertEqual(certificate.logic, "QF_IDL")
+        self.assertEqual(certificate.clauses[-1], ("theory", (-1, -2)))
+
+    def test_real_strict_cycle_is_independently_validated(self):
+        certificate = validate_encoding(RDL_SCRIPT, RDL_PROOF)
+        self.assertEqual(certificate.logic, "QF_RDL")
+
+    def test_rejects_a_difference_clause_that_blocks_a_satisfiable_assignment(self):
+        with self.assertRaisesRegex(
+            ProofCheckError,
+            "blocks a satisfiable theory assignment",
+        ):
+            validate_encoding(
+                IDL_SCRIPT,
+                IDL_PROOF.replace("(theory -1 -2)", "(theory 1 -2)"),
+            )
+
+    def test_rejects_an_incomplete_difference_assignment_clause(self):
+        with self.assertRaisesRegex(
+            ProofCheckError,
+            "does not block a complete required assignment",
+        ):
+            validate_encoding(
+                IDL_SCRIPT,
+                IDL_PROOF.replace("(theory -1 -2)", "(theory -1)"),
+            )
 
     def test_nested_arrays_are_outside_the_proof_boundary(self):
         script = """

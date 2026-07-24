@@ -1,0 +1,8 @@
+(set-option :produce-proofs true)
+(set-logic QF_RDL)
+(declare-const x Real)
+(declare-const y Real)
+(assert (< x y))
+(assert (<= y x))
+(check-sat)
+(get-proof)

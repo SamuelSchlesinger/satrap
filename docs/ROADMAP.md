@@ -262,13 +262,15 @@ uses exact Cooper elimination with divisibility constraints. Another 1,408
 deterministic incremental arithmetic queries agree with Z3, including 384
 general LIA queries and arithmetic-`ite` relevance regressions. The typed API
 exposes exact Int/Real construction and values. An in-process evaluator rejects
-inconsistent arithmetic candidates before `sat`, and 72 deterministic returned
-IDL/LIA/RDL/LRA models are replayed as exact bindings and checked against the
-original formulas by Z3 in the mandatory integration gate. All UF/array
-arithmetic combinations, fragment-complete independent model and proof
-validation, and trail-level theory propagation remain open. The status counts
-remain evidence against one mature external solver, not a complete validation
-argument.
+inconsistent arithmetic candidates before `sat`. Shared equality arrangements
+now combine arithmetic with congruence closure and extensional arrays for
+QF_UFIDL, QF_UFLIA, QF_UFLRA, and QF_AUFLIA. Another 640 generated combination
+queries agree with Z3 in scoped sessions. Seventy-two scalar arithmetic models
+are replayed as exact bindings, while 16 combination models are replayed in
+full, including function and array interpretations. Fragment-complete
+independent model and proof validation and trail-level theory propagation
+remain open. The status counts remain evidence against one mature external
+solver, not a complete validation argument.
 
 ## Gate 5: algorithmic research and world-class evaluation
 

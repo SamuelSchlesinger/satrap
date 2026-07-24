@@ -33,10 +33,16 @@ pub(crate) fn validate_model(
     terms: &TermStore,
     theory: &TheoryModel,
     roots: &[TermId],
+    observed: &[TermId],
     atom_value: impl Fn(SymbolId) -> bool,
 ) -> Result<(), ModelValidationError> {
     let root_relevant = terms.reachable_boolean_terms(roots)?;
-    let (arithmetic_relevant, selected_ites) = expand_arithmetic_relevance(terms, &root_relevant)?;
+    let mut arithmetic_seeds = root_relevant.clone();
+    for &term in observed {
+        arithmetic_seeds.extend(terms.reachable_boolean_terms(&[term])?);
+    }
+    let (arithmetic_relevant, selected_ites) =
+        expand_arithmetic_relevance(terms, &arithmetic_seeds)?;
     validate_integer_values(terms, theory)?;
     validate_arithmetic_ites(terms, theory, &selected_ites, &atom_value)?;
     validate_arithmetic_predicates(terms, theory, &arithmetic_relevant, &atom_value)?;
@@ -198,10 +204,15 @@ mod tests {
         let model = TheoryModel::default();
 
         assert!(
-            validate_model(&terms, &model, &[less_equal], |symbol| symbol == le_symbol).is_ok()
+            validate_model(&terms, &model, &[less_equal], &[], |symbol| {
+                symbol == le_symbol
+            })
+            .is_ok()
         );
         assert_eq!(
-            validate_model(&terms, &model, &[strict], |symbol| symbol == strict_symbol),
+            validate_model(&terms, &model, &[strict], &[], |symbol| {
+                symbol == strict_symbol
+            }),
             Err(ModelValidationError::ArithmeticPredicate(strict))
         );
     }
@@ -226,6 +237,7 @@ mod tests {
                 &terms,
                 &TheoryModel::default(),
                 &[nonnegative],
+                &[],
                 |symbol| symbol == condition_symbol || symbol == predicate_symbol,
             ),
             Err(ModelValidationError::ArithmeticIte(term)) if term == selected

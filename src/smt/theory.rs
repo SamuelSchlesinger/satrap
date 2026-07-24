@@ -63,6 +63,10 @@ impl TheoryModel {
     pub(crate) fn value(&self, term: TermId) -> Option<u32> {
         self.uf.value(term)
     }
+
+    pub(crate) fn application_relevant(&self, term: TermId) -> bool {
+        self.uf.application_relevant(term)
+    }
 }
 
 /// Backtrackable CDCL(T) boundary.
@@ -104,8 +108,12 @@ impl TheoryManager {
     ) -> Result<TheoryPreparation, TermError> {
         let relevant = terms.reachable_boolean_terms(roots)?;
         self.uf.prepare(terms, &relevant)?;
-        self.arithmetic.prepare(terms, &relevant)?;
         let mut required = self.uf.required_terms(terms);
+        let mut arithmetic_relevant = relevant;
+        for &term in &required {
+            arithmetic_relevant.extend(terms.reachable_boolean_terms(&[term])?);
+        }
+        self.arithmetic.prepare(terms, &arithmetic_relevant)?;
         required.extend(self.arithmetic.required_terms(terms));
         required.sort_unstable();
         required.dedup();

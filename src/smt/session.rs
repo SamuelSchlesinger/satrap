@@ -243,6 +243,10 @@ impl Session {
                 | "QF_LIA"
                 | "QF_RDL"
                 | "QF_LRA"
+                | "QF_UFIDL"
+                | "QF_UFLIA"
+                | "QF_UFLRA"
+                | "QF_AUFLIA"
         ) {
             return Err(CommandError::Unsupported);
         }
@@ -1356,8 +1360,10 @@ impl Session {
         if application.is_none() {
             return self.direct_model_value(model, theory, term);
         }
-        if let Some(value) = self.direct_application_value(model, theory, term)? {
-            return Ok(value);
+        if theory.application_relevant(term) {
+            if let Some(value) = self.direct_application_value(model, theory, term)? {
+                return Ok(value);
+            }
         }
         if !visiting.insert(term) {
             return self.default_model_value(self.terms.sort(term).map_err(CommandError::from)?);
@@ -1387,25 +1393,33 @@ impl Session {
             .iter()
             .map(|&argument| self.model_value(model, theory, argument, visiting))
             .collect::<Result<Vec<_>, _>>()?;
+        let mut fallback = None;
         for candidate in self.terms.applications().iter().filter(|candidate| {
-            candidate.function == application.function && candidate.result != term
+            theory.application_relevant(candidate.result)
+                && candidate.function == application.function
+                && candidate.result != term
         }) {
+            let Some(value) = self.direct_application_value(model, theory, candidate.result)?
+            else {
+                continue;
+            };
+            fallback.get_or_insert_with(|| value.clone());
             let candidate_arguments = candidate
                 .arguments
                 .iter()
                 .map(|&argument| self.model_value(model, theory, argument, visiting))
                 .collect::<Result<Vec<_>, _>>()?;
             if candidate_arguments == argument_values {
-                if let Some(value) =
-                    self.direct_application_value(model, theory, candidate.result)?
-                {
-                    visiting.remove(&term);
-                    return Ok(value);
-                }
+                visiting.remove(&term);
+                return Ok(value);
             }
         }
         visiting.remove(&term);
-        self.default_model_value(self.terms.sort(term).map_err(CommandError::from)?)
+        if let Some(value) = fallback {
+            Ok(value)
+        } else {
+            self.default_model_value(self.terms.sort(term).map_err(CommandError::from)?)
+        }
     }
 
     fn array_value_at(
@@ -1422,12 +1436,10 @@ impl Session {
             .array_signature(sort)
             .map_err(CommandError::from)?;
         let index_value = self.model_value(model, theory, index, &mut HashSet::new())?;
-        for application in self
-            .terms
-            .applications()
-            .iter()
-            .filter(|application| application.function == signature.select_function)
-        {
+        for application in self.terms.applications().iter().filter(|application| {
+            theory.application_relevant(application.result)
+                && application.function == signature.select_function
+        }) {
             let Some(source_class) = theory.value(application.arguments[0]) else {
                 continue;
             };
@@ -1631,12 +1643,10 @@ impl Session {
             .collect::<Vec<_>>();
         let mut seen = HashSet::new();
         let mut rows = Vec::new();
-        for application in self
-            .terms
-            .applications()
-            .iter()
-            .filter(|application| application.function == declaration.function)
-        {
+        for application in self.terms.applications().iter().filter(|application| {
+            theory.application_relevant(application.result)
+                && application.function == declaration.function
+        }) {
             let arguments = application
                 .arguments
                 .iter()
@@ -1692,12 +1702,10 @@ impl Session {
             self.render_sort(Sort::Array(sort))
         );
         let mut seen_indices = HashSet::new();
-        for application in self
-            .terms
-            .applications()
-            .iter()
-            .filter(|application| application.function == signature.select_function)
-        {
+        for application in self.terms.applications().iter().filter(|application| {
+            theory.application_relevant(application.result)
+                && application.function == signature.select_function
+        }) {
             let Some(&source) = application.arguments.first() else {
                 continue;
             };
@@ -1903,7 +1911,15 @@ impl Session {
     fn require_uf(&self) -> Result<(), CommandError> {
         if matches!(
             self.logic.as_deref(),
-            Some("QF_UF" | "QF_UFBV" | "QF_AUFBV")
+            Some(
+                "QF_UF"
+                    | "QF_UFBV"
+                    | "QF_AUFBV"
+                    | "QF_UFIDL"
+                    | "QF_UFLIA"
+                    | "QF_UFLRA"
+                    | "QF_AUFLIA"
+            )
         ) {
             Ok(())
         } else {
@@ -1912,7 +1928,10 @@ impl Session {
     }
 
     fn require_arrays(&self) -> Result<(), CommandError> {
-        if matches!(self.logic.as_deref(), Some("QF_ABV" | "QF_AUFBV")) {
+        if matches!(
+            self.logic.as_deref(),
+            Some("QF_ABV" | "QF_AUFBV" | "QF_AUFLIA")
+        ) {
             Ok(())
         } else {
             Err(CommandError::Unsupported)
@@ -1922,7 +1941,16 @@ impl Session {
     fn require_arithmetic(&self) -> Result<(), CommandError> {
         if matches!(
             self.logic.as_deref(),
-            Some("QF_IDL" | "QF_LIA" | "QF_RDL" | "QF_LRA")
+            Some(
+                "QF_IDL"
+                    | "QF_LIA"
+                    | "QF_RDL"
+                    | "QF_LRA"
+                    | "QF_UFIDL"
+                    | "QF_UFLIA"
+                    | "QF_UFLRA"
+                    | "QF_AUFLIA"
+            )
         ) {
             Ok(())
         } else {
@@ -1931,7 +1959,10 @@ impl Session {
     }
 
     fn require_integers(&self) -> Result<(), CommandError> {
-        if matches!(self.logic.as_deref(), Some("QF_IDL" | "QF_LIA")) {
+        if matches!(
+            self.logic.as_deref(),
+            Some("QF_IDL" | "QF_LIA" | "QF_UFIDL" | "QF_UFLIA" | "QF_AUFLIA")
+        ) {
             Ok(())
         } else {
             Err(CommandError::Unsupported)
@@ -1939,7 +1970,10 @@ impl Session {
     }
 
     fn require_reals(&self) -> Result<(), CommandError> {
-        if matches!(self.logic.as_deref(), Some("QF_RDL" | "QF_LRA")) {
+        if matches!(
+            self.logic.as_deref(),
+            Some("QF_RDL" | "QF_LRA" | "QF_UFLRA")
+        ) {
             Ok(())
         } else {
             Err(CommandError::Unsupported)
@@ -2488,7 +2522,19 @@ mod tests {
         );
         assert!(output.starts_with("unsat\n(arguments)\nsat\n"));
         assert!(output.contains("((a @uc!0!0) (b @uc!0!0)"));
-        assert!(output.contains("((f a) @uc!0!1) ((f b) @uc!0!1))\n"));
+        let values = output
+            .lines()
+            .find(|line| line.starts_with("((a "))
+            .expect("get-value response");
+        let f_value = values
+            .split_once("((f a) ")
+            .and_then(|(_, suffix)| suffix.split_once(')'))
+            .map(|(value, _)| value)
+            .expect("f(a) value");
+        assert!(
+            values.contains(&format!("((f b) {f_value})")),
+            "unexpected UF values:\n{output}"
+        );
         assert!(output.contains("(define-fun a () U @uc!0!0)"));
         assert!(output.contains("(define-fun b () U @uc!0!0)"));
         assert!(output.contains("(define-fun f ((x!0 U)) U "));
@@ -2742,6 +2788,111 @@ mod tests {
         assert!(values.ends_with(" 7))"));
         assert_eq!(lines.next(), Some("unsat"));
         assert_eq!(lines.next(), Some("sat"));
+    }
+
+    #[test]
+    fn qf_ufidl_shares_integer_equalities_with_congruence() {
+        let output = execute(
+            "(set-logic QF_UFIDL)
+             (declare-const x Int)
+             (declare-const y Int)
+             (declare-fun f (Int) Int)
+             (assert (<= (- x y) 0))
+             (assert (<= (- y x) 0))
+             (assert (distinct (f x) (f y)))
+             (check-sat)",
+        );
+        assert_eq!(output, "unsat\n");
+    }
+
+    #[test]
+    fn qf_uflia_combines_general_integer_arithmetic_and_uf() {
+        let output = execute(
+            "(set-option :produce-models true)
+             (set-logic QF_UFLIA)
+             (declare-sort U 0)
+             (declare-const x Int)
+             (declare-const y Int)
+             (declare-fun f (Int) U)
+             (declare-fun value (U) Int)
+             (assert (= (+ (* 2 x) (* 3 y)) 5))
+             (assert (= x y))
+             (check-sat)
+             (get-value (x y (value (f x)) (value (f y))))
+             (push 1)
+             (assert (distinct (value (f x)) (value (f y))))
+             (check-sat)
+             (pop 1)
+             (check-sat)",
+        );
+        let mut lines = output.lines();
+        assert_eq!(lines.next(), Some("sat"));
+        let values = lines.next().expect("get-value response");
+        assert!(values.starts_with("((x 1) (y 1)"));
+        assert_eq!(lines.next(), Some("unsat"));
+        assert_eq!(lines.next(), Some("sat"));
+    }
+
+    #[test]
+    fn popped_arithmetic_applications_do_not_pollute_function_models() {
+        let output = execute(
+            "(set-option :produce-models true)
+             (set-logic QF_UFLIA)
+             (declare-const x Int)
+             (declare-const y Int)
+             (declare-fun f (Int) Int)
+             (push 1)
+             (assert (= y 0))
+             (assert (= (f y) 7))
+             (check-sat)
+             (pop 1)
+             (assert (= x 0))
+             (assert (= (f x) 3))
+             (check-sat)
+             (get-value ((f y)))
+             (get-model)",
+        );
+        assert!(
+            output.starts_with("sat\nsat\n(((f y) 3))\n"),
+            "unexpected incremental model output:\n{output}"
+        );
+        assert!(output.contains("(define-fun f ((x!0 Int)) Int (ite (= x!0 0) 3 3))"));
+    }
+
+    #[test]
+    fn qf_uflra_shares_exact_real_equalities_with_congruence() {
+        let output = execute(
+            "(set-logic QF_UFLRA)
+             (declare-const x Real)
+             (declare-const y Real)
+             (declare-fun f (Real) Real)
+             (assert (= (+ (* 2.0 x) y) (/ 3.0 2.0)))
+             (assert (= x y))
+             (assert (> (f x) (f y)))
+             (check-sat)",
+        );
+        assert_eq!(output, "unsat\n");
+    }
+
+    #[test]
+    fn qf_auflia_combines_extensional_arrays_uf_and_integer_indices() {
+        let output = execute(
+            "(set-logic QF_AUFLIA)
+             (declare-const a (Array Int Int))
+             (declare-const b (Array Int Int))
+             (declare-const i Int)
+             (declare-const j Int)
+             (declare-fun observe ((Array Int Int)) Int)
+             (push 1)
+             (assert (= i j))
+             (assert (distinct (select (store a i 5) j) 5))
+             (check-sat)
+             (pop 1)
+             (assert (= a b))
+             (assert (distinct (observe a) (observe b)))
+             (check-sat)",
+        );
+        assert_eq!(output, "unsat\nunsat\n");
     }
 
     #[test]

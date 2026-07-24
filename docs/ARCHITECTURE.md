@@ -645,15 +645,24 @@ Fourier–Motzkin elimination with open-bound tracking and reverse model
 reconstruction. Arithmetic checking follows the full relevance closure through
 selected arithmetic-`ite` conditions while excluding popped formulas.
 
+UF and arithmetic exchange explicit shared equalities. SAT assigns each
+relevant equality, the arithmetic solver checks the assignment exactly, and
+congruence closure consumes the same literal as an explainable class merge.
+The arrangement covers arithmetic arguments and results of uninterpreted
+functions as well as array indices and elements. Relevance is recomputed from
+active roots and permanent array axioms, so applications left only by popped
+assertions do not keep expanding the current arrangement.
+
 Before an arithmetic candidate escapes as `sat`, a separate evaluator checks
 the original active roots, exact predicate truth values, integer integrality,
 and every relevant selected arithmetic-`ite` branch. Failure is reported as
 `unknown`, and model inspection is available only after `sat`; resource or
 incompleteness results never manufacture a placeholder model. The integration
 suite additionally replays 72 deterministic IDL/LIA/RDL/LRA models as exact
-constant bindings into Z3 and requires the original formulas to remain
-satisfiable. This external corpus is a useful independent oracle, not yet a
-fragment-complete model-validation architecture.
+constant bindings into Z3 and replays 16 arithmetic-combination models in full,
+including function and array definitions. Each replay requires the original
+formula to remain satisfiable. This external corpus is a useful independent
+oracle, not yet a fragment-complete model-validation architecture.
 
 The implemented layering is:
 
@@ -674,10 +683,9 @@ bit-vector encoding  UF + extensional arrays  exact linear arithmetic
 Theory lemmas and unconditional axioms are permanent because term definitions
 are permanent even when the assertion that first exposed them is scoped.
 Resource limits currently charge SAT conflicts/propagations, not parsing,
-lowering, theory preparation, or final checking. Arithmetic theory
-combinations, trail-level propagation, fragment-complete independent SMT
-model/proof validation, and an incremental SMT proof format remain future
-work.
+lowering, theory preparation, or final checking. Trail-level propagation,
+fragment-complete independent SMT model/proof validation, and an incremental
+SMT proof format remain future work.
 
 ## Performance policy
 

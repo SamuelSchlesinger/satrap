@@ -60,6 +60,7 @@ pub(crate) fn solve(
         solver.add_encoding_clause(&[literal])?;
     }
     theories.acknowledge_array_axioms(preparation.array_axiom_count);
+    let validation_terms = preparation.required.clone();
     let required_literals = preparation
         .required
         .iter()
@@ -86,11 +87,12 @@ pub(crate) fn solve(
             .collect::<HashMap<_, _>>();
         match theories.check_model(terms, &values) {
             TheoryCheck::Consistent(theory) => {
-                let validation = validate_model(terms, &theory, roots, |symbol| {
-                    encoder
-                        .atom_literal(symbol)
-                        .is_some_and(|literal| model.literal_value(literal))
-                });
+                let validation =
+                    validate_model(terms, &theory, roots, &validation_terms, |symbol| {
+                        encoder
+                            .atom_literal(symbol)
+                            .is_some_and(|literal| model.literal_value(literal))
+                    });
                 if validation.is_err() {
                     return Ok(SmtSolveResult::Unknown(
                         UnknownReason::ModelValidationFailure,

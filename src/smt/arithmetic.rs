@@ -562,6 +562,19 @@ impl IntegerExpression {
                 sum + coefficient * values.get(&variable).cloned().unwrap_or_else(BigInt::zero)
             })
     }
+
+    fn as_linear(&self) -> LinearExpression {
+        LinearExpression {
+            constant: BigRational::from_integer(self.constant.clone()),
+            coefficients: self
+                .coefficients
+                .iter()
+                .map(|(&variable, coefficient)| {
+                    (variable, BigRational::from_integer(coefficient.clone()))
+                })
+                .collect(),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
@@ -686,6 +699,21 @@ fn solve_integer_problem(
     variables: &[ArithmeticVariableId],
 ) -> Option<HashMap<ArithmeticVariableId, BigInt>> {
     let problem = simplify_integer_problem(problem)?;
+    if variables.is_empty() {
+        debug_assert!(
+            problem.inequalities.is_empty() && problem.divisibilities.is_empty(),
+            "all constant constraints should be removed during simplification"
+        );
+        return Some(HashMap::new());
+    }
+    if variables.len() >= 5
+        && problem.divisibilities.is_empty()
+        && variables.iter().all(|&variable| {
+            !problem.mentions(variable) || integer_constant_bounds(&problem, variable).is_some()
+        })
+    {
+        return solve_bounded_integer_relaxation(problem, variables);
+    }
     if let Some((variable, lower, upper)) = choose_bounded_integer_variable(&problem, variables) {
         if lower > upper {
             return None;
@@ -710,13 +738,8 @@ fn solve_integer_problem(
         }
         return None;
     }
-    let Some(variable) = choose_elimination_variable(&problem, variables) else {
-        debug_assert!(
-            problem.inequalities.is_empty() && problem.divisibilities.is_empty(),
-            "all constant constraints should be removed during simplification"
-        );
-        return Some(HashMap::new());
-    };
+    let variable = choose_elimination_variable(&problem, variables)
+        .expect("the nonempty variable slice has an elimination candidate");
     let remaining = variables
         .iter()
         .copied()
@@ -775,6 +798,81 @@ fn solve_integer_problem(
     None
 }
 
+fn solve_bounded_integer_relaxation(
+    problem: IntegerProblem,
+    variables: &[ArithmeticVariableId],
+) -> Option<HashMap<ArithmeticVariableId, BigInt>> {
+    let variable_count = variables
+        .iter()
+        .map(|variable| variable.0 as usize + 1)
+        .max()
+        .unwrap_or(0);
+    let relaxation = problem
+        .inequalities
+        .iter()
+        .map(|constraint| {
+            let mut expression = constraint.expression.as_linear();
+            // Integer e < 0 is equivalent to e + 1 <= 0. The latter is a
+            // tighter real relaxation than retaining the open integer bound.
+            expression.constant += BigInt::one();
+            LinearConstraint {
+                expression,
+                strict: false,
+                sort: Sort::Real,
+            }
+        })
+        .collect();
+    let model = match solve_real_linear(relaxation, &vec![Sort::Real; variable_count]) {
+        ArithmeticSolve::Sat(model) => model,
+        ArithmeticSolve::Unsat => return None,
+        ArithmeticSolve::Incomplete => {
+            unreachable!("exact real linear elimination is complete")
+        }
+    };
+    let fractional = variables.iter().copied().find_map(|variable| {
+        let value = model.variable_value(variable);
+        (!value.is_integer()).then_some((variable, value))
+    });
+    let Some((variable, value)) = fractional else {
+        let values = variables
+            .iter()
+            .copied()
+            .map(|variable| (variable, model.variable_value(variable).to_integer()))
+            .collect::<HashMap<_, _>>();
+        debug_assert!(
+            problem
+                .inequalities
+                .iter()
+                .all(|constraint| constraint.expression.evaluate(&values).is_negative()),
+            "an integral relaxation model must satisfy the integer problem"
+        );
+        return Some(values);
+    };
+
+    let floor = value.floor().to_integer();
+    let ceil = value.ceil().to_integer();
+    let mut lower_branch = problem.clone();
+    lower_branch.inequalities.push(IntegerInequality {
+        // variable <= floor
+        expression: IntegerExpression {
+            constant: -floor - BigInt::one(),
+            coefficients: BTreeMap::from([(variable, BigInt::one())]),
+        },
+    });
+    if let Some(values) = solve_integer_problem(lower_branch, variables) {
+        return Some(values);
+    }
+    let mut upper_branch = problem;
+    upper_branch.inequalities.push(IntegerInequality {
+        // variable >= ceil
+        expression: IntegerExpression {
+            constant: ceil - BigInt::one(),
+            coefficients: BTreeMap::from([(variable, BigInt::from(-1))]),
+        },
+    });
+    solve_integer_problem(upper_branch, variables)
+}
+
 fn choose_bounded_integer_variable(
     problem: &IntegerProblem,
     variables: &[ArithmeticVariableId],
@@ -782,36 +880,43 @@ fn choose_bounded_integer_variable(
     variables
         .iter()
         .filter_map(|&variable| {
-            let mut lower = None;
-            let mut upper = None;
-            for constraint in &problem.inequalities {
-                if constraint.expression.coefficients.len() != 1 {
-                    continue;
-                }
-                let coefficient = constraint.expression.coefficient(variable);
-                if coefficient.is_zero() {
-                    continue;
-                }
-                let boundary =
-                    BigRational::new(-constraint.expression.constant.clone(), coefficient.clone());
-                if coefficient.is_positive() {
-                    let candidate = boundary.ceil().to_integer() - BigInt::one();
-                    if upper.as_ref().is_none_or(|current| candidate < *current) {
-                        upper = Some(candidate);
-                    }
-                } else {
-                    let candidate = boundary.floor().to_integer() + BigInt::one();
-                    if lower.as_ref().is_none_or(|current| candidate > *current) {
-                        lower = Some(candidate);
-                    }
-                }
-            }
-            let (lower, upper) = (lower?, upper?);
+            let (lower, upper) = integer_constant_bounds(problem, variable)?;
             let width = &upper - &lower;
             Some((width, variable, lower, upper))
         })
         .min_by(|left, right| left.0.cmp(&right.0).then_with(|| left.1.cmp(&right.1)))
         .map(|(_, variable, lower, upper)| (variable, lower, upper))
+}
+
+fn integer_constant_bounds(
+    problem: &IntegerProblem,
+    variable: ArithmeticVariableId,
+) -> Option<(BigInt, BigInt)> {
+    let mut lower = None;
+    let mut upper = None;
+    for constraint in &problem.inequalities {
+        if constraint.expression.coefficients.len() != 1 {
+            continue;
+        }
+        let coefficient = constraint.expression.coefficient(variable);
+        if coefficient.is_zero() {
+            continue;
+        }
+        let boundary =
+            BigRational::new(-constraint.expression.constant.clone(), coefficient.clone());
+        if coefficient.is_positive() {
+            let candidate = boundary.ceil().to_integer() - BigInt::one();
+            if upper.as_ref().is_none_or(|current| candidate < *current) {
+                upper = Some(candidate);
+            }
+        } else {
+            let candidate = boundary.floor().to_integer() + BigInt::one();
+            if lower.as_ref().is_none_or(|current| candidate > *current) {
+                lower = Some(candidate);
+            }
+        }
+    }
+    Some((lower?, upper?))
 }
 
 fn solve_cooper_candidate(

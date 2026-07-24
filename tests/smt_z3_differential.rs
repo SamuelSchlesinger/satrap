@@ -188,6 +188,76 @@ fn deterministic_exact_arithmetic_corpora_agree_with_z3() {
 }
 
 #[test]
+fn deterministic_qf_ufidl_corpus_agrees_with_z3() {
+    assert_differential_corpus("QF_UFIDL", &ufidl_differential_script(), 256);
+}
+
+#[test]
+fn deterministic_qf_uflia_corpus_agrees_with_z3() {
+    assert_differential_corpus("QF_UFLIA", &uflia_differential_script(64), 64);
+}
+
+#[test]
+fn deterministic_qf_uflra_corpus_agrees_with_z3() {
+    assert_differential_corpus("QF_UFLRA", &uflra_differential_script(), 256);
+}
+
+#[test]
+fn deterministic_qf_auflia_corpus_agrees_with_z3() {
+    assert_differential_corpus("QF_AUFLIA", &auflia_differential_script(64), 64);
+}
+
+fn assert_differential_corpus(name: &str, script: &str, expected: usize) {
+    if Command::new("z3").arg("--version").output().is_err() {
+        eprintln!("skipping {name} differential test because z3 is not installed");
+        return;
+    }
+    let ours = run_solver(env!("CARGO_BIN_EXE_smt"), &[], script);
+    let z3 = run_solver("z3", &["-in", "-smt2"], script);
+    assert!(
+        ours.status.success(),
+        "our solver failed on {name}:\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&ours.stdout),
+        String::from_utf8_lossy(&ours.stderr)
+    );
+    assert!(
+        z3.status.success(),
+        "z3 failed on {name}:\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&z3.stdout),
+        String::from_utf8_lossy(&z3.stderr)
+    );
+    let ours_stdout = String::from_utf8(ours.stdout).expect("our output must be UTF-8");
+    let z3_stdout = String::from_utf8(z3.stdout).expect("z3 output must be UTF-8");
+    let ours_results = check_results(&ours_stdout);
+    let z3_results = check_results(&z3_stdout);
+    assert_eq!(
+        ours_results.len(),
+        expected,
+        "our solver did not answer every {name} query:\n{ours_stdout}"
+    );
+    assert_eq!(
+        z3_results.len(),
+        expected,
+        "z3 did not answer every {name} query:\n{z3_stdout}"
+    );
+    assert!(
+        !ours_results.contains(&"unknown"),
+        "our solver returned unknown on its advertised {name} fragment"
+    );
+    let mismatch = ours_results
+        .iter()
+        .zip(&z3_results)
+        .position(|(ours, z3)| ours != z3);
+    assert_eq!(
+        mismatch,
+        None,
+        "{name} differential mismatch at query {mismatch:?}: ours={:?}, z3={:?}",
+        mismatch.map(|index| ours_results[index]),
+        mismatch.map(|index| z3_results[index])
+    );
+}
+
+#[test]
 fn exact_arithmetic_models_are_independently_validated_by_z3() {
     if Command::new("z3").arg("--version").output().is_err() {
         eprintln!("skipping arithmetic model validation because z3 is not installed");
@@ -230,6 +300,55 @@ fn exact_arithmetic_models_are_independently_validated_by_z3() {
             check_results(&z3_stdout),
             ["sat"],
             "our model does not satisfy {} according to z3:\n\
+             solver output:\n{ours_stdout}\nvalidation output:\n{z3_stdout}",
+            case.name
+        );
+    }
+}
+
+#[test]
+fn arithmetic_combination_models_are_independently_validated_by_z3() {
+    if Command::new("z3").arg("--version").output().is_err() {
+        eprintln!("skipping combination model validation because z3 is not installed");
+        return;
+    }
+
+    let cases = arithmetic_combination_model_cases();
+    assert_eq!(cases.len(), 16);
+    for case in cases {
+        let script = case.solver_script();
+        let ours = run_solver(env!("CARGO_BIN_EXE_smt"), &[], &script);
+        assert!(
+            ours.status.success(),
+            "our solver failed on {}:\nscript:\n{}\nstdout:\n{}\nstderr:\n{}",
+            case.name,
+            script,
+            String::from_utf8_lossy(&ours.stdout),
+            String::from_utf8_lossy(&ours.stderr)
+        );
+        let ours_stdout = String::from_utf8(ours.stdout).expect("our output must be UTF-8");
+        assert_eq!(
+            check_results(&ours_stdout),
+            ["sat"],
+            "our solver did not produce a model for {}:\n{ours_stdout}",
+            case.name
+        );
+
+        let validation_script = case.z3_validation_script(&ours_stdout);
+        let z3 = run_solver("z3", &["-in", "-smt2"], &validation_script);
+        assert!(
+            z3.status.success(),
+            "z3 rejected the validation script for {}:\nscript:\n{}\nstdout:\n{}\nstderr:\n{}",
+            case.name,
+            validation_script,
+            String::from_utf8_lossy(&z3.stdout),
+            String::from_utf8_lossy(&z3.stderr)
+        );
+        let z3_stdout = String::from_utf8(z3.stdout).expect("z3 output must be UTF-8");
+        assert_eq!(
+            check_results(&z3_stdout),
+            ["sat"],
+            "our combined model does not satisfy {} according to z3:\n\
              solver output:\n{ours_stdout}\nvalidation output:\n{z3_stdout}",
             case.name
         );
@@ -674,6 +793,239 @@ fn lia_differential_script() -> String {
     script
 }
 
+fn ufidl_differential_script() -> String {
+    const TERMS: &[&str] = &["x", "y", "z", "(f x)", "(f y)", "(f z)"];
+    let mut script = String::from(
+        "(set-logic QF_UFIDL)\n\
+         (declare-const x Int)\n\
+         (declare-const y Int)\n\
+         (declare-const z Int)\n\
+         (declare-fun f (Int) Int)\n",
+    );
+    let mut state = 0x4528_21e6_u32;
+    for query in 0..256 {
+        writeln!(script, "(push 1)").unwrap();
+        for _ in 0..4 {
+            state = state.wrapping_mul(22_695_477).wrapping_add(1);
+            let left = TERMS[(state as usize >> 3) % TERMS.len()];
+            let right = TERMS[(state as usize >> 11) % TERMS.len()];
+            let bound = i32::try_from((state >> 19) % 17).unwrap() - 8;
+            let relation = ["<=", "<", ">=", ">"][(state as usize >> 1) & 3];
+            writeln!(
+                script,
+                "(assert ({relation} (- {left} {right}) {}))",
+                smt_integer(bound)
+            )
+            .unwrap();
+        }
+        match query % 6 {
+            0 => {
+                writeln!(script, "(assert (= x y))").unwrap();
+                writeln!(script, "(assert (distinct (f x) (f y)))").unwrap();
+            }
+            1 => {
+                writeln!(script, "(assert (distinct x y))").unwrap();
+                writeln!(script, "(assert (= (f x) (f y)))").unwrap();
+            }
+            2 => {
+                writeln!(script, "(assert (= (- x y) 0))").unwrap();
+                writeln!(script, "(assert (> (f x) (f y)))").unwrap();
+            }
+            3 => {
+                writeln!(script, "(assert (= y z))").unwrap();
+                writeln!(script, "(assert (= (f x) y))").unwrap();
+                writeln!(script, "(assert (distinct (f x) z))").unwrap();
+            }
+            _ => {}
+        }
+        writeln!(script, "(check-sat)").unwrap();
+        writeln!(script, "(pop 1)").unwrap();
+    }
+    script.push_str("(exit)\n");
+    script
+}
+
+fn uflia_differential_script(query_count: usize) -> String {
+    const COEFFICIENTS: &[i32] = &[-3, -2, -1, 1, 2, 3];
+    const TERMS: &[&str] = &["x", "y", "z", "(f x)", "(f y)", "(f z)"];
+    let mut script = String::from(
+        "(set-logic QF_UFLIA)\n\
+         (declare-const x Int)\n\
+         (declare-const y Int)\n\
+         (declare-const z Int)\n\
+         (declare-fun f (Int) Int)\n\
+         (assert (and (<= (- 8) x) (<= x 8)))\n\
+         (assert (and (<= (- 8) y) (<= y 8)))\n\
+         (assert (and (<= (- 8) z) (<= z 8)))\n\
+         (assert (and (<= (- 8) (f x)) (<= (f x) 8)))\n\
+         (assert (and (<= (- 8) (f y)) (<= (f y) 8)))\n\
+         (assert (and (<= (- 8) (f z)) (<= (f z) 8)))\n",
+    );
+    let mut state = 0x38d0_1377_u32;
+    for query in 0..query_count {
+        writeln!(script, "(push 1)").unwrap();
+        for assertion in 0..4 {
+            state = state.wrapping_mul(1_103_515_245).wrapping_add(12_345);
+            let a = COEFFICIENTS[(state as usize >> 2) % COEFFICIENTS.len()];
+            let b = COEFFICIENTS[(state as usize >> 9) % COEFFICIENTS.len()];
+            let left = TERMS[(state as usize >> 16) % TERMS.len()];
+            let right = TERMS[(state as usize >> 22) % TERMS.len()];
+            let bound = i32::try_from((state >> 26) % 13).unwrap() - 6;
+            let relation = ["<=", "<", ">=", ">"][(state as usize >> 5) & 3];
+            let atom = format!(
+                "({relation} (+ (* {} {left}) (* {} {right})) {})",
+                smt_integer(a),
+                smt_integer(b),
+                smt_integer(bound)
+            );
+            if assertion == 3 && query % 7 == 0 {
+                writeln!(script, "(assert (or {atom} (= x y)))").unwrap();
+            } else {
+                writeln!(script, "(assert {atom})").unwrap();
+            }
+        }
+        match query % 7 {
+            0 => {
+                writeln!(script, "(assert (= (+ (* 2 x) (* 2 y)) 1))").unwrap();
+            }
+            1 => {
+                writeln!(script, "(assert (= x y))").unwrap();
+                writeln!(script, "(assert (distinct (f x) (f y)))").unwrap();
+            }
+            2 => {
+                writeln!(script, "(assert (= (+ (* 2 x) y) (+ x (* 2 y))))").unwrap();
+                writeln!(script, "(assert (> (f x) (f y)))").unwrap();
+            }
+            3 => {
+                writeln!(script, "(assert (distinct x y))").unwrap();
+                writeln!(script, "(assert (= (f x) (f y)))").unwrap();
+            }
+            _ => {}
+        }
+        writeln!(script, "(check-sat)").unwrap();
+        writeln!(script, "(pop 1)").unwrap();
+    }
+    script.push_str("(exit)\n");
+    script
+}
+
+fn uflra_differential_script() -> String {
+    const COEFFICIENTS: &[i32] = &[-3, -2, -1, 1, 2, 3];
+    const TERMS: &[&str] = &["x", "y", "z", "(f x)", "(f y)", "(f z)"];
+    let mut script = String::from(
+        "(set-logic QF_UFLRA)\n\
+         (declare-const x Real)\n\
+         (declare-const y Real)\n\
+         (declare-const z Real)\n\
+         (declare-fun f (Real) Real)\n",
+    );
+    let mut state = 0xbe54_66cf_u32;
+    for query in 0..256 {
+        writeln!(script, "(push 1)").unwrap();
+        for assertion in 0..4 {
+            state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            let a = COEFFICIENTS[(state as usize >> 2) % COEFFICIENTS.len()];
+            let b = COEFFICIENTS[(state as usize >> 9) % COEFFICIENTS.len()];
+            let left = TERMS[(state as usize >> 16) % TERMS.len()];
+            let right = TERMS[(state as usize >> 22) % TERMS.len()];
+            let bound = i32::try_from((state >> 26) % 13).unwrap() - 6;
+            let relation = ["<=", "<", ">=", ">"][(state as usize >> 5) & 3];
+            let atom = format!(
+                "({relation} (+ (* {} {left}) (* {} {right})) {})",
+                smt_integer(a),
+                smt_integer(b),
+                smt_integer(bound)
+            );
+            if assertion == 3 && query % 5 == 0 {
+                writeln!(script, "(assert (not {atom}))").unwrap();
+            } else {
+                writeln!(script, "(assert {atom})").unwrap();
+            }
+        }
+        match query % 6 {
+            0 => {
+                writeln!(script, "(assert (= x y))").unwrap();
+                writeln!(script, "(assert (distinct (f x) (f y)))").unwrap();
+            }
+            1 => {
+                writeln!(script, "(assert (= (- x y) 0.0))").unwrap();
+                writeln!(script, "(assert (> (f x) (f y)))").unwrap();
+            }
+            2 => {
+                writeln!(script, "(assert (distinct x y))").unwrap();
+                writeln!(script, "(assert (= (f x) (f y)))").unwrap();
+            }
+            _ => {}
+        }
+        writeln!(script, "(check-sat)").unwrap();
+        writeln!(script, "(pop 1)").unwrap();
+    }
+    script.push_str("(exit)\n");
+    script
+}
+
+fn auflia_differential_script(query_count: usize) -> String {
+    let mut script = String::new();
+    let mut state = 0x34e9_0c6c_u32;
+    for query in 0..query_count {
+        if query % 8 == 0 {
+            if query != 0 {
+                script.push_str("(reset)\n");
+            }
+            script.push_str(
+                "(set-logic QF_AUFLIA)\n\
+                 (declare-const a (Array Int Int))\n\
+                 (declare-const b (Array Int Int))\n\
+                 (declare-const x Int)\n\
+                 (declare-const y Int)\n\
+                 (declare-const v Int)\n\
+                 (declare-fun observe ((Array Int Int)) Int)\n\
+                 (assert (and (<= (- 6) x) (<= x 6)))\n\
+                 (assert (and (<= (- 6) y) (<= y 6)))\n\
+                 (assert (and (<= (- 6) v) (<= v 6)))\n",
+            );
+        }
+        writeln!(script, "(push 1)").unwrap();
+        state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+        let bound = i32::try_from((state >> 21) % 13).unwrap() - 6;
+        let relation = ["<=", "<", ">=", ">"][(state as usize >> 4) & 3];
+        writeln!(
+            script,
+            "(assert ({relation} (+ (* 2 x) (* (- 3) y) v) {}))",
+            smt_integer(bound)
+        )
+        .unwrap();
+        match query % 8 {
+            0 => {
+                writeln!(script, "(assert (= x y))").unwrap();
+                writeln!(script, "(assert (distinct (select (store a x v) y) v))").unwrap();
+            }
+            1 => {
+                writeln!(script, "(assert (= a b))").unwrap();
+                writeln!(script, "(assert (distinct (observe a) (observe b)))").unwrap();
+            }
+            2 => {
+                writeln!(script, "(assert (= a b))").unwrap();
+                writeln!(script, "(assert (= x y))").unwrap();
+                writeln!(script, "(assert (distinct (select a x) (select b y)))").unwrap();
+            }
+            3 => {
+                writeln!(script, "(assert (distinct a b))").unwrap();
+                writeln!(script, "(assert (= (select a x) (select b x)))").unwrap();
+            }
+            4 => {
+                writeln!(script, "(assert (= x y))").unwrap();
+                writeln!(script, "(assert (= (store a x v) (store a y v)))").unwrap();
+            }
+            _ => {}
+        }
+        writeln!(script, "(check-sat)").unwrap();
+        writeln!(script, "(pop 1)").unwrap();
+    }
+    script.push_str("(exit)\n");
+    script
+}
+
 fn rdl_differential_script() -> String {
     const VARIABLES: &[&str] = &["x", "y", "z"];
     const BOUNDS: &[&str] = &[
@@ -790,6 +1142,51 @@ struct ArithmeticModelCase {
     logic: &'static str,
     sort: &'static str,
     assertions: Vec<String>,
+}
+
+struct CombinationModelCase {
+    name: String,
+    logic: &'static str,
+    declarations: Vec<String>,
+    assertions: Vec<String>,
+}
+
+impl CombinationModelCase {
+    fn solver_script(&self) -> String {
+        let mut script = String::from("(set-option :produce-models true)\n");
+        writeln!(script, "(set-logic {})", self.logic).unwrap();
+        for declaration in &self.declarations {
+            writeln!(script, "{declaration}").unwrap();
+        }
+        for assertion in &self.assertions {
+            writeln!(script, "(assert {assertion})").unwrap();
+        }
+        script.push_str("(check-sat)\n(get-model)\n(exit)\n");
+        script
+    }
+
+    fn z3_validation_script(&self, solver_output: &str) -> String {
+        let mut script = format!("(set-logic {})\n", self.logic);
+        let definitions = solver_output
+            .lines()
+            .map(str::trim)
+            .filter(|line| line.starts_with("(define-fun "))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            definitions.len(),
+            self.declarations.len(),
+            "model definition count differs from declarations for {}:\n{solver_output}",
+            self.name
+        );
+        for definition in definitions {
+            writeln!(script, "{definition}").unwrap();
+        }
+        for assertion in &self.assertions {
+            writeln!(script, "(assert {assertion})").unwrap();
+        }
+        script.push_str("(check-sat)\n(exit)\n");
+        script
+    }
 }
 
 impl ArithmeticModelCase {
@@ -982,6 +1379,89 @@ fn arithmetic_model_cases() -> Vec<ArithmeticModelCase> {
         });
     }
 
+    cases
+}
+
+fn arithmetic_combination_model_cases() -> Vec<CombinationModelCase> {
+    let mut cases = Vec::with_capacity(16);
+    for query in 0_i32..4 {
+        let x = query - 2;
+        let y = query + 3;
+        cases.push(CombinationModelCase {
+            name: format!("QF_UFIDL model {query}"),
+            logic: "QF_UFIDL",
+            declarations: vec![
+                "(declare-const x Int)".to_owned(),
+                "(declare-const y Int)".to_owned(),
+                "(declare-fun f (Int) Int)".to_owned(),
+            ],
+            assertions: vec![
+                format!("(= x {})", smt_integer(x)),
+                format!("(= (- x y) {})", smt_integer(x - y)),
+                format!("(= (f x) {})", smt_integer(2 * x + 1)),
+                format!("(= (f y) {})", smt_integer(2 * y + 1)),
+            ],
+        });
+    }
+    for query in 0_i32..4 {
+        let x = query - 1;
+        let y = 4 - query;
+        cases.push(CombinationModelCase {
+            name: format!("QF_UFLIA model {query}"),
+            logic: "QF_UFLIA",
+            declarations: vec![
+                "(declare-const x Int)".to_owned(),
+                "(declare-const y Int)".to_owned(),
+                "(declare-fun f (Int) Int)".to_owned(),
+            ],
+            assertions: vec![
+                format!("(= (+ (* 2 x) (* 3 y)) {})", smt_integer(2 * x + 3 * y)),
+                format!("(= x {})", smt_integer(x)),
+                format!("(= (f x) {})", smt_integer(x - y)),
+                format!("(= (f y) {})", smt_integer(y - x)),
+            ],
+        });
+    }
+    for query in 0_i32..4 {
+        let x = query - 2;
+        let y = query + 1;
+        cases.push(CombinationModelCase {
+            name: format!("QF_UFLRA model {query}"),
+            logic: "QF_UFLRA",
+            declarations: vec![
+                "(declare-const x Real)".to_owned(),
+                "(declare-const y Real)".to_owned(),
+                "(declare-fun f (Real) Real)".to_owned(),
+            ],
+            assertions: vec![
+                format!("(= (+ (* 2 x) (* 3 y)) {})", smt_integer(2 * x + 3 * y)),
+                format!("(= x {})", smt_integer(x)),
+                format!("(= (f x) (/ {} 2))", smt_integer(2 * x + 1)),
+                format!("(= (f y) (/ {} 2))", smt_integer(2 * y + 1)),
+            ],
+        });
+    }
+    for query in 0_i32..4 {
+        let x = query - 1;
+        let value = 2 * query + 3;
+        cases.push(CombinationModelCase {
+            name: format!("QF_AUFLIA model {query}"),
+            logic: "QF_AUFLIA",
+            declarations: vec![
+                "(declare-const a (Array Int Int))".to_owned(),
+                "(declare-const x Int)".to_owned(),
+                "(declare-const v Int)".to_owned(),
+                "(declare-fun observe ((Array Int Int)) Int)".to_owned(),
+            ],
+            assertions: vec![
+                format!("(= x {})", smt_integer(x)),
+                format!("(= v {})", smt_integer(value)),
+                "(= (select a x) v)".to_owned(),
+                "(= (select (store a x (+ v 1)) x) (+ v 1))".to_owned(),
+                format!("(= (observe a) {})", smt_integer(value - x)),
+            ],
+        });
+    }
     cases
 }
 

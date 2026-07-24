@@ -46,13 +46,14 @@ the original DIMACS input.
 
 The same gate also exercises online QF_BOOL, QF_BV, QF_UF, QF_UFBV, QF_ABV,
 QF_AUFBV, QF_IDL, QF_LIA, QF_RDL, QF_LRA, QF_UFIDL, QF_UFLIA, QF_UFLRA,
-and QF_AUFLIA queries with named assertions, active scopes, definitions,
-resets, Boolean conditions, and the supported Boolean, fixed-width bit-vector,
-ground-UF, non-nested-array, and exact linear-arithmetic operations. With
-`:produce-proofs true`, `get-proof` returns a versioned `satrap-edrat`
-S-expression. The proof producer rebuilds the active assertion context and
-lowering as fresh permanent formulas, so internal activation selectors and
-native-theory state cannot masquerade as part of a global empty-clause proof.
+and QF_AUFLIA queries with named assertions, closed inline named subterms,
+active scopes, definitions, resets, Boolean conditions, and the supported
+Boolean, fixed-width bit-vector, ground-UF, non-nested-array, and exact
+linear-arithmetic operations. With `:produce-proofs true`, `get-proof` returns
+a versioned `satrap-edrat` S-expression. The proof producer rebuilds the active
+assertion context and lowering as fresh permanent formulas, so internal
+activation selectors and native-theory state cannot masquerade as part of a
+global empty-clause proof.
 
 SMT-LIB 2.7 permits `get-proof` only when the most recent check had an empty
 set of explicit assumptions. Satrap therefore rejects `get-proof` after a
@@ -64,8 +65,8 @@ nonempty `check-sat-assuming` call. A plain `check-sat`, or
 front ends, lowerings, and canonical encoder for those 14 fragments. Given the
 original script, it:
 
-1. reconstructs declarations, definitions, `let` bindings, scopes, resets,
-   assertions, and checked queries;
+1. reconstructs declarations, definitions, postorder inline labels, `let`
+   bindings, scopes, resets, assertions, and checked queries;
 2. requires the certificate's premise list to match an actual
    standards-eligible `get-proof` site, including intervening mutation and
    reset state;
@@ -178,6 +179,11 @@ integer-indexed array extensionality composed with a UF observer. Repository
 hygiene rejects a missing or empty canonical proof-corpus file, checks that
 producer/checker work limits agree, and requires the Rust logic list, Python
 logic list, and per-logic smoke coverage to remain synchronized.
+
+The QF_BOOL corpus also includes a closed label defined inside one assertion
+and used by later assertions. This forces the independent checker—not only the
+producer—to apply the standard depth-first postorder definition semantics
+before DRAT-trim sees the reconstructed query.
 
 Run that path directly with:
 

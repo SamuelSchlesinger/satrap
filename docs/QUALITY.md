@@ -117,7 +117,9 @@ QF_UFLRA, and QF_AUFLIA proof-corpus file to remain present and nonempty. It
 requires the Rust producer logic list, Python checker logic list, and
 per-logic smoke coverage to stay synchronized. It also requires the producer
 and checker to declare identical linear-integer variable and Cooper-work
-ceilings.
+ceilings. The required QF_BOOL corpus includes an inline named-subterm proof so
+that postorder label reconstruction cannot disappear from either side of the
+proof gate unnoticed.
 
 The ordinary gate deliberately does not enable every `clippy::pedantic` or
 `clippy::nursery` lint. Solver code contains exact numeric conversions,

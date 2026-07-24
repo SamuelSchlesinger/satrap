@@ -251,6 +251,10 @@ and diagnostic output channels, and the standard `ALL` selector are
 implemented. The command state machine preserves model inspection after
 `unknown`, resets declaration and theory state according to
 `:global-declarations`, and continues after tested recoverable command errors.
+Closed inline `:named` terms now follow the standard postorder visibility
+rules, declaration scopes, command-error rollback, and distinct assignment
+label versus outer-assertion core semantics. The independent proof checker
+reconstructs those definitions from the original annotated script.
 Exhaustive small-width semantics and 544 deterministic incremental queries
 agree with Z3 4.16.0, cvc5 1.3.3, and Bitwuzla 0.9.1. QF_BOOL and QF_BV now
 have a query-specific eDRAT-style container: a separate checker reconstructs
@@ -259,10 +263,10 @@ fixed-width bit-vector lowering from the original script, regenerates the
 canonical CNF, and invokes pinned DRAT-trim. Its small-width arithmetic
 semantics are exhaustively tested. Standard `get-proof` requests after
 nonempty explicit assumption sets are rejected. Fragment-complete independent
-model validation, lexical parser recovery, complete annotation and execution
-mode conformance, sustained fuzzing, and representative performance evaluation
-are not complete, so this gate remains open. The checked and open protocol
-boundary is catalogued in [SMT-LIB support](SMT_LIB.md).
+model validation, lexical parser recovery, complete execution-mode
+conformance, sustained fuzzing, and representative performance evaluation are
+not complete, so this gate remains open. The checked and open protocol boundary
+is catalogued in [SMT-LIB support](SMT_LIB.md).
 
 ## Gate 4: general CDCL(T) coverage
 

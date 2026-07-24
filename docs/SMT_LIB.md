@@ -32,6 +32,26 @@ scopes, learned search state, and theory state. Declarations survive it only
 when `:global-declarations` is true; retained array declarations reinstall
 their theory axioms in the rebuilt solver.
 
+## Inline named terms
+
+The implemented term-bearing commands follow the SMT-LIB 2.7 semantics for
+`(! term :named label)`. Closed named subterms are enumerated depth-first,
+left-to-right, in postorder and installed as nullary definitions before the
+enclosing command runs. A label is therefore available to later subterms in
+the same command and to later commands, but not before its annotation. Labels
+that capture a `let` variable or function parameter are rejected because their
+terms are not closed. Duplicate, forward, and malformed labels are command
+errors, and a failed command does not retain its provisional label bindings.
+
+Labels follow ordinary declaration scope, including
+`:global-declarations`. Every active Boolean label is returned by
+`get-assignment` when assignment production is enabled; named non-Boolean
+terms remain usable but are omitted from that response. Only a label on the
+whole term in exactly `(assert (! term :named label))` participates in
+`get-unsat-core`. A nested label is an assignment label, not an assertion
+selector. `get-assertions` preserves the original annotated terms rather than
+printing their stripped internal form.
+
 ## Options and output
 
 The session implements:
@@ -93,11 +113,10 @@ Those checks are strong regression evidence, not a complete conformance suite.
 The remaining protocol work includes:
 
 - recovery after malformed lexical or top-level S-expression input;
-- full semantics for nested inline `:named` annotations and every closed
-  Boolean label reported by `get-assignment`;
 - parameterized sort aliases and polymorphic definitions;
 - datatypes, recursion, maps, and quantifiers;
 - preserving user sort-alias spelling in every printed response; and
-- a fragment-complete, standard-section-indexed conformance corpus.
+- a fragment-complete, standard-section-indexed conformance corpus, including
+  broader quoted-symbol and annotation-attribute coverage.
 
 These gaps remain release blockers in the [research roadmap](ROADMAP.md).

@@ -275,6 +275,51 @@ class SmtProofCheckerTests(unittest.TestCase):
         certificate = validate_encoding(script, proof)
         self.assertEqual(certificate.clauses[-1], ("formula", (-1,)))
 
+    def test_inline_labels_follow_postorder_and_preserve_original_premises(self):
+        script = """
+        (set-option :produce-proofs true)
+        (set-logic QF_BOOL)
+        (declare-const p Bool)
+        (declare-const q Bool)
+        (assert (or (! p :named alias) q))
+        (assert (not alias))
+        (assert (not q))
+        (check-sat)
+        (get-proof)
+        """
+        queries = ProofSession().execute_all(SExprReader(script).read_all())
+        self.assertEqual(len(queries), 1)
+        self.assertEqual(
+            queries[0].premises,
+            (
+                "(or (! p :named alias) q)",
+                "(not alias)",
+                "(not q)",
+            ),
+        )
+        encoder = CnfEncoder()
+        self.assertFalse(cnf_satisfiable(encoder, encoder.build(queries[0].roots, ())))
+
+    def test_inline_label_forward_references_are_rejected(self):
+        script = """
+        (set-logic QF_BOOL)
+        (declare-const p Bool)
+        (assert (and alias (! p :named alias)))
+        """
+        with self.assertRaisesRegex(
+            ProofCheckError,
+            "inline label `alias` is used before its definition",
+        ):
+            ProofSession().execute_all(SExprReader(script).read_all())
+
+    def test_inline_labels_must_be_closed_over_function_parameters(self):
+        script = """
+        (set-logic QF_BOOL)
+        (define-fun f ((x Bool)) Bool (! x :named captured))
+        """
+        with self.assertRaisesRegex(ProofCheckError, "unknown term symbol `x`"):
+            ProofSession().execute_all(SExprReader(script).read_all())
+
     def test_reconstructs_a_qf_bv_bit_blast(self):
         script = """
         (set-option :produce-proofs true)

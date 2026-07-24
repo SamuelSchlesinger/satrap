@@ -29,6 +29,7 @@ VERSION = re.compile(r"\d+(?:[.-]\d+){1,2}")
 REQUIRED_QUALITY_ASSETS = (
     Path("benchmarks/smt-proof-smoke/qf-bool-connectives.smt2"),
     Path("benchmarks/smt-proof-smoke/qf-bool-incremental.smt2"),
+    Path("benchmarks/smt-proof-smoke/qf-bool-inline-named.smt2"),
     Path("benchmarks/smt-proof-smoke/qf-bool-reset.smt2"),
     Path("benchmarks/smt-proof-smoke/qf-bool-scoped.smt2"),
     Path("benchmarks/smt-proof-smoke/qf-bv-arithmetic.smt2"),

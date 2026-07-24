@@ -60,6 +60,26 @@ struct AssignmentLabel {
     term: TermId,
 }
 
+#[derive(Clone, Debug)]
+struct InlineDefinition {
+    name: String,
+    term: TermId,
+    boolean: bool,
+}
+
+#[derive(Clone, Debug)]
+struct InlineDefinitionSyntax {
+    name: String,
+    expression: SExpr,
+}
+
+#[derive(Debug)]
+struct PreparedCommand {
+    command: SExpr,
+    definitions: Vec<InlineDefinition>,
+    assertion_label: Option<String>,
+}
+
 #[derive(Debug, Default)]
 struct Frame {
     bound_names: Vec<String>,
@@ -173,7 +193,22 @@ impl Session {
         if self.exited {
             return CommandOutput::error("command issued after exit");
         }
-        match self.execute_inner(command) {
+        let PreparedCommand {
+            command: stripped,
+            definitions,
+            assertion_label,
+        } = match self.prepare_inline_definitions(command) {
+            Ok(prepared) => prepared,
+            Err(CommandError::Unsupported) => return CommandOutput::text("unsupported"),
+            Err(CommandError::Message(message)) => return CommandOutput::error(&message),
+        };
+        let result = self.execute_inner(&stripped, command, assertion_label.as_deref());
+        if result.is_ok() {
+            self.commit_inline_definitions(&definitions);
+        } else {
+            self.rollback_inline_definitions(&definitions);
+        }
+        match result {
             Ok(CommandValue::Success) => {
                 if self.options.print_success {
                     CommandOutput::text("success")
@@ -194,9 +229,18 @@ impl Session {
         }
     }
 
-    fn execute_inner(&mut self, command: &SExpr) -> Result<CommandValue, CommandError> {
+    fn execute_inner(
+        &mut self,
+        command: &SExpr,
+        original: &SExpr,
+        assertion_label: Option<&str>,
+    ) -> Result<CommandValue, CommandError> {
         let items = expect_list(command, "top-level command")?;
         let Some((head, arguments)) = items.split_first() else {
+            return Err(CommandError::message("empty command"));
+        };
+        let original_items = expect_list(original, "top-level command")?;
+        let Some((_, original_arguments)) = original_items.split_first() else {
             return Err(CommandError::message("empty command"));
         };
         let name = expect_word(head, "command name")?;
@@ -212,7 +256,7 @@ impl Session {
             "declare-fun" => self.declare_fun(arguments),
             "define-const" => self.define_const(arguments),
             "define-fun" => self.define_fun(arguments),
-            "assert" => self.assert(arguments),
+            "assert" => self.assert(arguments, original_arguments, assertion_label),
             "push" => self.push(arguments),
             "pop" => self.pop(arguments),
             "check-sat" => self.check_sat(arguments),
@@ -584,37 +628,44 @@ impl Session {
         Ok(CommandValue::Success)
     }
 
-    fn assert(&mut self, arguments: &[SExpr]) -> Result<CommandValue, CommandError> {
+    fn assert(
+        &mut self,
+        arguments: &[SExpr],
+        original_arguments: &[SExpr],
+        name: Option<&str>,
+    ) -> Result<CommandValue, CommandError> {
         expect_arity(arguments, 1, "assert")?;
+        expect_arity(original_arguments, 1, "assert")?;
         self.require_logic()?;
-        let (term_expr, name) = peel_named_annotation(&arguments[0])?;
-        if let Some(name) = &name {
-            self.ensure_fresh_name(name)?;
-        }
-        let term = self.parse_term(term_expr, &[])?;
+        let term = self.parse_term(&arguments[0], &[])?;
         self.terms.require_bool(term).map_err(CommandError::from)?;
         let literal = self
             .encoder
             .encode(&self.terms, &mut self.solver, term)
             .map_err(CommandError::from)?;
-        let rendered = render(&arguments[0]);
+        let rendered = render(&original_arguments[0]);
         if let Some(name) = name {
+            let definition = self
+                .bindings
+                .get(name)
+                .ok_or_else(|| CommandError::message("missing inline assertion label"))?;
+            if definition.term != term {
+                return Err(CommandError::message(
+                    "inline assertion label does not name the asserted term",
+                ));
+            }
             let selector = Lit::positive(self.solver.new_variable().map_err(CommandError::from)?);
             self.solver
                 .try_add_clause(&[!selector, literal])
                 .map_err(CommandError::from)?;
-            self.bindings.insert(name.clone(), Binding { term });
-            let target = self.declaration_frame();
-            self.frames[target].bound_names.push(name.clone());
-            self.frames[target].assignment_labels.push(AssignmentLabel {
-                name: name.clone(),
-                term,
-            });
             self.frames
                 .last_mut()
                 .expect("base frame exists")
                 .named_assertions
-                .push(NamedAssertion { name, selector });
+                .push(NamedAssertion {
+                    name: name.to_owned(),
+                    selector,
+                });
         } else {
             self.solver
                 .try_add_clause(&[literal])
@@ -1011,6 +1062,78 @@ impl Session {
 
     fn restore_diagnostic_output_channel(&mut self, channel: String) {
         self.options.diagnostic_output_channel = (channel != "stderr").then_some(channel);
+    }
+
+    fn prepare_inline_definitions(
+        &mut self,
+        command: &SExpr,
+    ) -> Result<PreparedCommand, CommandError> {
+        let (command, syntax, assertion_label) = strip_inline_definitions(command)?;
+        let mut names = HashSet::new();
+        for definition in &syntax {
+            self.ensure_fresh_name(&definition.name)?;
+            if !names.insert(definition.name.clone()) {
+                return Err(CommandError::message(format!(
+                    "inline label `{}` is repeated in the command",
+                    definition.name
+                )));
+            }
+        }
+
+        let mut definitions = Vec::with_capacity(syntax.len());
+        for definition in syntax {
+            let term = match self.parse_term(&definition.expression, &[]) {
+                Ok(term) => term,
+                Err(error) => {
+                    self.rollback_inline_definitions(&definitions);
+                    return Err(error);
+                }
+            };
+            let boolean = match self.terms.sort(term) {
+                Ok(sort) => sort == Sort::Bool,
+                Err(error) => {
+                    self.rollback_inline_definitions(&definitions);
+                    return Err(CommandError::from(error));
+                }
+            };
+            self.bindings
+                .insert(definition.name.clone(), Binding { term });
+            definitions.push(InlineDefinition {
+                name: definition.name,
+                term,
+                boolean,
+            });
+        }
+
+        Ok(PreparedCommand {
+            command,
+            definitions,
+            assertion_label,
+        })
+    }
+
+    fn commit_inline_definitions(&mut self, definitions: &[InlineDefinition]) {
+        if definitions.is_empty() {
+            return;
+        }
+        let target = self.declaration_frame();
+        for definition in definitions {
+            self.frames[target]
+                .bound_names
+                .push(definition.name.clone());
+            if definition.boolean {
+                self.frames[target].assignment_labels.push(AssignmentLabel {
+                    name: definition.name.clone(),
+                    term: definition.term,
+                });
+            }
+        }
+    }
+
+    fn rollback_inline_definitions(&mut self, definitions: &[InlineDefinition]) {
+        for definition in definitions {
+            self.bindings.remove(&definition.name);
+        }
     }
 
     fn parse_term(
@@ -2467,32 +2590,268 @@ fn parse_u32(expression: &SExpr, role: &str) -> Result<u32, CommandError> {
         .map_err(|_| CommandError::message(format!("{role} is too large")))
 }
 
-fn peel_named_annotation(expression: &SExpr) -> Result<(&SExpr, Option<String>), CommandError> {
+type InlineTermContext<'a> = (&'a SExpr, Vec<HashSet<String>>);
+
+fn strip_inline_definitions(
+    command: &SExpr,
+) -> Result<(SExpr, Vec<InlineDefinitionSyntax>, Option<String>), CommandError> {
+    let SExpr::List(items) = command else {
+        return Ok((command.clone(), Vec::new(), None));
+    };
+    let Some((head, arguments)) = items.split_first() else {
+        return Ok((command.clone(), Vec::new(), None));
+    };
+    let Some(name) = head.word() else {
+        return Ok((command.clone(), Vec::new(), None));
+    };
+    let contexts = inline_term_contexts(name, arguments)?;
+    if contexts.is_empty() {
+        return Ok((command.clone(), Vec::new(), None));
+    }
+
+    let mut ordered_names = Vec::new();
+    for (expression, _) in &contexts {
+        collect_inline_label_names(expression, &mut ordered_names)?;
+    }
+    let mut all_names = HashSet::new();
+    for label in &ordered_names {
+        if !all_names.insert(label.clone()) {
+            return Err(CommandError::message(format!(
+                "inline label `{label}` is repeated in the command"
+            )));
+        }
+    }
+
+    let assertion_label = if name == "assert" && arguments.len() == 1 {
+        annotation_name(&arguments[0])?
+    } else {
+        None
+    };
+    let mut available = HashSet::new();
+    let mut definitions = Vec::with_capacity(ordered_names.len());
+    let mut stripped_terms = Vec::with_capacity(contexts.len());
+    for (expression, locals) in contexts {
+        stripped_terms.push(strip_inline_term(
+            expression,
+            &all_names,
+            &mut available,
+            &locals,
+            &mut definitions,
+        )?);
+    }
+
+    let mut stripped = items.clone();
+    match name {
+        "assert" if arguments.len() == 1 => stripped[1] = stripped_terms.remove(0),
+        "define-const" if arguments.len() == 3 => stripped[3] = stripped_terms.remove(0),
+        "define-fun" if arguments.len() == 4 => stripped[4] = stripped_terms.remove(0),
+        "check-sat-assuming" | "get-value" if arguments.len() == 1 => {
+            stripped[1] = SExpr::List(stripped_terms);
+        }
+        _ => {}
+    }
+    Ok((SExpr::List(stripped), definitions, assertion_label))
+}
+
+fn inline_term_contexts<'a>(
+    command: &str,
+    arguments: &'a [SExpr],
+) -> Result<Vec<InlineTermContext<'a>>, CommandError> {
+    let empty = Vec::new();
+    match command {
+        "assert" if arguments.len() == 1 => Ok(vec![(&arguments[0], empty)]),
+        "define-const" if arguments.len() == 3 => Ok(vec![(&arguments[2], empty)]),
+        "define-fun" if arguments.len() == 4 => {
+            let parameters = expect_list(&arguments[1], "function parameters")?;
+            let mut names = HashSet::new();
+            for parameter in parameters {
+                let fields = expect_list(parameter, "function parameter")?;
+                expect_arity(fields, 2, "function parameter")?;
+                names.insert(expect_symbol(&fields[0], "parameter name")?.to_owned());
+            }
+            Ok(vec![(&arguments[3], vec![names])])
+        }
+        "check-sat-assuming" if arguments.len() == 1 => {
+            Ok(expect_list(&arguments[0], "assumption list")?
+                .iter()
+                .map(|expression| (expression, Vec::new()))
+                .collect())
+        }
+        "get-value" if arguments.len() == 1 => {
+            Ok(expect_list(&arguments[0], "get-value term list")?
+                .iter()
+                .map(|expression| (expression, Vec::new()))
+                .collect())
+        }
+        _ => Ok(Vec::new()),
+    }
+}
+
+fn collect_inline_label_names(
+    expression: &SExpr,
+    names: &mut Vec<String>,
+) -> Result<(), CommandError> {
     let SExpr::List(items) = expression else {
-        return Ok((expression, None));
+        return Ok(());
+    };
+    let Some((head, arguments)) = items.split_first() else {
+        return Ok(());
+    };
+    if head.word() == Some("!") {
+        if arguments.is_empty() {
+            return Err(CommandError::message("annotation requires a term"));
+        }
+        collect_inline_label_names(&arguments[0], names)?;
+        if let Some(name) = annotation_name(expression)? {
+            names.push(name);
+        }
+        return Ok(());
+    }
+    if head.word() == Some("let") {
+        expect_arity(arguments, 2, "let")?;
+        for binding in expect_list(&arguments[0], "let bindings")? {
+            let pair = expect_list(binding, "let binding")?;
+            expect_arity(pair, 2, "let binding")?;
+            collect_inline_label_names(&pair[1], names)?;
+        }
+        collect_inline_label_names(&arguments[1], names)?;
+        return Ok(());
+    }
+    for argument in arguments {
+        collect_inline_label_names(argument, names)?;
+    }
+    Ok(())
+}
+
+fn strip_inline_term(
+    expression: &SExpr,
+    all_names: &HashSet<String>,
+    available: &mut HashSet<String>,
+    locals: &[HashSet<String>],
+    definitions: &mut Vec<InlineDefinitionSyntax>,
+) -> Result<SExpr, CommandError> {
+    if let Some(symbol) = expression.symbol() {
+        let local = locals.iter().rev().any(|scope| scope.contains(symbol));
+        if all_names.contains(symbol) && !available.contains(symbol) && !local {
+            return Err(CommandError::message(format!(
+                "inline label `{symbol}` is used before its definition"
+            )));
+        }
+        return Ok(expression.clone());
+    }
+    let SExpr::List(items) = expression else {
+        return Ok(expression.clone());
+    };
+    let Some((head, arguments)) = items.split_first() else {
+        return Ok(expression.clone());
+    };
+    if head.word() == Some("!") {
+        if arguments.is_empty() {
+            return Err(CommandError::message("annotation requires a term"));
+        }
+        let term = strip_inline_term(&arguments[0], all_names, available, locals, definitions)?;
+        if let Some(name) = annotation_name(expression)? {
+            definitions.push(InlineDefinitionSyntax {
+                name: name.clone(),
+                expression: term.clone(),
+            });
+            available.insert(name);
+        }
+        return Ok(term);
+    }
+    if head.word() == Some("let") {
+        expect_arity(arguments, 2, "let")?;
+        let bindings = expect_list(&arguments[0], "let bindings")?;
+        let mut stripped_bindings = Vec::with_capacity(bindings.len());
+        let mut names = HashSet::new();
+        for binding in bindings {
+            let pair = expect_list(binding, "let binding")?;
+            expect_arity(pair, 2, "let binding")?;
+            let name = expect_symbol(&pair[0], "let variable")?.to_owned();
+            let value = strip_inline_term(&pair[1], all_names, available, locals, definitions)?;
+            names.insert(name);
+            stripped_bindings.push(SExpr::List(vec![pair[0].clone(), value]));
+        }
+        let mut nested = locals.to_vec();
+        nested.push(names);
+        let body = strip_inline_term(&arguments[1], all_names, available, &nested, definitions)?;
+        return Ok(SExpr::List(vec![
+            head.clone(),
+            SExpr::List(stripped_bindings),
+            body,
+        ]));
+    }
+
+    let mut stripped = Vec::with_capacity(items.len());
+    stripped.push(head.clone());
+    for argument in arguments {
+        stripped.push(strip_inline_term(
+            argument,
+            all_names,
+            available,
+            locals,
+            definitions,
+        )?);
+    }
+    Ok(SExpr::List(stripped))
+}
+
+fn annotation_name(expression: &SExpr) -> Result<Option<String>, CommandError> {
+    let SExpr::List(items) = expression else {
+        return Ok(None);
     };
     if items.first().and_then(SExpr::word) != Some("!") {
-        return Ok((expression, None));
+        return Ok(None);
     }
     if items.len() < 2 {
         return Err(CommandError::message("annotation requires a term"));
     }
+    if items.len() == 2 {
+        return Err(CommandError::message(
+            "annotation requires at least one attribute",
+        ));
+    }
+
     let mut name = None;
     let mut index = 2;
     while index < items.len() {
         let keyword = expect_keyword(&items[index], "annotation attribute")?;
         index += 1;
-        if index >= items.len() {
-            return Err(CommandError::message(format!(
-                "annotation attribute `{keyword}` has no value"
-            )));
+        match keyword {
+            ":named" => {
+                if name.is_some() {
+                    return Err(CommandError::message(
+                        "annotation contains more than one :named attribute",
+                    ));
+                }
+                let Some(value) = items.get(index) else {
+                    return Err(CommandError::message(
+                        "annotation attribute `:named` has no value",
+                    ));
+                };
+                name = Some(expect_symbol(value, "inline label")?.to_owned());
+                index += 1;
+            }
+            ":pattern" => {
+                let Some(value) = items.get(index) else {
+                    return Err(CommandError::message(
+                        "annotation attribute `:pattern` has no value",
+                    ));
+                };
+                expect_list(value, "annotation pattern")?;
+                index += 1;
+            }
+            _ => {
+                if items
+                    .get(index)
+                    .is_some_and(|value| value.keyword().is_none())
+                {
+                    index += 1;
+                }
+            }
         }
-        if keyword == ":named" {
-            name = Some(expect_symbol(&items[index], "assertion label")?.to_owned());
-        }
-        index += 1;
     }
-    Ok((&items[1], name))
+    Ok(name)
 }
 
 fn render_arithmetic_value(sort: Sort, value: &BigRational) -> String {
@@ -3003,6 +3362,76 @@ mod tests {
             "unexpected global label assignment:\n{global}"
         );
         assert_eq!(lines[4], "sat");
+    }
+
+    #[test]
+    fn inline_definitions_follow_postorder_and_feed_assignment_queries() {
+        let output = execute(
+            "(set-option :produce-models true)
+             (set-option :produce-assignments true)
+             (set-option :produce-assertions true)
+             (set-logic QF_BV)
+             (declare-const p Bool)
+             (assert (and (! p :named first) (= first p)))
+             (assert (= (! #x2a :named answer) answer))
+             (check-sat)
+             (get-assignment)
+             (get-value (answer))
+             (get-assertions)",
+        );
+        assert_eq!(
+            output,
+            "sat\n((first true))\n((answer #b00101010))\n\
+             ((and (! p :named first) (= first p)) \
+             (= (! #x2a :named answer) answer))\n"
+        );
+    }
+
+    #[test]
+    fn only_the_outer_assertion_label_participates_in_the_unsat_core() {
+        let output = execute(
+            "(set-option :produce-assignments true)
+             (set-option :produce-unsat-cores true)
+             (set-logic QF_BOOL)
+             (declare-const p Bool)
+             (declare-const q Bool)
+             (assert (! (or (! p :named inner) q) :named outer))
+             (check-sat)
+             (get-assignment)
+             (assert (not p))
+             (assert (not q))
+             (check-sat)
+             (get-unsat-core)",
+        );
+        let mut lines = output.lines();
+        assert_eq!(lines.next(), Some("sat"));
+        let assignments = lines.next().expect("assignment response");
+        assert!(assignments.starts_with("((inner "));
+        assert!(assignments.contains(") (outer true))"));
+        assert_eq!(lines.next(), Some("unsat"));
+        assert_eq!(lines.next(), Some("(outer)"));
+        assert_eq!(lines.next(), None);
+    }
+
+    #[test]
+    fn invalid_inline_definitions_roll_back_their_names() {
+        let output = execute(
+            "(set-option :produce-unsat-cores true)
+             (set-logic QF_BOOL)
+             (declare-const p Bool)
+             (assert (and forward (! p :named forward)))
+             (define-fun bad ((x Bool)) Bool (! x :named captured))
+             (assert (! p :named forward))
+             (assert (! (not p) :named captured))
+             (check-sat)
+             (get-unsat-core)",
+        );
+        assert_eq!(
+            output,
+            "(error \"inline label `forward` is used before its definition\")\n\
+             (error \"unknown symbol `x`\")\n\
+             unsat\n(forward captured)\n"
+        );
     }
 
     #[test]

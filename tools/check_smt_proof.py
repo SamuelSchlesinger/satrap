@@ -1068,6 +1068,220 @@ def render(expression: SExpr) -> str:
     return f"({' '.join(render(item) for item in expression)})"
 
 
+@dataclass(frozen=True)
+class InlineDefinitionSyntax:
+    name: str
+    expression: SExpr
+
+
+def strip_inline_definitions(
+    command: list[SExpr],
+) -> tuple[list[SExpr], list[InlineDefinitionSyntax]]:
+    if not command:
+        return command, []
+    name = atom(command[0], "command name")
+    arguments = command[1:]
+    contexts = inline_term_contexts(name, arguments)
+    if not contexts:
+        return command, []
+
+    ordered_names: list[str] = []
+    for expression, _ in contexts:
+        collect_inline_label_names(expression, ordered_names)
+    if len(set(ordered_names)) != len(ordered_names):
+        repeated = next(
+            label for index, label in enumerate(ordered_names) if label in ordered_names[:index]
+        )
+        raise ProofCheckError(f"inline label `{repeated}` is repeated in the command")
+
+    all_names = set(ordered_names)
+    available: set[str] = set()
+    definitions: list[InlineDefinitionSyntax] = []
+    stripped_terms = [
+        strip_inline_term(
+            expression,
+            all_names,
+            available,
+            locals_,
+            definitions,
+        )
+        for expression, locals_ in contexts
+    ]
+    stripped = list(command)
+    if name == "assert" and len(arguments) == 1:
+        stripped[1] = stripped_terms[0]
+    elif name == "define-const" and len(arguments) == 3:
+        stripped[3] = stripped_terms[0]
+    elif name == "define-fun" and len(arguments) == 4:
+        stripped[4] = stripped_terms[0]
+    elif name in {"check-sat-assuming", "get-value"} and len(arguments) == 1:
+        stripped[1] = stripped_terms
+    return stripped, definitions
+
+
+def inline_term_contexts(
+    command: str,
+    arguments: list[SExpr],
+) -> list[tuple[SExpr, list[set[str]]]]:
+    if command == "assert" and len(arguments) == 1:
+        return [(arguments[0], [])]
+    if command == "define-const" and len(arguments) == 3:
+        return [(arguments[2], [])]
+    if command == "define-fun" and len(arguments) == 4:
+        names = set()
+        for parameter in items(arguments[1], "function parameters"):
+            fields = items(parameter, "function parameter")
+            exact_arity(fields, 2, "function parameter")
+            names.add(atom(fields[0], "function parameter name"))
+        return [(arguments[3], [names])]
+    if command == "check-sat-assuming" and len(arguments) == 1:
+        return [(expression, []) for expression in items(arguments[0], "assumption list")]
+    if command == "get-value" and len(arguments) == 1:
+        return [(expression, []) for expression in items(arguments[0], "get-value term list")]
+    return []
+
+
+def collect_inline_label_names(expression: SExpr, names: list[str]) -> None:
+    if not isinstance(expression, list) or not expression:
+        return
+    head = expression[0]
+    arguments = expression[1:]
+    if is_plain_symbol(head, "!"):
+        if not arguments:
+            raise ProofCheckError("annotation requires a term")
+        collect_inline_label_names(arguments[0], names)
+        name = annotation_name(expression)
+        if name is not None:
+            names.append(name)
+        return
+    if is_plain_symbol(head, "let"):
+        exact_arity(arguments, 2, "let")
+        for binding in items(arguments[0], "let bindings"):
+            pair = items(binding, "let binding")
+            exact_arity(pair, 2, "let binding")
+            collect_inline_label_names(pair[1], names)
+        collect_inline_label_names(arguments[1], names)
+        return
+    for argument in arguments:
+        collect_inline_label_names(argument, names)
+
+
+def strip_inline_term(
+    expression: SExpr,
+    all_names: set[str],
+    available: set[str],
+    locals_: list[set[str]],
+    definitions: list[InlineDefinitionSyntax],
+) -> SExpr:
+    if isinstance(expression, str):
+        local = any(expression in scope for scope in reversed(locals_))
+        if expression in all_names and expression not in available and not local:
+            raise ProofCheckError(f"inline label `{expression}` is used before its definition")
+        return expression
+    if not isinstance(expression, list) or not expression:
+        return expression
+    head = expression[0]
+    arguments = expression[1:]
+    if is_plain_symbol(head, "!"):
+        if not arguments:
+            raise ProofCheckError("annotation requires a term")
+        term = strip_inline_term(
+            arguments[0],
+            all_names,
+            available,
+            locals_,
+            definitions,
+        )
+        name = annotation_name(expression)
+        if name is not None:
+            definitions.append(InlineDefinitionSyntax(name, term))
+            available.add(name)
+        return term
+    if is_plain_symbol(head, "let"):
+        exact_arity(arguments, 2, "let")
+        stripped_bindings = []
+        names = set()
+        for binding in items(arguments[0], "let bindings"):
+            pair = items(binding, "let binding")
+            exact_arity(pair, 2, "let binding")
+            name = atom(pair[0], "let name")
+            names.add(name)
+            stripped_bindings.append(
+                [
+                    pair[0],
+                    strip_inline_term(
+                        pair[1],
+                        all_names,
+                        available,
+                        locals_,
+                        definitions,
+                    ),
+                ]
+            )
+        body = strip_inline_term(
+            arguments[1],
+            all_names,
+            available,
+            [*locals_, names],
+            definitions,
+        )
+        return [head, stripped_bindings, body]
+    return [
+        head,
+        *(
+            strip_inline_term(
+                argument,
+                all_names,
+                available,
+                locals_,
+                definitions,
+            )
+            for argument in arguments
+        ),
+    ]
+
+
+def annotation_name(expression: SExpr) -> str | None:
+    values = items(expression, "annotation")
+    if not values or not is_plain_symbol(values[0], "!"):
+        return None
+    if len(values) < 2:
+        raise ProofCheckError("annotation requires a term")
+    if len(values) == 2:
+        raise ProofCheckError("annotation requires at least one attribute")
+
+    name = None
+    index = 2
+    while index < len(values):
+        keyword = atom(values[index], "annotation attribute")
+        if isinstance(values[index], QuotedSymbol) or not keyword.startswith(":"):
+            raise ProofCheckError("annotation attribute must be a keyword")
+        index += 1
+        if keyword == ":named":
+            if name is not None:
+                raise ProofCheckError("annotation contains more than one :named attribute")
+            if index >= len(values):
+                raise ProofCheckError("annotation attribute `:named` has no value")
+            name = atom(values[index], "inline label")
+            index += 1
+        elif keyword == ":pattern":
+            if index >= len(values):
+                raise ProofCheckError("annotation attribute `:pattern` has no value")
+            items(values[index], "annotation pattern")
+            index += 1
+        elif index < len(values) and not (
+            isinstance(values[index], str)
+            and not isinstance(values[index], QuotedSymbol)
+            and values[index].startswith(":")
+        ):
+            index += 1
+    return name
+
+
+def is_plain_symbol(value: SExpr, expected: str) -> bool:
+    return isinstance(value, str) and not isinstance(value, QuotedSymbol) and value == expected
+
+
 @dataclass
 class Frame:
     bound_names: list[str] = field(default_factory=list)
@@ -1122,8 +1336,13 @@ class ProofSession:
     def execute(self, command: list[SExpr]) -> None:
         if not command:
             raise ProofCheckError("empty command")
+        original = command
+        command, inline_definitions = strip_inline_definitions(command)
+        for definition in inline_definitions:
+            self._bind(definition.name, self.parse_term(definition.expression, []))
         name = atom(command[0], "command name")
         arguments = command[1:]
+        original_arguments = original[1:]
         if name == "set-logic":
             exact_arity(arguments, 1, name)
             logic = atom(arguments[0], "logic")
@@ -1243,8 +1462,9 @@ class ProofSession:
                 )
         elif name == "assert":
             exact_arity(arguments, 1, name)
-            source = render(arguments[0])
-            term = expect_bool_term(self.parse_term(peel_annotation(arguments[0]), []), "assertion")
+            exact_arity(original_arguments, 1, name)
+            source = render(original_arguments[0])
+            term = expect_bool_term(self.parse_term(arguments[0], []), "assertion")
             self.frames[-1].assertions.append((source, term))
             self._invalidate_query()
         elif name == "push":
@@ -1271,13 +1491,19 @@ class ProofSession:
             self._record_query([])
         elif name == "check-sat-assuming":
             exact_arity(arguments, 1, name)
+            exact_arity(original_arguments, 1, name)
             assumptions = items(arguments[0], "assumptions")
+            original_assumptions = items(original_arguments[0], "assumptions")
             parsed = [
                 (
-                    render(value),
+                    render(original_value),
                     expect_bool_term(self.parse_term(value, []), "check assumption"),
                 )
-                for value in assumptions
+                for value, original_value in zip(
+                    assumptions,
+                    original_assumptions,
+                    strict=True,
+                )
             ]
             self._record_query(parsed)
         elif name == "reset-assertions":
@@ -1823,17 +2049,6 @@ class ProofSession:
 
     def _declaration_frame(self) -> Frame:
         return self.frames[0] if self.global_declarations else self.frames[-1]
-
-
-def peel_annotation(expression: SExpr) -> SExpr:
-    if (
-        isinstance(expression, list)
-        and expression
-        and expression[0] == "!"
-        and len(expression) >= 2
-    ):
-        return expression[1]
-    return expression
 
 
 def parse_numeral(value: SExpr, role: str) -> int:

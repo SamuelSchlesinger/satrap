@@ -45,9 +45,10 @@ Each case is solved by `target/release/sat`, must report UNSAT with exit code
 the original DIMACS input.
 
 The same gate also exercises online QF_BOOL, QF_BV, QF_UF, QF_UFBV, QF_ABV,
-and QF_AUFBV queries with named assertions, active scopes, definitions,
-resets, Boolean conditions, and the supported Boolean, fixed-width
-bit-vector, ground-UF, and non-nested-array operations. With
+QF_AUFBV, QF_IDL, and QF_RDL queries with named assertions, active scopes,
+definitions, resets, Boolean conditions, and the supported Boolean,
+fixed-width bit-vector, ground-UF, non-nested-array, and difference-logic
+operations. With
 `:produce-proofs true`, `get-proof` returns a versioned `satrap-edrat`
 S-expression. The proof producer rebuilds the active assertion context and
 lowering as fresh permanent formulas, so internal activation selectors and
@@ -60,8 +61,8 @@ nonempty `check-sat-assuming` call. A plain `check-sat`, or
 `push`/`pop` scopes and `:named` assertions are part of that context.
 
 `tools/check_smt_proof.py` is a separate implementation of the proof-bearing
-QF_BOOL, QF_BV, QF_UF, QF_UFBV, QF_ABV, and QF_AUFBV front ends, lowerings,
-and canonical encoder. Given the original script, it:
+QF_BOOL, QF_BV, QF_UF, QF_UFBV, QF_ABV, QF_AUFBV, QF_IDL, and QF_RDL front
+ends, lowerings, and canonical encoder. Given the original script, it:
 
 1. reconstructs declarations, definitions, `let` bindings, scopes, resets,
    assertions, and checked queries;
@@ -69,8 +70,10 @@ and canonical encoder. Given the original script, it:
    standards-eligible `get-proof` site, including intervening mutation and
    reset state;
 3. independently lowers every supported fixed-width bit-vector operation,
-   ground UF term, and ground array term, normalizes the resulting Boolean DAG,
-   and regenerates every formula, theory axiom, and Tseitin clause;
+   ground UF term, and ground array term; reconstructs exact affine
+   difference-logic predicates and arithmetic `ite` definitions; normalizes the
+   resulting Boolean DAG; and regenerates every formula, theory axiom, and
+   Tseitin clause;
 4. rejects solver errors plus a changed variable count, premise, clause,
    origin, duplicate field, forbidden theory clause, or unsupported term; and
 5. submits the DRAT suffix and reconstructed CNF to pinned DRAT-trim.
@@ -102,6 +105,31 @@ both producer and checker reject any later attempt to grow it. The resulting
 reduction is equisatisfiable for the supported quantifier-free, non-nested
 QF_ABV/QF_AUFBV boundary.
 
+QF_IDL and QF_RDL use a different theory-certificate layer. Arithmetic
+variables and predicates are canonicalized by source name and exact rational
+coefficients; an arithmetic `ite` is represented structurally by its condition
+and two affine branches. A discovery replay enumerates Boolean candidates. For
+each theory-inconsistent candidate it emits one clause blocking the complete
+assignment of all relevant arithmetic predicates and `ite` conditions. The
+producer accepts that clause only after exact Bellman-Ford negative-cycle
+detection: integer strict bounds are folded with exact floor/ceiling arithmetic,
+while real strict bounds use a lexicographic infinitesimal component.
+
+The independent checker reparses the arithmetic source and repeats that
+calculation. It requires every arithmetic theory clause to cover exactly the
+canonical required Boolean variables, recovers the assignment that the clause
+blocks, rebuilds the selected predicates and `ite` equalities, and independently
+finds a negative cycle. A clause that blocks even one theory-satisfiable
+assignment is rejected before DRAT-trim runs. The final DRAT suffix proves that
+the validated theory clauses and reconstructed Boolean encoding suffice for
+UNSAT.
+
+This first arithmetic format favors a small trusted story over proof size: a
+lemma blocks a complete required assignment rather than carrying a compact
+cycle witness, so proof discovery can be exponential in the number of relevant
+predicates. It certifies the QF_IDL/QF_RDL boundary but is not yet a competitive
+certificate format for general LIA/LRA or theory combinations.
+
 The required QF_BV corpus includes a compact arithmetic contradiction, a
 scoped/reset script, and an operator-surface script covering binary, hex, and
 indexed literals; arithmetic and bitwise operators; signed and unsigned
@@ -116,9 +144,12 @@ aliases, and named assertions. The QF_ABV/QF_AUFBV corpus adds extensional
 disequality, constant arrays, read-over-write, array-valued `ite`, UF-sorted
 indices and elements, and functions over arrays. Unit tests include both
 refutable and satisfiable array reductions, so the gate checks against an
-over-strong encoding as well as a weak one. Repository hygiene rejects a
-missing or empty canonical proof-corpus file, so deleting one case cannot
-silently weaken the push gate.
+over-strong encoding as well as a weak one. The QF_IDL/QF_RDL corpus adds
+integer negative cycles, strict real cycles, exact decimal/rational bounds, and
+arithmetic `ite` relevance. Adversarial unit tests mutate a theory clause to
+block a satisfiable assignment and verify that the independent checker rejects
+it. Repository hygiene rejects a missing or empty canonical proof-corpus file,
+so deleting one case cannot silently weaken the push gate.
 
 Run that path directly with:
 
@@ -155,9 +186,11 @@ outside the explicitly listed ground fragments.
 In particular, the live incremental SAT stream deliberately does not append a
 global empty DRAT clause for assumption-only UNSAT, and the SMT-LIB layer
 rejects `get-proof` after a nonempty explicit assumption set. QF_BOOL, QF_BV,
-QF_UF, QF_UFBV, QF_ABV, and QF_AUFBV use the query-specific replay above for
-the active assertion context. This certifies ground UF and non-nested
-extensional arrays through an independently rebuilt finite reduction; it is
-not a certificate for quantifiers, nested arrays, or arithmetic. Proof mode
-rejects those remaining theory boundaries rather than emitting a certificate
-that silently trusts their lemmas. The general SMT proof gate remains open.
+QF_UF, QF_UFBV, QF_ABV, QF_AUFBV, QF_IDL, and QF_RDL use the query-specific
+replay above for the active assertion context. This certifies ground UF and
+non-nested extensional arrays through an independently rebuilt finite
+reduction, plus integer and real difference logic through independently
+checked negative-cycle lemmas. It is not a certificate for quantifiers, nested
+arrays, general LIA/LRA, or arithmetic theory combinations. Proof mode rejects
+those remaining boundaries rather than emitting a certificate that silently
+trusts their lemmas. The general SMT proof gate remains open.

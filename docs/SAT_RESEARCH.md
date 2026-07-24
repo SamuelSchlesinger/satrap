@@ -110,10 +110,12 @@ combination models are replayed through both Z3 and cvc5 but are not yet
 fragment-complete, and named core subsets have representative independent
 replays in all 14 advertised fragments. The finite core cases additionally
 pass Bitwuzla, and a core produced with a failed assumption is replayed with
-that assumption. This is not yet generated or benchmark-wide core validation,
-and arithmetic-theory UNSAT results do not yet carry independently checkable
-proofs. Ground UF and non-nested array proofs have a separate finite-reduction
-gate described in [Proof checking](PROOF_CHECKING.md).
+that assumption. This is not yet generated or benchmark-wide core validation.
+Ground UF and non-nested arrays have an independently reconstructed
+finite-reduction proof gate; QF_IDL and QF_RDL additionally have exact
+negative-cycle theory clauses validated by a separate implementation. General
+LIA/LRA and arithmetic-combination proofs remain open. The exact boundaries
+are described in [Proof checking](PROOF_CHECKING.md).
 
 Coverage-guided smoke campaigns now run on every push. One target passes
 arbitrary bytes through the public SMT-LIB session, another generates
@@ -578,9 +580,9 @@ kernel. The present UF/array integration checks complete Boolean models and
 learns permanent explained lemmas; its interface is trail-shaped, but native
 theory propagation is not yet connected to the live CDCL trail. That
 distinction matters: the current solver is interactive and semantically useful,
-but arithmetic proof production, conformance, fragment-complete validation, and
-competition-scale performance still separate it from a general world-class SMT
-solver.
+but general-arithmetic and combination proof production, conformance,
+fragment-complete validation, and competition-scale performance still separate
+it from a general world-class SMT solver.
 
 ## Repository map
 

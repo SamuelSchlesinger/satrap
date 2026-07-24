@@ -25,10 +25,10 @@ is not yet a general or state-of-the-art SMT solver. The
   storage, and a contiguous long-clause arena.
 - SAT models and streaming DRAT proofs, checked by pinned DRAT-trim in the
   local and hosted integration gates.
-- Query-specific QF_BOOL, QF_BV, QF_UF, QF_UFBV, QF_ABV, and QF_AUFBV
-  `get-proof` certificates. A separate checker reconstructs the active query
-  and its Boolean, bit-vector, ground-UF, and non-nested-array reduction before
-  DRAT checking.
+- Query-specific `get-proof` certificates for the Boolean, bit-vector, ground
+  UF, non-nested array, and integer/real difference-logic fragments. A separate
+  checker reconstructs each active query and validates every theory lemma
+  before DRAT checking.
 - Interactive SMT-LIB with `push`/`pop`, `check-sat-assuming`, models, values,
   assignments, named unsat cores, resource limits, and interruption.
 - Complete fixed-width QF_BV lowering, congruence closure for QF_UF, and
@@ -104,12 +104,12 @@ recoverable command errors, so it can be used as a long-lived subprocess.
 Current SMT coverage includes Core, QF_BV, QF_UF, QF_UFBV, QF_ABV, and
 QF_AUFBV, plus experimental exact QF_IDL, QF_LIA, QF_RDL, and QF_LRA.
 The corresponding QF_UFIDL, QF_UFLIA, QF_UFLRA, and QF_AUFLIA combinations
-are also implemented. Protocol edge cases, proof production,
-fragment-complete independent validation, sustained fuzz campaigns, and
-competition-scale performance remain open. Proof production is currently
-available for QF_BOOL, QF_BV, QF_UF, QF_UFBV, QF_ABV, and QF_AUFBV.
-Nested arrays and arithmetic logics remain outside the independently checked
-proof boundary.
+are also implemented. Protocol edge cases, proof production for general
+linear arithmetic and theory combinations, fragment-complete independent
+validation, sustained fuzz campaigns, and competition-scale performance
+remain open. Proof production currently covers QF_BOOL, QF_BV, QF_UF,
+QF_UFBV, QF_ABV, QF_AUFBV, QF_IDL, and QF_RDL. See
+[Proof checking](docs/PROOF_CHECKING.md) for the exact boundary.
 
 ## Rust API
 
@@ -151,11 +151,11 @@ shared integration gate requires exact versions of Ruff, all three solvers,
 and the proof checker, runs bounded coverage-guided parser, session, and proof
 fuzzing, and independently checks the SAT proof-mode matrix. It never silently
 skips a linter, oracle, fuzz target, or proof check. The proof gate also
-reconstructs scoped QF_BOOL, QF_BV, QF_UF, QF_UFBV, QF_ABV, and QF_AUFBV
-queries from their original SMT-LIB input, independently repeats the
-bit-vector, finite ground-UF, and ground extensional-array reductions, and
-checks each query-specific DRAT refutation. These generated checks are
-correctness evidence, not representative performance benchmarks. See the
+reconstructs every currently certified SMT fragment from its original scoped
+input, independently validates the finite-theory reductions or exact
+difference-logic conflicts, and checks each query-specific DRAT refutation.
+These generated checks are correctness evidence, not representative
+performance benchmarks. See the
 [fuzzing guide](docs/FUZZING.md) and [proof-checking guide](docs/PROOF_CHECKING.md)
 for the exact boundaries and longer-running work.
 

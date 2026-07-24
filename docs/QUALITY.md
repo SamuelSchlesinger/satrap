@@ -25,7 +25,7 @@ claim.
 | Commit | `make check-fast` | Rust/Python formatting and lint, compilation, shell syntax, and repository hygiene |
 | Quality | `make quality` | Strict Clippy, rustdoc, Ruff, ShellCheck, Actionlint, lockfile, and structural checks |
 | Fuzz | `make check-fuzz` | Locked format/Clippy/sanitizer build plus bounded parser, incremental SMT, and SAT proof campaigns |
-| Proof | `make check-proofs` | Release SAT certificates plus query-bound Boolean/BV/UF/array certificates reconstructed independently and checked by pinned DRAT-trim |
+| Proof | `make check-proofs` | Release SAT certificates plus query-bound Boolean/BV/UF/array/difference-logic certificates reconstructed independently and checked by pinned DRAT-trim |
 | Integration | `make check` | Quality plus required three-oracle differential/model checks, Rust/Python tests, fuzz smoke, proof-checked benchmark smoke, and a release build |
 | Compatibility | `make check-msrv` | Full tests on the declared minimum Rust version |
 | Dependencies | `make audit` | RustSec advisory audit; requires `cargo-audit` and network access |
@@ -83,13 +83,14 @@ assumptions, SMT theory certificates, and the difference between a push smoke
 suite and a claim-bearing benchmark campaign are documented in
 [Proof checking](PROOF_CHECKING.md).
 
-The proof gate additionally runs the release SMT executable online,
-reconstructs active QF_BOOL, QF_BV, QF_UF, QF_UFBV, QF_ABV, and QF_AUFBV
-queries in an independent Python implementation, independently repeats
+The proof gate additionally runs the release SMT executable online and
+reconstructs active QF_BOOL, QF_BV, QF_UF, QF_UFBV, QF_ABV, QF_AUFBV, QF_IDL,
+and QF_RDL queries in an independent Python implementation. It repeats
 fixed-width bit-vector lowering, finite ground-UF class/congruence lowering,
-ground extensional-array lowering, and canonical CNF generation, and then
-checks the embedded DRAT suffix. Nested arrays and arithmetic logics remain
-outside that claim and are rejected when proof production is requested.
+ground extensional-array lowering, exact difference-logic negative-cycle
+validation, and canonical CNF generation before checking the embedded DRAT
+suffix. Nested arrays, general LIA/LRA, and arithmetic theory combinations
+remain outside that claim and are rejected when proof production is requested.
 
 `tools/check_hygiene.py` enforces the small but easy-to-forget invariants:
 UTF-8/LF text, final newlines, no trailing whitespace, valid local Markdown
@@ -99,7 +100,8 @@ entrypoints and that the integration script still includes the quality and
 fuzz gates, all three oracle version checks, every fuzz target, the
 proof-checked benchmark smoke, and that the security workflow remains wired to
 RustSec. It also requires every canonical QF_BOOL, QF_BV, QF_UF, QF_UFBV,
-QF_ABV, and QF_AUFBV proof-corpus file to remain present and nonempty.
+QF_ABV, QF_AUFBV, QF_IDL, and QF_RDL proof-corpus file to remain present and
+nonempty.
 
 The ordinary gate deliberately does not enable every `clippy::pedantic` or
 `clippy::nursery` lint. Solver code contains exact numeric conversions,

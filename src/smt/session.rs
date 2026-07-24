@@ -96,6 +96,8 @@ enum LastCheck {
     },
     Unknown {
         reason: UnknownReason,
+        boolean: Model,
+        theory: TheoryModel,
     },
 }
 
@@ -222,6 +224,11 @@ impl Session {
                 expect_arity(arguments, 0, "exit")?;
                 Ok(CommandValue::Exit)
             }
+            "declare-datatype"
+            | "declare-datatypes"
+            | "declare-sort-parameter"
+            | "define-fun-rec"
+            | "define-funs-rec" => Err(CommandError::Unsupported),
             _ => Err(CommandError::message(format!(
                 "unsupported command `{name}`"
             ))),
@@ -743,7 +750,11 @@ impl Session {
                 "unsat"
             }
             SmtSolveResult::Unknown(reason) => {
-                self.last_check = LastCheck::Unknown { reason };
+                self.last_check = LastCheck::Unknown {
+                    reason,
+                    boolean: self.solver.arbitrary_model(),
+                    theory: TheoryModel::default(),
+                };
                 "unknown"
             }
         };
@@ -833,6 +844,7 @@ impl Session {
 
     fn get_assertions(&self, arguments: &[SExpr]) -> Result<CommandValue, CommandError> {
         expect_arity(arguments, 0, "get-assertions")?;
+        self.require_logic()?;
         if !self.options.produce_assertions {
             return Err(CommandError::message(
                 "assertion production is disabled; set :produce-assertions true",
@@ -922,15 +934,18 @@ impl Session {
                 ..Frame::default()
             });
         } else {
+            self.terms = TermStore::new();
             self.bindings.clear();
             self.functions.clear();
             self.sorts.clear();
+            self.sort_names.clear();
             self.frames.clear();
             self.frames.push(Frame::default());
         }
         self.active_labels.clear();
         self.solver = Solver::new();
         self.encoder = BoolEncoder::default();
+        self.theories = TheoryManager::default();
         self.invalidate_check();
         Ok(CommandValue::Success)
     }
@@ -1356,18 +1371,18 @@ impl Session {
 
     fn sat_model(&self) -> Result<&Model, CommandError> {
         match &self.last_check {
-            LastCheck::Sat { boolean, .. } => Ok(boolean),
+            LastCheck::Sat { boolean, .. } | LastCheck::Unknown { boolean, .. } => Ok(boolean),
             _ => Err(CommandError::message(
-                "model inspection requires a preceding sat result",
+                "model inspection requires a preceding sat or unknown result",
             )),
         }
     }
 
     fn sat_theory_model(&self) -> Result<&TheoryModel, CommandError> {
         match &self.last_check {
-            LastCheck::Sat { theory, .. } => Ok(theory),
+            LastCheck::Sat { theory, .. } | LastCheck::Unknown { theory, .. } => Ok(theory),
             _ => Err(CommandError::message(
-                "model inspection requires a preceding sat result",
+                "model inspection requires a preceding sat or unknown result",
             )),
         }
     }
@@ -2712,7 +2727,9 @@ mod tests {
              (assert p)
              (get-model)",
         );
-        assert!(output.ends_with("(error \"model inspection requires a preceding sat result\")\n"));
+        assert!(output.ends_with(
+            "(error \"model inspection requires a preceding sat or unknown result\")\n"
+        ));
     }
 
     #[test]
@@ -2739,19 +2756,22 @@ mod tests {
     }
 
     #[test]
-    fn resource_unknown_rejects_an_unvalidated_model_and_remains_reusable() {
+    fn resource_unknown_has_a_protocol_model_and_remains_reusable() {
         let output = execute(
             "(set-option :produce-models true)
+             (set-option :produce-assignments true)
              (set-logic QF_BOOL)
              (set-option :reproducible-resource-limit 1)
              (declare-const p Bool)
              (declare-const q Bool)
-             (assert (or p q))
-             (assert (or p (not q)))
-             (assert (or (not p) q))
-             (assert (or (not p) (not q)))
+             (assert (! (or p q) :named c1))
+             (assert (! (or p (not q)) :named c2))
+             (assert (! (or (not p) q) :named c3))
+             (assert (! (or (not p) (not q)) :named c4))
              (check-sat)
              (get-info :reason-unknown)
+             (get-value (p q (xor p q)))
+             (get-assignment)
              (get-model)
              (set-option :reproducible-resource-limit 0)
              (check-sat)",
@@ -2759,7 +2779,10 @@ mod tests {
         assert_eq!(
             output,
             "unknown\n(:reason-unknown resourceout)\n\
-             (error \"model inspection requires a preceding sat result\")\n\
+             ((p false) (q false) ((xor p q) false))\n\
+             ((c1 false) (c2 true) (c3 true) (c4 true))\n\
+             (\n  (define-fun p () Bool false)\n  \
+             (define-fun q () Bool false)\n)\n\
              unsat\n"
         );
     }
@@ -2767,20 +2790,50 @@ mod tests {
     #[test]
     fn command_errors_preserve_state_and_start_only_options_are_enforced() {
         let output = execute(
-            "(push 1)
+            "(set-option :produce-assertions true)
+             (get-assertions)
+             (push 1)
              (set-logic QF_BOOL)
              (set-option :produce-models true)
              (get-option :produce-models)
              (check-sat)",
         );
-        assert!(
-            output.starts_with(
-                "(error \"set-logic must be issued before declarations or solving\")\n"
-            )
-        );
+        assert!(output.starts_with(
+            "(error \"set-logic must be issued before declarations or solving\")\n\
+                 (error \"set-logic must be issued before declarations or solving\")\n"
+        ));
         assert!(output.contains(
             "(error \"option `:produce-models` can only be set before set-logic\")\nfalse\nsat\n"
         ));
+    }
+
+    #[test]
+    fn reset_assertions_reinstalls_axioms_for_global_array_declarations() {
+        let output = execute(
+            "(set-option :global-declarations true)
+             (set-logic QF_ABV)
+             (declare-const a (Array (_ BitVec 1) (_ BitVec 1)))
+             (declare-const i (_ BitVec 1))
+             (declare-const value (_ BitVec 1))
+             (assert (distinct (select (store a i value) i) value))
+             (check-sat)
+             (reset-assertions)
+             (assert (distinct (select (store a i value) i) value))
+             (check-sat)",
+        );
+        assert_eq!(output, "unsat\nunsat\n");
+    }
+
+    #[test]
+    fn unsupported_standard_commands_report_unsupported() {
+        let output = execute(
+            "(set-logic QF_UF)
+             (declare-sort-parameter A)
+             (declare-datatype List ((nil) (cons (head A) (tail List))))
+             (define-fun-rec loop ((x Bool)) Bool (loop x))
+             (check-sat)",
+        );
+        assert_eq!(output, "unsupported\nunsupported\nunsupported\nsat\n");
     }
 
     #[test]

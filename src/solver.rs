@@ -2000,6 +2000,18 @@ impl Solver {
         self.external_variable_count
     }
 
+    /// Returns a deterministic total Boolean assignment for protocol-level
+    /// model inspection after an inconclusive query.
+    ///
+    /// SMT-LIB permits model inspection after `unknown`, without requiring
+    /// that model to satisfy the current assertions. Keeping this constructor
+    /// inside the solver preserves [`Model`]'s total-assignment invariant.
+    pub(crate) fn arbitrary_model(&self) -> Model {
+        Model {
+            values: vec![false; self.external_variable_count],
+        }
+    }
+
     /// Number of input clauses passed to [`Solver::add_clause`].
     #[must_use]
     pub const fn original_clause_count(&self) -> usize {

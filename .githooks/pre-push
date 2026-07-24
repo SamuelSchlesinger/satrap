@@ -5,3 +5,4 @@ set -eu
 repo_root=$(git rev-parse --show-toplevel)
 "$repo_root/scripts/ci.sh"
 "$repo_root/scripts/check-msrv.sh"
+"$repo_root/scripts/check-security.sh"

@@ -5,8 +5,7 @@ set -eu
 repo_root=$(git rev-parse --show-toplevel)
 cd "$repo_root"
 
-cargo fmt --all -- --check
-cargo clippy --all-targets --all-features -- -D warnings
-cargo test --all-targets
+"$repo_root/scripts/quality.sh"
+cargo test --all-targets --locked
 "${PYTHON:-python3}" -m unittest discover -s tools -p 'test_*.py'
-cargo build --release
+cargo build --release --locked

@@ -1,4 +1,4 @@
-.PHONY: check check-fast check-msrv install-hooks test release profiling smoke proof-smoke
+.PHONY: audit check check-fast check-msrv install-hooks profiling proof-smoke quality release smoke test
 
 PYTHON ?= python3
 DRAT_TRIM ?= drat-trim
@@ -7,22 +7,28 @@ check:
 	PYTHON="$(PYTHON)" ./scripts/ci.sh
 
 check-fast:
-	./scripts/check-fast.sh
+	PYTHON="$(PYTHON)" ./scripts/check-fast.sh
+
+quality:
+	PYTHON="$(PYTHON)" ./scripts/quality.sh
 
 check-msrv:
 	./scripts/check-msrv.sh
+
+audit:
+	./scripts/check-security.sh
 
 install-hooks:
 	./scripts/install-hooks.sh
 
 test:
-	cargo test --all-targets
+	cargo test --all-targets --locked
 
 release:
-	RUSTFLAGS="-C target-cpu=native" cargo build --release
+	RUSTFLAGS="-C target-cpu=native" cargo build --release --locked
 
 profiling:
-	RUSTFLAGS="-C target-cpu=native" cargo build --profile profiling
+	RUSTFLAGS="-C target-cpu=native" cargo build --profile profiling --locked
 
 smoke: release
 	$(PYTHON) tools/benchmark.py --instances benchmarks/smoke --solver "sat=target/release/sat" --output -

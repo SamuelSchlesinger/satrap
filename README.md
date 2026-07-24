@@ -45,6 +45,7 @@ The crate requires Rust 1.85 or newer.
 ```sh
 cargo build --release
 cargo test --all-targets
+make install-oracles
 make install-hooks
 ```
 
@@ -131,10 +132,12 @@ For the gate breakdown, lint rationale, and small-commit procedure, see the
 [quality policy](docs/QUALITY.md).
 
 Deterministic tests cover the SAT kernel against brute force and exercise the
-implemented SMT fragments against Z3. The shared integration gate requires Z3,
-including exact replay of returned arithmetic models; it never silently skips
-the second solver. These generated tests are correctness evidence, not
-representative performance benchmarks.
+implemented SMT fragments against pinned Z3, cvc5, and Bitwuzla releases.
+Arithmetic models are replayed independently through both Z3 and cvc5. Run
+`make install-oracles` once per clone before `make check`; the shared integration
+gate requires exact versions of all three solvers and never silently skips an
+oracle. These generated tests are correctness evidence, not representative
+performance benchmarks.
 
 For controlled solver comparisons:
 

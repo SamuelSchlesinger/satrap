@@ -236,10 +236,10 @@ single-query and incremental validation before performance promotion.
 hash-consed terms, complete fixed-width operator lowering, models, values,
 scopes, assumptions, cores, and deterministic resource limits are implemented.
 Exhaustive small-width semantics and 544 deterministic incremental queries
-agree with Z3 4.16.0. The incremental SMT proof container, additional
-independent solvers/model validators, full protocol conformance, fuzzing, and
-representative performance evaluation are not complete, so this gate remains
-open.
+agree with Z3 4.16.0, cvc5 1.3.3, and Bitwuzla 0.9.1. The incremental SMT proof
+container, fragment-complete independent model validators, full protocol
+conformance, coverage-guided fuzzing, and representative performance evaluation
+are not complete, so this gate remains open.
 
 ## Gate 4: general CDCL(T) coverage
 
@@ -265,12 +265,17 @@ exposes exact Int/Real construction and values. An in-process evaluator rejects
 inconsistent arithmetic candidates before `sat`. Shared equality arrangements
 now combine arithmetic with congruence closure and extensional arrays for
 QF_UFIDL, QF_UFLIA, QF_UFLRA, and QF_AUFLIA. Another 640 generated combination
-queries agree with Z3 in scoped sessions. Seventy-two scalar arithmetic models
-are replayed as exact bindings, while 16 combination models are replayed in
-full, including function and array interpretations. Fragment-complete
-independent model and proof validation and trail-level theory propagation
-remain open. The status counts remain evidence against one mature external
-solver, not a complete validation argument.
+queries agree with Z3 and cvc5 in scoped sessions. Seventy-two scalar arithmetic
+models are replayed as exact bindings through both solvers, while 16 combination
+models are replayed in full through both, including function and array
+interpretations. Across all implemented fragments, 3,872 deterministic
+incremental queries are checked: Z3 covers the full corpus, cvc5 covers every
+corpus except 128 custom-sort constant-array queries, and Bitwuzla covers 800
+finite QF_BV/QF_AUFBV queries. The
+custom-sort/constant-array exclusion records an oracle capability boundary;
+`unknown` is never accepted as agreement. Fragment-complete independent model
+and proof validation and trail-level theory propagation remain open. These
+generated corpora are not a complete validation argument.
 
 ## Gate 5: algorithmic research and world-class evaluation
 

@@ -193,27 +193,34 @@ def check_audit_version(errors: list[str]) -> None:
         errors.append(f"cargo-audit versions disagree: {rendered}")
 
 
-def check_z3_version(errors: list[str]) -> None:
-    declarations = {
-        "scripts/ci.sh": extract_version(
-            ROOT / "scripts/ci.sh",
-            r"^required_z3_version=([0-9.]+)",
-            errors,
-        ),
-        ".github/workflows/ci.yml": extract_version(
-            ROOT / ".github/workflows/ci.yml",
-            r'^\s*Z3_VERSION:\s*"([^"]+)"',
-            errors,
-        ),
-    }
-    versions = {version for version in declarations.values() if version is not None}
-    if len(versions) > 1:
-        rendered = ", ".join(
-            f"{name}={'.'.join(map(str, version))}"
-            for name, version in declarations.items()
-            if version is not None
-        )
-        errors.append(f"Z3 versions disagree: {rendered}")
+def check_oracle_versions(errors: list[str]) -> None:
+    for name, ci_variable, installer_variable in (
+        ("Z3", "required_z3_version", "z3_version"),
+        ("cvc5", "required_cvc5_version", "cvc5_version"),
+        ("Bitwuzla", "required_bitwuzla_version", "bitwuzla_version"),
+    ):
+        declarations = {
+            "scripts/ci.sh": extract_version(
+                ROOT / "scripts/ci.sh",
+                rf"^{ci_variable}=([0-9.]+)",
+                errors,
+            ),
+            "scripts/install-smt-oracles.sh": extract_version(
+                ROOT / "scripts/install-smt-oracles.sh",
+                rf"^{installer_variable}=([0-9.]+)",
+                errors,
+            ),
+        }
+        versions = {
+            version for version in declarations.values() if version is not None
+        }
+        if len(versions) > 1:
+            rendered = ", ".join(
+                f"{path}={'.'.join(map(str, version))}"
+                for path, version in declarations.items()
+                if version is not None
+            )
+            errors.append(f"{name} versions disagree: {rendered}")
 
 
 def require_commands(path: Path, commands: tuple[str, ...], errors: list[str]) -> None:
@@ -241,7 +248,12 @@ def check_gate_wiring(errors: list[str]) -> None:
     )
     require_commands(
         ROOT / "scripts/ci.sh",
-        ("scripts/quality.sh", "z3 --version"),
+        (
+            "scripts/quality.sh",
+            "z3 --version",
+            "cvc5 --version",
+            "bitwuzla --version",
+        ),
         errors,
     )
     require_commands(
@@ -256,7 +268,12 @@ def check_gate_wiring(errors: list[str]) -> None:
     )
     require_commands(
         ROOT / ".github/workflows/ci.yml",
-        ("actions/checkout@v6", "z3"),
+        ("actions/checkout@v6", "scripts/install-smt-oracles.sh"),
+        errors,
+    )
+    require_commands(
+        ROOT / "scripts/install-smt-oracles.sh",
+        ("Z3Prover/z3", "cvc5/cvc5", "bitwuzla/bitwuzla"),
         errors,
     )
 
@@ -276,7 +293,7 @@ def main() -> int:
     check_markdown_links(files, errors)
     check_msrv(errors)
     check_audit_version(errors)
-    check_z3_version(errors)
+    check_oracle_versions(errors)
     check_gate_wiring(errors)
     check_executable_scripts(errors)
 

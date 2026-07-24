@@ -1,4 +1,4 @@
-.PHONY: audit check check-fast check-msrv install-hooks profiling proof-smoke quality release smoke test
+.PHONY: audit check check-fast check-msrv install-hooks install-oracles profiling proof-smoke quality release smoke test
 
 PYTHON ?= python3
 DRAT_TRIM ?= drat-trim
@@ -20,6 +20,9 @@ audit:
 
 install-hooks:
 	./scripts/install-hooks.sh
+
+install-oracles:
+	./scripts/install-smt-oracles.sh
 
 test:
 	cargo test --all-targets --locked

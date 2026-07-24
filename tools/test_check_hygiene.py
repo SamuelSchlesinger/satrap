@@ -81,12 +81,19 @@ class HygieneChecksTests(unittest.TestCase):
                 "scripts/ci.sh\nscripts/check-msrv.sh\nscripts/check-security.sh\n"
             ),
             ".github/workflows/ci.yml": (
-                "actions/checkout@v6\nz3\nscripts/ci.sh\nscripts/check-msrv.sh\n"
+                "actions/checkout@v6\nscripts/install-smt-oracles.sh\n"
+                "scripts/ci.sh\nscripts/check-msrv.sh\n"
             ),
             ".github/workflows/security.yml": (
                 "actions/checkout@v6\nscripts/check-security.sh\n"
             ),
-            "scripts/ci.sh": "scripts/quality.sh\nz3 --version\n",
+            "scripts/ci.sh": (
+                "scripts/quality.sh\nz3 --version\ncvc5 --version\n"
+                "bitwuzla --version\n"
+            ),
+            "scripts/install-smt-oracles.sh": (
+                "Z3Prover/z3\ncvc5/cvc5\nbitwuzla/bitwuzla\n"
+            ),
             "scripts/quality.sh": "shellcheck\nactionlint\ntools/check_hygiene.py\n",
         }
         with directory, patch.object(check_hygiene, "ROOT", root):
@@ -106,6 +113,8 @@ class HygieneChecksTests(unittest.TestCase):
                 [
                     "scripts/ci.sh: must invoke scripts/quality.sh",
                     "scripts/ci.sh: must invoke z3 --version",
+                    "scripts/ci.sh: must invoke cvc5 --version",
+                    "scripts/ci.sh: must invoke bitwuzla --version",
                 ],
             )
 
@@ -132,23 +141,32 @@ class HygieneChecksTests(unittest.TestCase):
                 ],
             )
 
-    def test_z3_version_check_detects_ci_drift(self) -> None:
+    def test_oracle_version_check_detects_installer_drift(self) -> None:
         directory, root = self.temporary_root()
         with directory, patch.object(check_hygiene, "ROOT", root):
             script = root / "scripts/ci.sh"
-            workflow = root / ".github/workflows/ci.yml"
+            installer = root / "scripts/install-smt-oracles.sh"
             script.parent.mkdir(parents=True)
-            workflow.parent.mkdir(parents=True)
-            script.write_text("required_z3_version=4.16.0\n", encoding="utf-8")
-            workflow.write_text('env:\n  Z3_VERSION: "4.15.8"\n', encoding="utf-8")
+            script.write_text(
+                "required_z3_version=4.16.0\n"
+                "required_cvc5_version=1.3.3\n"
+                "required_bitwuzla_version=0.9.1\n",
+                encoding="utf-8",
+            )
+            installer.write_text(
+                "z3_version=4.15.8\n"
+                "cvc5_version=1.3.3\n"
+                "bitwuzla_version=0.9.1\n",
+                encoding="utf-8",
+            )
             errors: list[str] = []
-            check_hygiene.check_z3_version(errors)
+            check_hygiene.check_oracle_versions(errors)
             self.assertEqual(
                 errors,
                 [
                     "Z3 versions disagree: "
                     "scripts/ci.sh=4.16.0, "
-                    ".github/workflows/ci.yml=4.15.8"
+                    "scripts/install-smt-oracles.sh=4.15.8"
                 ],
             )
 

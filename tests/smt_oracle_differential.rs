@@ -1,269 +1,188 @@
+//! Deterministic differential corpora and independent model replay.
+
 use std::fmt::Write as _;
 use std::io::Write;
 use std::process::{Command, Output, Stdio};
 
+#[derive(Clone, Copy)]
+struct Oracle {
+    name: &'static str,
+    program: &'static str,
+    arguments: &'static [&'static str],
+}
+
+const Z3: Oracle = Oracle {
+    name: "Z3",
+    program: "z3",
+    arguments: &["-in", "-smt2"],
+};
+const CVC5: Oracle = Oracle {
+    name: "cvc5",
+    program: "cvc5",
+    arguments: &["--lang=smt2", "--incremental", "--arrays-exp"],
+};
+const BITWUZLA: Oracle = Oracle {
+    name: "Bitwuzla",
+    program: "bitwuzla",
+    arguments: &["--lang", "smt2"],
+};
+const Z3_ONLY: &[Oracle] = &[Z3];
+const GENERAL_ORACLES: &[Oracle] = &[Z3, CVC5];
+const ALL_ORACLES: &[Oracle] = &[Z3, CVC5, BITWUZLA];
+
 #[test]
-fn deterministic_qf_bv_corpus_agrees_with_z3() {
-    if Command::new("z3").arg("--version").output().is_err() {
-        eprintln!("skipping QF_BV differential test because z3 is not installed");
-        return;
-    }
-
-    let script = differential_script();
-    let ours = run_solver(env!("CARGO_BIN_EXE_smt"), &[], &script);
-    let z3 = run_solver("z3", &["-in", "-smt2"], &script);
-
-    assert!(
-        ours.status.success(),
-        "our solver failed:\n{}",
-        String::from_utf8_lossy(&ours.stderr)
-    );
-    assert!(
-        z3.status.success(),
-        "z3 failed:\n{}",
-        String::from_utf8_lossy(&z3.stderr)
-    );
-
-    let ours_stdout = String::from_utf8(ours.stdout).expect("our output must be UTF-8");
-    let z3_stdout = String::from_utf8(z3.stdout).expect("z3 output must be UTF-8");
-    let ours_results = check_results(&ours_stdout);
-    let z3_results = check_results(&z3_stdout);
-
-    assert_eq!(
-        ours_results.len(),
-        544,
-        "our solver did not answer every generated query:\n{ours_stdout}"
-    );
-    assert_eq!(
-        z3_results.len(),
-        544,
-        "z3 did not answer every generated query:\n{z3_stdout}"
-    );
-    assert_eq!(ours_results, z3_results, "QF_BV differential mismatch");
+fn deterministic_qf_bv_corpus_agrees_with_reference_solvers() {
+    assert_differential_corpus_with_oracles("QF_BV", &differential_script(), 544, ALL_ORACLES);
 }
 
 #[test]
-fn deterministic_qf_uf_and_ufbv_corpora_agree_with_z3() {
-    if Command::new("z3").arg("--version").output().is_err() {
-        eprintln!("skipping QF_UF differential test because z3 is not installed");
-        return;
-    }
-
-    for (name, script, expected) in [
-        ("QF_UF", uf_differential_script(), 384),
-        ("QF_UFBV", ufbv_differential_script(), 256),
-    ] {
-        let ours = run_solver(env!("CARGO_BIN_EXE_smt"), &[], &script);
-        let z3 = run_solver("z3", &["-in", "-smt2"], &script);
-        assert!(
-            ours.status.success(),
-            "our solver failed on {name}:\n{}",
-            String::from_utf8_lossy(&ours.stderr)
-        );
-        assert!(
-            z3.status.success(),
-            "z3 failed on {name}:\n{}",
-            String::from_utf8_lossy(&z3.stderr)
-        );
-        let ours_stdout = String::from_utf8(ours.stdout).expect("our output must be UTF-8");
-        let z3_stdout = String::from_utf8(z3.stdout).expect("z3 output must be UTF-8");
-        let ours_results = check_results(&ours_stdout);
-        let z3_results = check_results(&z3_stdout);
-        assert_eq!(
-            ours_results.len(),
-            expected,
-            "our solver did not answer every {name} query:\n{ours_stdout}"
-        );
-        assert_eq!(
-            z3_results.len(),
-            expected,
-            "z3 did not answer every {name} query:\n{z3_stdout}"
-        );
-        let mismatch = ours_results
-            .iter()
-            .zip(&z3_results)
-            .position(|(ours, z3)| ours != z3);
-        assert_eq!(
-            mismatch,
-            None,
-            "{name} differential mismatch at query {mismatch:?}: ours={:?}, z3={:?}",
-            mismatch.map(|index| ours_results[index]),
-            mismatch.map(|index| z3_results[index])
-        );
-    }
+fn deterministic_qf_uf_and_ufbv_corpora_agree_with_reference_solvers() {
+    assert_differential_corpus_with_oracles(
+        "QF_UF",
+        &uf_differential_script(),
+        384,
+        GENERAL_ORACLES,
+    );
+    assert_differential_corpus_with_oracles(
+        "QF_UFBV",
+        &ufbv_differential_script(),
+        256,
+        GENERAL_ORACLES,
+    );
 }
 
 #[test]
-fn deterministic_extensional_array_corpora_agree_with_z3() {
-    if Command::new("z3").arg("--version").output().is_err() {
-        eprintln!("skipping array differential test because z3 is not installed");
-        return;
-    }
-    for (name, script, expected) in [
-        ("QF_ABV", abv_differential_script(), 256),
-        ("QF_AUFBV", aufbv_differential_script(), 128),
-    ] {
-        let ours = run_solver(env!("CARGO_BIN_EXE_smt"), &[], &script);
-        let z3 = run_solver("z3", &["-in", "-smt2"], &script);
-        assert!(
-            ours.status.success(),
-            "our solver failed on {name}:\n{}",
-            String::from_utf8_lossy(&ours.stderr)
-        );
-        assert!(
-            z3.status.success(),
-            "z3 failed on {name}:\n{}",
-            String::from_utf8_lossy(&z3.stderr)
-        );
-        let ours_stdout = String::from_utf8(ours.stdout).expect("our output must be UTF-8");
-        let z3_stdout = String::from_utf8(z3.stdout).expect("z3 output must be UTF-8");
-        let ours_results = check_results(&ours_stdout);
-        let z3_results = check_results(&z3_stdout);
-        assert_eq!(
-            ours_results.len(),
-            expected,
-            "our solver did not answer every {name} query:\n{ours_stdout}"
-        );
-        assert_eq!(
-            z3_results.len(),
-            expected,
-            "z3 did not answer every {name} query:\n{z3_stdout}"
-        );
-        assert_eq!(ours_results, z3_results, "{name} differential mismatch");
-    }
+fn deterministic_extensional_array_corpora_agree_with_reference_solvers() {
+    assert_differential_corpus_with_oracles(
+        "QF_ABV",
+        &abv_differential_script(),
+        256,
+        GENERAL_ORACLES,
+    );
+    assert_differential_corpus_with_oracles("QF_AUFBV", &aufbv_differential_script(), 128, Z3_ONLY);
 }
 
 #[test]
-fn deterministic_exact_arithmetic_corpora_agree_with_z3() {
-    if Command::new("z3").arg("--version").output().is_err() {
-        eprintln!("skipping arithmetic differential test because z3 is not installed");
-        return;
-    }
+fn deterministic_finite_aufbv_corpus_agrees_with_three_reference_solvers() {
+    assert_differential_corpus_with_oracles(
+        "finite QF_AUFBV",
+        &finite_aufbv_differential_script(),
+        256,
+        ALL_ORACLES,
+    );
+}
+
+#[test]
+fn deterministic_exact_arithmetic_corpora_agree_with_reference_solvers() {
     for (name, script, expected) in [
         ("QF_IDL", idl_differential_script(), 384),
         ("QF_LIA", lia_differential_script(), 384),
         ("QF_RDL", rdl_differential_script(), 256),
         ("QF_LRA", lra_differential_script(), 384),
     ] {
-        let ours = run_solver(env!("CARGO_BIN_EXE_smt"), &[], &script);
-        let z3 = run_solver("z3", &["-in", "-smt2"], &script);
-        assert!(
-            ours.status.success(),
-            "our solver failed on {name}:\nstdout:\n{}\nstderr:\n{}",
-            String::from_utf8_lossy(&ours.stdout),
-            String::from_utf8_lossy(&ours.stderr)
-        );
-        assert!(
-            z3.status.success(),
-            "z3 failed on {name}:\nstdout:\n{}\nstderr:\n{}",
-            String::from_utf8_lossy(&z3.stdout),
-            String::from_utf8_lossy(&z3.stderr)
-        );
-        let ours_stdout = String::from_utf8(ours.stdout).expect("our output must be UTF-8");
-        let z3_stdout = String::from_utf8(z3.stdout).expect("z3 output must be UTF-8");
-        let ours_results = check_results(&ours_stdout);
-        let z3_results = check_results(&z3_stdout);
-        assert_eq!(
-            ours_results.len(),
-            expected,
-            "our solver did not answer every {name} query:\n{ours_stdout}"
-        );
-        assert_eq!(
-            z3_results.len(),
-            expected,
-            "z3 did not answer every {name} query:\n{z3_stdout}"
-        );
-        let mismatch = ours_results
-            .iter()
-            .zip(&z3_results)
-            .position(|(ours, z3)| ours != z3);
-        assert_eq!(
-            mismatch,
-            None,
-            "{name} differential mismatch at query {mismatch:?}: ours={:?}, z3={:?}",
-            mismatch.map(|index| ours_results[index]),
-            mismatch.map(|index| z3_results[index])
-        );
+        assert_differential_corpus_with_oracles(name, &script, expected, GENERAL_ORACLES);
     }
 }
 
 #[test]
-fn deterministic_qf_ufidl_corpus_agrees_with_z3() {
+fn deterministic_qf_ufidl_corpus_agrees_with_reference_solvers() {
     assert_differential_corpus("QF_UFIDL", &ufidl_differential_script(), 256);
 }
 
 #[test]
-fn deterministic_qf_uflia_corpus_agrees_with_z3() {
+fn deterministic_qf_uflia_corpus_agrees_with_reference_solvers() {
     assert_differential_corpus("QF_UFLIA", &uflia_differential_script(64), 64);
 }
 
 #[test]
-fn deterministic_qf_uflra_corpus_agrees_with_z3() {
+fn deterministic_qf_uflra_corpus_agrees_with_reference_solvers() {
     assert_differential_corpus("QF_UFLRA", &uflra_differential_script(), 256);
 }
 
 #[test]
-fn deterministic_qf_auflia_corpus_agrees_with_z3() {
+fn deterministic_qf_auflia_corpus_agrees_with_reference_solvers() {
     assert_differential_corpus("QF_AUFLIA", &auflia_differential_script(64), 64);
 }
 
 fn assert_differential_corpus(name: &str, script: &str, expected: usize) {
-    if Command::new("z3").arg("--version").output().is_err() {
-        eprintln!("skipping {name} differential test because z3 is not installed");
-        return;
-    }
+    assert_differential_corpus_with_oracles(name, script, expected, GENERAL_ORACLES);
+}
+
+fn assert_differential_corpus_with_oracles(
+    name: &str,
+    script: &str,
+    expected: usize,
+    oracles: &[Oracle],
+) {
     let ours = run_solver(env!("CARGO_BIN_EXE_smt"), &[], script);
-    let z3 = run_solver("z3", &["-in", "-smt2"], script);
     assert!(
         ours.status.success(),
         "our solver failed on {name}:\nstdout:\n{}\nstderr:\n{}",
         String::from_utf8_lossy(&ours.stdout),
         String::from_utf8_lossy(&ours.stderr)
     );
-    assert!(
-        z3.status.success(),
-        "z3 failed on {name}:\nstdout:\n{}\nstderr:\n{}",
-        String::from_utf8_lossy(&z3.stdout),
-        String::from_utf8_lossy(&z3.stderr)
-    );
     let ours_stdout = String::from_utf8(ours.stdout).expect("our output must be UTF-8");
-    let z3_stdout = String::from_utf8(z3.stdout).expect("z3 output must be UTF-8");
     let ours_results = check_results(&ours_stdout);
-    let z3_results = check_results(&z3_stdout);
     assert_eq!(
         ours_results.len(),
         expected,
         "our solver did not answer every {name} query:\n{ours_stdout}"
     );
-    assert_eq!(
-        z3_results.len(),
-        expected,
-        "z3 did not answer every {name} query:\n{z3_stdout}"
-    );
     assert!(
         !ours_results.contains(&"unknown"),
         "our solver returned unknown on its advertised {name} fragment"
     );
-    let mismatch = ours_results
-        .iter()
-        .zip(&z3_results)
-        .position(|(ours, z3)| ours != z3);
-    assert_eq!(
-        mismatch,
-        None,
-        "{name} differential mismatch at query {mismatch:?}: ours={:?}, z3={:?}",
-        mismatch.map(|index| ours_results[index]),
-        mismatch.map(|index| z3_results[index])
-    );
+
+    for &oracle in oracles {
+        if !oracle_is_available(oracle) {
+            eprintln!(
+                "skipping {name} comparison with {} because {} is not installed",
+                oracle.name, oracle.program
+            );
+            continue;
+        }
+        let reference = run_solver(oracle.program, oracle.arguments, script);
+        assert!(
+            reference.status.success(),
+            "{} failed on {name}:\nstdout:\n{}\nstderr:\n{}",
+            oracle.name,
+            String::from_utf8_lossy(&reference.stdout),
+            String::from_utf8_lossy(&reference.stderr)
+        );
+        let reference_stdout =
+            String::from_utf8(reference.stdout).expect("oracle output must be UTF-8");
+        let reference_results = check_results(&reference_stdout);
+        assert_eq!(
+            reference_results.len(),
+            expected,
+            "{} did not answer every {name} query:\n{reference_stdout}",
+            oracle.name
+        );
+        let mismatch = ours_results
+            .iter()
+            .zip(&reference_results)
+            .position(|(ours, reference)| ours != reference);
+        assert_eq!(
+            mismatch,
+            None,
+            "{name} differential mismatch against {} at query {mismatch:?}: \
+             ours={:?}, reference={:?}",
+            oracle.name,
+            mismatch.map(|index| ours_results[index]),
+            mismatch.map(|index| reference_results[index])
+        );
+    }
+}
+
+fn oracle_is_available(oracle: Oracle) -> bool {
+    Command::new(oracle.program)
+        .arg("--version")
+        .output()
+        .is_ok_and(|output| output.status.success())
 }
 
 #[test]
-fn exact_arithmetic_models_are_independently_validated_by_z3() {
-    if Command::new("z3").arg("--version").output().is_err() {
-        eprintln!("skipping arithmetic model validation because z3 is not installed");
-        return;
-    }
-
+fn exact_arithmetic_models_are_independently_validated() {
     let cases = arithmetic_model_cases();
     assert_eq!(cases.len(), 72);
     for case in cases {
@@ -285,34 +204,13 @@ fn exact_arithmetic_models_are_independently_validated_by_z3() {
             case.name
         );
 
-        let validation_script = case.z3_validation_script(&ours_stdout);
-        let z3 = run_solver("z3", &["-in", "-smt2"], &validation_script);
-        assert!(
-            z3.status.success(),
-            "z3 rejected the validation script for {}:\nscript:\n{}\nstdout:\n{}\nstderr:\n{}",
-            case.name,
-            validation_script,
-            String::from_utf8_lossy(&z3.stdout),
-            String::from_utf8_lossy(&z3.stderr)
-        );
-        let z3_stdout = String::from_utf8(z3.stdout).expect("z3 output must be UTF-8");
-        assert_eq!(
-            check_results(&z3_stdout),
-            ["sat"],
-            "our model does not satisfy {} according to z3:\n\
-             solver output:\n{ours_stdout}\nvalidation output:\n{z3_stdout}",
-            case.name
-        );
+        let validation_script = case.validation_script(&ours_stdout);
+        assert_model_replay(&case.name, &validation_script, &ours_stdout);
     }
 }
 
 #[test]
-fn arithmetic_combination_models_are_independently_validated_by_z3() {
-    if Command::new("z3").arg("--version").output().is_err() {
-        eprintln!("skipping combination model validation because z3 is not installed");
-        return;
-    }
-
+fn arithmetic_combination_models_are_independently_validated() {
     let cases = arithmetic_combination_model_cases();
     assert_eq!(cases.len(), 16);
     for case in cases {
@@ -334,23 +232,37 @@ fn arithmetic_combination_models_are_independently_validated_by_z3() {
             case.name
         );
 
-        let validation_script = case.z3_validation_script(&ours_stdout);
-        let z3 = run_solver("z3", &["-in", "-smt2"], &validation_script);
+        let validation_script = case.validation_script(&ours_stdout);
+        assert_model_replay(&case.name, &validation_script, &ours_stdout);
+    }
+}
+
+fn assert_model_replay(case_name: &str, validation_script: &str, solver_output: &str) {
+    for &oracle in GENERAL_ORACLES {
+        if !oracle_is_available(oracle) {
+            eprintln!(
+                "skipping model replay with {} because {} is not installed",
+                oracle.name, oracle.program
+            );
+            continue;
+        }
+        let reference = run_solver(oracle.program, oracle.arguments, validation_script);
         assert!(
-            z3.status.success(),
-            "z3 rejected the validation script for {}:\nscript:\n{}\nstdout:\n{}\nstderr:\n{}",
-            case.name,
-            validation_script,
-            String::from_utf8_lossy(&z3.stdout),
-            String::from_utf8_lossy(&z3.stderr)
+            reference.status.success(),
+            "{} rejected the validation script for {case_name}:\n\
+             script:\n{validation_script}\nstdout:\n{}\nstderr:\n{}",
+            oracle.name,
+            String::from_utf8_lossy(&reference.stdout),
+            String::from_utf8_lossy(&reference.stderr)
         );
-        let z3_stdout = String::from_utf8(z3.stdout).expect("z3 output must be UTF-8");
+        let reference_stdout =
+            String::from_utf8(reference.stdout).expect("oracle output must be UTF-8");
         assert_eq!(
-            check_results(&z3_stdout),
+            check_results(&reference_stdout),
             ["sat"],
-            "our combined model does not satisfy {} according to z3:\n\
-             solver output:\n{ours_stdout}\nvalidation output:\n{z3_stdout}",
-            case.name
+            "our model does not satisfy {case_name} according to {}:\n\
+             solver output:\n{solver_output}\nvalidation output:\n{reference_stdout}",
+            oracle.name
         );
     }
 }
@@ -670,6 +582,77 @@ fn aufbv_differential_script() -> String {
                     script,
                     "(assert (= (select (store a (_ bv{index} 2) (next u)) \
                      (_ bv{index} 2)) (next u)))"
+                )
+                .unwrap();
+            }
+        }
+        writeln!(script, "(check-sat)").unwrap();
+        writeln!(script, "(pop 1)").unwrap();
+    }
+    script.push_str("(exit)\n");
+    script
+}
+
+fn finite_aufbv_differential_script() -> String {
+    let mut script = String::from(
+        "(set-logic QF_AUFBV)\n\
+         (declare-const a (Array (_ BitVec 2) (_ BitVec 3)))\n\
+         (declare-const b (Array (_ BitVec 2) (_ BitVec 3)))\n\
+         (declare-const i (_ BitVec 2))\n\
+         (declare-const j (_ BitVec 2))\n\
+         (declare-const x (_ BitVec 3))\n\
+         (declare-const y (_ BitVec 3))\n\
+         (declare-fun f ((_ BitVec 3)) (_ BitVec 3))\n\
+         (declare-fun p ((_ BitVec 3)) Bool)\n",
+    );
+    let mut state = 0x4528_21e6_u32;
+    for query in 0..256 {
+        state = state.wrapping_mul(22_695_477).wrapping_add(1);
+        let i = (state >> 4) & 3;
+        let j = (state >> 9) & 3;
+        let x = (state >> 14) & 7;
+        let y = (state >> 20) & 7;
+        writeln!(script, "(push 1)").unwrap();
+        writeln!(script, "(assert (= i (_ bv{i} 2)))").unwrap();
+        writeln!(script, "(assert (= j (_ bv{j} 2)))").unwrap();
+        writeln!(script, "(assert (= x (_ bv{x} 3)))").unwrap();
+        writeln!(script, "(assert (= y (_ bv{y} 3)))").unwrap();
+        match query % 8 {
+            0 => {
+                writeln!(script, "(assert (distinct (select (store a i x) i) x))").unwrap();
+            }
+            1 => {
+                writeln!(script, "(assert (distinct i j))").unwrap();
+                writeln!(
+                    script,
+                    "(assert (distinct (select (store a i x) j) (select a j)))"
+                )
+                .unwrap();
+            }
+            2 => {
+                writeln!(script, "(assert (= (select a i) x))").unwrap();
+                writeln!(script, "(assert (distinct (f (select a i)) (f x)))").unwrap();
+            }
+            3 => {
+                writeln!(script, "(assert (= x y))").unwrap();
+                writeln!(script, "(assert (xor (p x) (p y)))").unwrap();
+            }
+            4 => {
+                writeln!(script, "(assert (= (select a i) x))").unwrap();
+                writeln!(script, "(assert (= (select b j) (f x)))").unwrap();
+            }
+            5 => {
+                writeln!(script, "(assert (= (select (store a i (f x)) i) (f x)))").unwrap();
+            }
+            6 => {
+                writeln!(script, "(assert (= (f x) (bvadd y #b001)))").unwrap();
+                writeln!(script, "(assert (= (select a i) (f x)))").unwrap();
+            }
+            _ => {
+                writeln!(script, "(assert (= (select a i) x))").unwrap();
+                writeln!(
+                    script,
+                    "(assert (= (select (store a j y) i) (ite (= i j) y x)))"
                 )
                 .unwrap();
             }
@@ -1165,7 +1148,7 @@ impl CombinationModelCase {
         script
     }
 
-    fn z3_validation_script(&self, solver_output: &str) -> String {
+    fn validation_script(&self, solver_output: &str) -> String {
         let mut script = format!("(set-logic {})\n", self.logic);
         let definitions = solver_output
             .lines()
@@ -1197,7 +1180,7 @@ impl ArithmeticModelCase {
         script
     }
 
-    fn z3_validation_script(&self, solver_output: &str) -> String {
+    fn validation_script(&self, solver_output: &str) -> String {
         let mut script = String::new();
         self.write_problem(&mut script);
         for name in ["x", "y", "z"] {

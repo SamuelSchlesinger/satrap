@@ -24,7 +24,7 @@ claim.
 | --- | --- | --- |
 | Commit | `make check-fast` | Formatting, compilation, shell syntax, and repository hygiene |
 | Quality | `make quality` | Strict Clippy, rustdoc, ShellCheck, Actionlint, lockfile, and structural checks |
-| Integration | `make check` | Quality plus required Z3 differential/model checks, Rust/Python tests, and a release build |
+| Integration | `make check` | Quality plus required three-oracle differential/model checks, Rust/Python tests, and a release build |
 | Compatibility | `make check-msrv` | Full tests on the declared minimum Rust version |
 | Dependencies | `make audit` | RustSec advisory audit; requires `cargo-audit` and network access |
 
@@ -34,26 +34,31 @@ CI independently calls the same integration and compatibility scripts and
 runs the RustSec audit on every push and pull request, plus weekly, so a newly
 published advisory is caught even when the repository is unchanged.
 
-The pre-push gate requires `cargo-audit`, ShellCheck, Actionlint, and Z3 4.16.0.
-Z3 is mandatory here even though a direct `cargo test` can skip its
-differential tests: neither the local integration gate nor hosted CI may
-silently lose the second solver. On macOS, install the tools with:
+The pre-push gate requires `cargo-audit`, ShellCheck, Actionlint, Z3 4.16.0,
+cvc5 1.3.3, and Bitwuzla 0.9.1. The three SMT oracles are mandatory here even
+though a direct `cargo test` can skip a missing executable: neither the local
+integration gate nor hosted CI may silently lose an independent comparison.
+Install the tools with:
 
 ```sh
 cargo install cargo-audit --version 0.22.2 --locked
-brew install actionlint shellcheck z3
+brew install actionlint shellcheck  # macOS; use your package manager elsewhere
+make install-oracles
 ```
 
-Use the corresponding package manager on other platforms. Hosted CI installs
-the official Z3 4.16.0 archive after verifying its SHA-256 digest, and pins
-Actionlint to `v1.7.12` and cargo-audit to `0.22.2`.
+`make install-oracles` downloads official release archives into the ignored
+`.cache/smt-oracles` directory and verifies every SHA-256 digest before making
+the binaries available to the gate. It currently supports Apple Silicon macOS
+and x86-64 Linux. Bitwuzla also needs GMP and MPFR runtime libraries. Hosted CI
+installs those libraries, invokes the same oracle installer, and pins Actionlint
+to `v1.7.12` and cargo-audit to `0.22.2`.
 
 `tools/check_hygiene.py` enforces the small but easy-to-forget invariants:
 UTF-8/LF text, final newlines, no trailing whitespace, valid local Markdown
-links, executable scripts, synchronized MSRV/Z3 declarations, and identical
+links, executable scripts, synchronized MSRV/oracle declarations, and identical
 top-level CI/pre-push entrypoints. It also verifies that the integration script
-still includes the quality gate and that the security workflow remains wired
-to RustSec.
+still includes the quality gate, all three oracle version checks, and that the
+security workflow remains wired to RustSec.
 
 The ordinary gate deliberately does not enable every `clippy::pedantic` or
 `clippy::nursery` lint. Solver code contains exact numeric conversions,

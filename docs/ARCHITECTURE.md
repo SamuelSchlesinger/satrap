@@ -658,11 +658,15 @@ the original active roots, exact predicate truth values, integer integrality,
 and every relevant selected arithmetic-`ite` branch. Failure is reported as
 `unknown`, and model inspection is available only after `sat`; resource or
 incompleteness results never manufacture a placeholder model. The integration
-suite additionally replays 72 deterministic IDL/LIA/RDL/LRA models as exact
-constant bindings into Z3 and replays 16 arithmetic-combination models in full,
-including function and array definitions. Each replay requires the original
-formula to remain satisfiable. This external corpus is a useful independent
-oracle, not yet a fragment-complete model-validation architecture.
+suite additionally checks deterministic results against pinned Z3, cvc5, and
+Bitwuzla releases. Z3 covers all 3,872 generated queries, cvc5 covers 3,744,
+and Bitwuzla covers the 800 finite QF_BV/QF_AUFBV queries within its supported
+fragment. It also replays 72 deterministic IDL/LIA/RDL/LRA models as exact
+constant bindings through both Z3 and cvc5 and replays 16
+arithmetic-combination models in full through both, including function and
+array definitions. Each replay requires the original formula to remain
+satisfiable. This external corpus is useful independent evidence, not yet a
+fragment-complete model-validation architecture.
 
 The implemented layering is:
 

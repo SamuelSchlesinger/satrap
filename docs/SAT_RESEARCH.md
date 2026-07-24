@@ -99,13 +99,15 @@ instance” will mean a model or proof artifact that another tool can verify.
   solver exits, detects solver disagreement, and emits JSONL.
 
 The SMT implementation is deliberately pre-competition. Deterministic
-differential corpora currently agree with Z3 4.16.0 on 544 QF_BV, 384 QF_UF,
-256 QF_UFBV, 256 QF_ABV, 128 QF_AUFBV, and 1,024 exact QF_IDL/QF_RDL/QF_LRA
-incremental queries, plus 384 QF_LIA queries. This is only one external solver,
-plus 640 QF_UFIDL/QF_UFLIA/QF_UFLRA/QF_AUFLIA combination queries. This is only
-one external solver, generated corpora are not representative benchmarks, the
-72 scalar and 16 full combination model replays are not yet fragment-complete,
-and theory UNSAT results do not yet carry independently checkable proofs.
+differential corpora contain 3,872 incremental queries across QF_BV, QF_UF,
+QF_UFBV, QF_ABV, QF_AUFBV, exact QF_IDL/QF_LIA/QF_RDL/QF_LRA, and the four
+required arithmetic combinations. Z3 4.16.0 covers every query, cvc5 1.3.3
+covers 3,744, and Bitwuzla 0.9.1 covers 800 finite QF_BV/QF_AUFBV queries.
+The harness rejects `unknown` rather than counting it as agreement. Generated
+corpora are not representative benchmarks, the 72 scalar and 16 full
+combination models are replayed through both Z3 and cvc5 but are not yet
+fragment-complete, and theory UNSAT results do not yet carry independently
+checkable proofs.
 Complete protocol conformance, signal-driven interruption, fuzzing, and the
 world-class benchmark gates remain open and are tracked candidly in
 [the roadmap](ROADMAP.md).

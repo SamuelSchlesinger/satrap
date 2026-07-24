@@ -45,10 +45,10 @@ Each case is solved by `target/release/sat`, must report UNSAT with exit code
 the original DIMACS input.
 
 The same gate also exercises online QF_BOOL, QF_BV, QF_UF, QF_UFBV, QF_ABV,
-QF_AUFBV, QF_IDL, QF_LIA, QF_RDL, and QF_LRA queries with named assertions,
-active scopes, definitions, resets, Boolean conditions, and the supported
-Boolean, fixed-width bit-vector, ground-UF, non-nested-array, and exact
-linear-arithmetic operations. With
+QF_AUFBV, QF_IDL, QF_LIA, QF_RDL, QF_LRA, QF_UFIDL, QF_UFLIA, QF_UFLRA,
+and QF_AUFLIA queries with named assertions, active scopes, definitions,
+resets, Boolean conditions, and the supported Boolean, fixed-width bit-vector,
+ground-UF, non-nested-array, and exact linear-arithmetic operations. With
 `:produce-proofs true`, `get-proof` returns a versioned `satrap-edrat`
 S-expression. The proof producer rebuilds the active assertion context and
 lowering as fresh permanent formulas, so internal activation selectors and
@@ -61,9 +61,8 @@ nonempty `check-sat-assuming` call. A plain `check-sat`, or
 `push`/`pop` scopes and `:named` assertions are part of that context.
 
 `tools/check_smt_proof.py` is a separate implementation of the proof-bearing
-QF_BOOL, QF_BV, QF_UF, QF_UFBV, QF_ABV, QF_AUFBV, QF_IDL, QF_LIA, QF_RDL,
-and QF_LRA front ends, lowerings, and canonical encoder. Given the original
-script, it:
+front ends, lowerings, and canonical encoder for those 14 fragments. Given the
+original script, it:
 
 1. reconstructs declarations, definitions, `let` bindings, scopes, resets,
    assertions, and checked queries;
@@ -103,9 +102,9 @@ extensionality instance needed for that pair. The complete select/witness
 closure is computed before class widths or Boolean clauses are generated, and
 both producer and checker reject any later attempt to grow it. The resulting
 reduction is equisatisfiable for the supported quantifier-free, non-nested
-QF_ABV/QF_AUFBV boundary.
+QF_ABV/QF_AUFBV/QF_AUFLIA boundary.
 
-QF_IDL, QF_LIA, QF_RDL, and QF_LRA use a different theory-certificate layer.
+QF_IDL, QF_LIA, QF_RDL, and QF_LRA use an exact arithmetic-certificate layer.
 Arithmetic variables and predicates are canonicalized by source name and exact
 rational coefficients; an arithmetic `ite` is represented structurally by its
 condition and two affine branches. A discovery replay enumerates Boolean
@@ -119,6 +118,18 @@ normalized over integers and introduced divisibility constraints preserve
 parity and general modular contradictions. QF_LRA uses exact rational
 Fourier-Motzkin elimination and propagates open bounds through every
 elimination pair.
+
+QF_UFIDL, QF_UFLIA, QF_UFLRA, and QF_AUFLIA compose the finite-theory and
+arithmetic layers rather than trusting either live theory engine. Arithmetic
+arguments and results of ground applications are structural variables, and
+congruence equalities become exact arithmetic predicates. Integer array
+indices, select results, stored values, and extensional witnesses use the same
+representation. Arithmetic discovery sees both user roots and every generated
+congruence, read-over-write, and extensionality axiom. QF_UFIDL deliberately
+uses the general Cooper checker because a shared equality arrangement can
+introduce linear integer constraints beyond a standalone difference-cycle
+certificate; QF_UFLIA and QF_AUFLIA also use Cooper, while QF_UFLRA uses exact
+Fourier-Motzkin elimination.
 
 The independent checker reparses the arithmetic source and repeats that
 calculation. It requires every arithmetic theory clause to cover exactly the
@@ -134,11 +145,12 @@ lemma blocks a complete required assignment rather than carrying a compact
 cycle or elimination witness, so proof discovery can be exponential in the
 number of relevant predicates; Cooper candidate periods can be large; and
 Fourier-Motzkin can grow quadratically at each eliminated variable. The
-producer and checker therefore enforce synchronized deterministic QF_LIA
-ceilings of 512 variables and 1,000,000 Cooper work steps, failing explicitly
-instead of hanging or trusting an unchecked lemma. This format certifies the
-four scalar arithmetic boundaries but is not yet a competitive certificate
-format for theory combinations.
+producer and checker therefore enforce synchronized deterministic
+linear-integer ceilings of 512 variables and 1,000,000 Cooper work steps,
+failing explicitly instead of hanging or trusting an unchecked lemma. This
+format certifies the four scalar arithmetic boundaries and all four advertised
+arithmetic combinations, but its full-assignment clauses are not a competitive
+certificate format.
 
 The required QF_BV corpus includes a compact arithmetic contradiction, a
 scoped/reset script, and an operator-surface script covering binary, hex, and
@@ -160,10 +172,12 @@ exact decimal/rational bounds, general linear-real contradictions, and
 arithmetic `ite` relevance. Producer and checker Cooper implementations each
 match bounded exhaustive search on 624 two-variable systems. Adversarial unit
 tests mutate a theory clause to block a satisfiable assignment and verify that
-the independent checker rejects it. Repository hygiene rejects a missing or
-empty canonical proof-corpus file and checks that producer/checker work limits
-agree, so deleting one case or drifting only one implementation cannot silently
-change the push gate.
+the independent checker rejects it. Four additional smoke cases require
+integer/real UF congruence, general-integer parity through congruence, and
+integer-indexed array extensionality composed with a UF observer. Repository
+hygiene rejects a missing or empty canonical proof-corpus file, checks that
+producer/checker work limits agree, and requires the Rust logic list, Python
+logic list, and per-logic smoke coverage to remain synchronized.
 
 Run that path directly with:
 
@@ -200,12 +214,14 @@ outside the explicitly listed ground fragments.
 In particular, the live incremental SAT stream deliberately does not append a
 global empty DRAT clause for assumption-only UNSAT, and the SMT-LIB layer
 rejects `get-proof` after a nonempty explicit assumption set. QF_BOOL, QF_BV,
-QF_UF, QF_UFBV, QF_ABV, QF_AUFBV, QF_IDL, QF_LIA, QF_RDL, and QF_LRA use the
-query-specific replay above for the active assertion context. This certifies
-ground UF and non-nested extensional arrays through an independently rebuilt
-finite reduction, integer and real difference logic through independently
-checked negative-cycle lemmas, and linear integer/real arithmetic through
+QF_UF, QF_UFBV, QF_ABV, QF_AUFBV, QF_IDL, QF_LIA, QF_RDL, QF_LRA, QF_UFIDL,
+QF_UFLIA, QF_UFLRA, and QF_AUFLIA use the query-specific replay above for the
+active assertion context. This certifies ground UF and non-nested extensional
+arrays through an independently rebuilt finite reduction, integer and real
+difference logic through independently checked negative-cycle lemmas, and
+linear integer/real arithmetic plus their advertised combinations through
 independently checked exact elimination. It is not a certificate for
-quantifiers, nested arrays, or arithmetic theory combinations. Proof mode
-rejects those remaining boundaries rather than emitting a certificate that
-silently trusts their lemmas. The general SMT proof gate remains open.
+quantifiers, nested arrays, nonlinear arithmetic, or any unadvertised logic.
+Proof mode rejects those boundaries rather than emitting a certificate that
+silently trusts their lemmas. Fragment-complete proof testing and a
+competition-scale compact proof format remain open.

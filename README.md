@@ -27,8 +27,9 @@ is not yet a general or state-of-the-art SMT solver. The
   local and hosted integration gates.
 - Query-specific `get-proof` certificates for the Boolean, bit-vector, ground
   UF, non-nested array, difference-logic, linear-integer, and linear-real
-  fragments. A separate checker reconstructs each active query and validates
-  every theory lemma before DRAT checking.
+  fragments and their advertised UF/array/arithmetic combinations. A separate
+  checker reconstructs each active query and validates every theory lemma
+  before DRAT checking.
 - Interactive SMT-LIB with `push`/`pop`, `check-sat-assuming`, models, values,
   assignments, named unsat cores, resource limits, and interruption.
 - Complete fixed-width QF_BV lowering, congruence closure for QF_UF, and
@@ -104,11 +105,10 @@ recoverable command errors, so it can be used as a long-lived subprocess.
 Current SMT coverage includes Core, QF_BV, QF_UF, QF_UFBV, QF_ABV, and
 QF_AUFBV, plus experimental exact QF_IDL, QF_LIA, QF_RDL, and QF_LRA.
 The corresponding QF_UFIDL, QF_UFLIA, QF_UFLRA, and QF_AUFLIA combinations
-are also implemented. Protocol edge cases, proof production for theory
-combinations, fragment-complete independent validation, sustained fuzz
-campaigns, and competition-scale performance remain open. Proof production
-currently covers QF_BOOL, QF_BV, QF_UF, QF_UFBV, QF_ABV, QF_AUFBV, QF_IDL,
-QF_LIA, QF_RDL, and QF_LRA. See
+are also implemented. Protocol edge cases, fragment-complete independent
+validation, sustained fuzz campaigns, and competition-scale performance
+remain open. Proof production currently covers all 14 listed fragments,
+including the four arithmetic theory combinations. See
 [Proof checking](docs/PROOF_CHECKING.md) for the exact boundary.
 
 ## Rust API

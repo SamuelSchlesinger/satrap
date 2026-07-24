@@ -85,13 +85,16 @@ suite and a claim-bearing benchmark campaign are documented in
 
 The proof gate additionally runs the release SMT executable online and
 reconstructs active QF_BOOL, QF_BV, QF_UF, QF_UFBV, QF_ABV, QF_AUFBV, QF_IDL,
-QF_LIA, QF_RDL, and QF_LRA queries in an independent Python implementation. It
-repeats fixed-width bit-vector lowering, finite ground-UF class/congruence
-lowering, ground extensional-array lowering, exact difference-logic
-negative-cycle, linear-integer Cooper, and linear-real Fourier-Motzkin
-validation, plus canonical CNF generation before checking the embedded DRAT
-suffix. Nested arrays and arithmetic theory combinations remain outside that
-claim and are rejected when proof production is requested.
+QF_LIA, QF_RDL, QF_LRA, QF_UFIDL, QF_UFLIA, QF_UFLRA, and QF_AUFLIA queries
+in an independent Python implementation. It repeats fixed-width bit-vector
+lowering, finite ground-UF class/congruence lowering, ground extensional-array
+lowering, exact difference-logic negative-cycle, linear-integer Cooper, and
+linear-real Fourier-Motzkin validation, plus canonical CNF generation before
+checking the embedded DRAT suffix. For arithmetic combinations, the checker
+also reconstructs arithmetic-valued UF applications, integer-array
+extensionality witnesses, and the generated theory axioms. Nested arrays and
+unadvertised logics remain outside that claim and are rejected when proof
+production is requested.
 
 `tools/check_hygiene.py` enforces the small but easy-to-forget invariants:
 UTF-8/LF text, final newlines, no trailing whitespace, valid local Markdown
@@ -101,9 +104,12 @@ entrypoints and that the integration script still includes the quality and
 fuzz gates, all three oracle version checks, every fuzz target, the
 proof-checked benchmark smoke, and that the security workflow remains wired to
 RustSec. It also requires every canonical QF_BOOL, QF_BV, QF_UF, QF_UFBV,
-QF_ABV, QF_AUFBV, QF_IDL, QF_LIA, QF_RDL, and QF_LRA proof-corpus file to
-remain present and nonempty. It also requires the Rust producer and Python
-checker to declare identical QF_LIA variable and Cooper-work ceilings.
+QF_ABV, QF_AUFBV, QF_IDL, QF_LIA, QF_RDL, QF_LRA, QF_UFIDL, QF_UFLIA,
+QF_UFLRA, and QF_AUFLIA proof-corpus file to remain present and nonempty. It
+requires the Rust producer logic list, Python checker logic list, and
+per-logic smoke coverage to stay synchronized. It also requires the producer
+and checker to declare identical linear-integer variable and Cooper-work
+ceilings.
 
 The ordinary gate deliberately does not enable every `clippy::pedantic` or
 `clippy::nursery` lint. Solver code contains exact numeric conversions,

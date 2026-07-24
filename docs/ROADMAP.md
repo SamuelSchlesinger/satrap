@@ -293,21 +293,24 @@ finite QF_BV/QF_AUFBV queries. The
 custom-sort/constant-array exclusion records an oracle capability boundary;
 `unknown` is never accepted as agreement. Fragment-complete independent model
 validation and trail-level theory propagation remain open. QF_UF, QF_UFBV,
-QF_ABV, QF_AUFBV, QF_IDL, QF_LIA, QF_RDL, and QF_LRA UNSAT queries now have
-query-specific certificates. For UF and arrays, an independent checker reparses
-the scoped source, reconstructs canonical finite class-bit,
-Ackermann-congruence, read-over-write, and extensional-witness reductions,
-regenerates the exact CNF, and checks the DRAT suffix. For arithmetic, it
-reconstructs exact affine predicates and arithmetic `ite` definitions, requires
-each theory clause to block a complete Boolean assignment, and independently
-validates that assignment by negative-cycle detection, exact Cooper
-elimination, or exact Fourier-Motzkin elimination before checking DRAT. The
-required smoke corpus covers finite-theory features, integer/real difference
-cycles, general integer parity and linear-real contradictions, strict bounds,
-exact rationals, and arithmetic `ite` relevance. Satisfiable, adversarial, and
+QF_ABV, QF_AUFBV, QF_IDL, QF_LIA, QF_RDL, QF_LRA, QF_UFIDL, QF_UFLIA,
+QF_UFLRA, and QF_AUFLIA UNSAT queries now have query-specific certificates.
+For UF and arrays, an independent checker reparses the scoped source,
+reconstructs canonical finite class-bit, Ackermann-congruence,
+read-over-write, and extensional-witness reductions, regenerates the exact CNF,
+and checks the DRAT suffix. For arithmetic, including its combinations with UF
+and arrays, it reconstructs exact affine predicates, arithmetic-valued
+applications and witnesses, generated theory axioms, and arithmetic `ite`
+definitions. Each theory clause must block a complete Boolean assignment,
+which the checker independently validates by negative-cycle detection, exact
+Cooper elimination, or exact Fourier-Motzkin elimination before checking DRAT.
+The required smoke corpus covers finite-theory features, integer/real
+difference cycles, general integer parity and linear-real contradictions,
+strict bounds, exact rationals, arithmetic `ite` relevance, mixed congruence,
+and integer-array extensionality. Satisfiable, adversarial, and
 bounded-exhaustive unit cases guard against over-strong reductions or invalid
-theory lemmas. Nested-array and arithmetic-combination proofs remain open, and
-these generated corpora are not a complete validation argument.
+theory lemmas. Nested-array and unadvertised-logic proofs remain open, and these
+generated corpora are not a complete validation argument.
 
 ## Gate 5: algorithmic research and world-class evaluation
 

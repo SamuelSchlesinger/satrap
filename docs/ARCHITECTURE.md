@@ -615,17 +615,20 @@ those two logical-work budgets.
 DRAT additions and deletions remain globally valid across assumption queries,
 but an assumption-only UNSAT deliberately does not append the empty clause.
 For QF_BOOL, QF_BV, QF_UF, QF_UFBV, QF_ABV, QF_AUFBV, QF_IDL, QF_LIA,
-QF_RDL, and QF_LRA, `get-proof` instead starts a fresh replay of the active
-assertion context and returns a versioned `satrap-edrat` container. Boolean
+QF_RDL, QF_LRA, QF_UFIDL, QF_UFLIA, QF_UFLRA, and QF_AUFLIA, `get-proof`
+instead starts a fresh replay of the active assertion context and returns a
+versioned `satrap-edrat` container. Boolean
 declarations, named bit positions, sorts, constants, applications, array
 operations, extensional witnesses, and affine predicates are canonical proof
 terms, independent of internal allocation history. An independent checker
 reconstructs the scoped source query, repeats the appropriate finite reduction,
 negative-cycle check, exact Cooper elimination, or exact Fourier-Motzkin
 elimination and canonical Tseitin encoding, then gives the DRAT suffix to
-pinned DRAT-trim. In accordance with SMT-LIB 2.7, `get-proof` is rejected after
-a nonempty `check-sat-assuming` call. Nested arrays and arithmetic theory
-combinations remain outside this proof boundary.
+pinned DRAT-trim. Combination replay composes finite congruence/array axioms
+with exact arithmetic assignment checking. In accordance with SMT-LIB 2.7,
+`get-proof` is rejected after a nonempty `check-sat-assuming` call. Nested
+arrays, nonlinear arithmetic, and unadvertised logics remain outside this
+proof boundary.
 
 ## Implemented SMT boundary
 
@@ -648,7 +651,11 @@ read-over-write semantics are installed as permanent theory axioms.
 Extensional equality introduces a fresh index witness. Read demand propagates
 only across array equalities, array-valued `ite`s, and potentially congruent
 array-valued applications; it does not build a global array-by-index Cartesian
-product.
+product. Relevant pairs of user-declared applications with array arguments
+also receive on-demand extensional equality arrangements, ensuring that a UF
+cannot distinguish extensionally equal arrays. Built-in select applications
+are excluded from that arrangement step to avoid recursively generating
+witness reads; their congruence remains governed by the array axioms.
 
 Arithmetic terms are canonical affine expressions with arbitrary-precision
 integer and rational coefficients. Integer difference constraints normalize to
@@ -710,8 +717,11 @@ UF-valued and array-valued `ite` terms select class labels. Array replay closes
 the reachable hidden-select applications, adds constant/read-over-write/`ite`
 semantics, and creates one canonical extensional witness for each pair of
 ground array terms. Boolean and bit-vector arguments/results retain their
-native encodings. The closure is frozen before Boolean lowering and the entire
-finite reduction is independently reconstructed before DRAT checking.
+native encodings. Arithmetic arguments/results and integer extensional
+witnesses remain exact affine terms, so generated equalities feed the same
+Cooper or Fourier-Motzkin assignment checker as user predicates. The closure is
+frozen before Boolean lowering and the entire finite/arithmetic reduction is
+independently reconstructed before DRAT checking.
 
 Difference-logic replay canonicalizes declared variables, exact affine
 predicates, and arithmetic `ite` variables by source structure. A discovery
@@ -724,9 +734,8 @@ assignment.
 
 Resource limits currently charge SAT conflicts/propagations, not parsing,
 lowering, theory preparation, proof replay, or final checking. Trail-level
-propagation, fragment-complete independent SMT model validation, and
-independently checkable proofs for general arithmetic and theory combinations
-remain future work.
+propagation, fragment-complete independent SMT model validation, compact
+arithmetic proof witnesses, and broader proof campaigns remain future work.
 
 ## Performance policy
 

@@ -12,6 +12,7 @@ use crate::{Lit, Model, SolveLimits, Solver, UnknownReason};
 use super::arithmetic::rational_from_decimal;
 use super::encode::BoolEncoder;
 use super::engine::{SmtSolveResult, solve as solve_smt};
+use super::proof::{BooleanRefutation, prove_boolean_unsat};
 use super::sexpr::{Reader, SExpr};
 use super::term::{
     ArraySortId, FunctionId, Sort, SymbolId, TermId, TermKind, TermStore, UninterpretedSortId,
@@ -91,6 +92,7 @@ enum LastCheck {
     Unsat {
         core: Vec<String>,
         assumptions: Vec<String>,
+        proof: Option<BooleanRefutation>,
     },
     Unknown {
         reason: UnknownReason,
@@ -105,6 +107,7 @@ struct Options {
     produce_assertions: bool,
     produce_unsat_cores: bool,
     produce_unsat_assumptions: bool,
+    produce_proofs: bool,
     global_declarations: bool,
     resource_limit: Option<u64>,
 }
@@ -211,7 +214,7 @@ impl Session {
             "get-assertions" => self.get_assertions(arguments),
             "get-unsat-core" => self.get_unsat_core(arguments),
             "get-unsat-assumptions" => self.get_unsat_assumptions(arguments),
-            "get-proof" => Err(CommandError::Unsupported),
+            "get-proof" => self.get_proof(arguments),
             "reset-assertions" => self.reset_assertions(arguments),
             "reset" => self.reset(arguments),
             "echo" => self.echo(arguments),
@@ -250,6 +253,9 @@ impl Session {
         ) {
             return Err(CommandError::Unsupported);
         }
+        if self.options.produce_proofs && logic != "QF_BOOL" {
+            return Err(CommandError::Unsupported);
+        }
         self.logic = Some(logic.to_owned());
         Ok(CommandValue::Success)
     }
@@ -281,6 +287,10 @@ impl Session {
                 self.require_start_mode(option)?;
                 self.options.produce_unsat_assumptions = expect_bool_atom(&arguments[1], option)?;
             }
+            ":produce-proofs" => {
+                self.require_start_mode(option)?;
+                self.options.produce_proofs = expect_bool_atom(&arguments[1], option)?;
+            }
             ":global-declarations" => {
                 self.require_start_mode(option)?;
                 self.options.global_declarations = expect_bool_atom(&arguments[1], option)?;
@@ -307,13 +317,13 @@ impl Session {
             }
             ":produce-unsat-cores" => bool_text(self.options.produce_unsat_cores),
             ":produce-unsat-assumptions" => bool_text(self.options.produce_unsat_assumptions),
+            ":produce-proofs" => bool_text(self.options.produce_proofs),
             ":global-declarations" => bool_text(self.options.global_declarations),
             ":reproducible-resource-limit" => {
                 return Ok(CommandValue::Text(
                     self.options.resource_limit.unwrap_or(0).to_string(),
                 ));
             }
-            ":produce-proofs" => "false",
             ":random-seed" => "0",
             _ => return Err(CommandError::Unsupported),
         };
@@ -666,6 +676,13 @@ impl Session {
             .flat_map(|frame| frame.assertion_terms.iter().copied())
             .collect::<Vec<_>>();
         roots.extend(user_assumptions.iter().map(|assumption| assumption.term));
+        let proof_premises =
+            (self.options.produce_proofs && user_assumptions.is_empty()).then(|| {
+                self.frames
+                    .iter()
+                    .flat_map(|frame| frame.assertions.iter().cloned())
+                    .collect::<Vec<_>>()
+            });
         let result = solve_smt(
             &mut self.terms,
             &mut self.solver,
@@ -685,6 +702,15 @@ impl Session {
                 "sat"
             }
             SmtSolveResult::Unsat => {
+                let proof = if let Some(premises) = proof_premises.as_deref() {
+                    let symbol_names = self.active_boolean_symbol_names()?;
+                    Some(
+                        prove_boolean_unsat(&self.terms, &roots, premises, &symbol_names)
+                            .map_err(CommandError::from)?,
+                    )
+                } else {
+                    None
+                };
                 let failed = self.solver.failed_assumptions();
                 let core = named
                     .iter()
@@ -696,7 +722,11 @@ impl Session {
                     .filter(|assumption| failed.contains(&assumption.literal))
                     .map(|assumption| assumption.source.clone())
                     .collect();
-                self.last_check = LastCheck::Unsat { core, assumptions };
+                self.last_check = LastCheck::Unsat {
+                    core,
+                    assumptions,
+                    proof,
+                };
                 "unsat"
             }
             SmtSolveResult::Unknown(reason) => {
@@ -836,6 +866,26 @@ impl Session {
             ));
         };
         Ok(CommandValue::Text(format!("({})", assumptions.join(" "))))
+    }
+
+    fn get_proof(&self, arguments: &[SExpr]) -> Result<CommandValue, CommandError> {
+        expect_arity(arguments, 0, "get-proof")?;
+        if !self.options.produce_proofs {
+            return Err(CommandError::message(
+                "proof production is disabled; set :produce-proofs true",
+            ));
+        }
+        let LastCheck::Unsat { proof, .. } = &self.last_check else {
+            return Err(CommandError::message(
+                "get-proof requires a preceding unsat result",
+            ));
+        };
+        let Some(proof) = proof else {
+            return Err(CommandError::message(
+                "get-proof requires the preceding check to have an empty assumption set",
+            ));
+        };
+        Ok(CommandValue::Text(proof.render()))
     }
 
     fn reset_assertions(&mut self, arguments: &[SExpr]) -> Result<CommandValue, CommandError> {
@@ -1980,6 +2030,20 @@ impl Session {
         }
     }
 
+    fn active_boolean_symbol_names(&self) -> Result<HashMap<SymbolId, String>, CommandError> {
+        let mut names = HashMap::new();
+        for declaration in self.active_declarations() {
+            let TermKind::Atom(symbol) = self.terms.node(declaration.term).kind else {
+                return Err(CommandError::message(format!(
+                    "QF_BOOL proof declaration `{}` is not a Boolean atom",
+                    declaration.name
+                )));
+            };
+            names.insert(symbol, declaration.name.clone());
+        }
+        Ok(names)
+    }
+
     fn invalidate_check(&mut self) {
         self.last_check = LastCheck::None;
     }
@@ -2384,6 +2448,90 @@ mod tests {
              (get-unsat-assumptions)",
         );
         assert_eq!(output, "unsat\n(implication premise)\n((not q))\n");
+    }
+
+    #[test]
+    fn qf_bool_proofs_replay_active_scopes_as_permanent_formulas() {
+        let output = execute(
+            "(set-option :produce-proofs true)
+             (get-option :produce-proofs)
+             (set-logic QF_BOOL)
+             (declare-const p Bool)
+             (push 1)
+             (assert (! p :named premise))
+             (assert (not p))
+             (check-sat)
+             (get-proof)",
+        );
+        assert!(output.starts_with("true\nunsat\n(satrap-edrat :version 1 :logic QF_BOOL"));
+        assert!(output.contains(":premises (\"(! p :named premise)\" \"(not p)\")"));
+        assert!(output.contains("(formula 1)"));
+        assert!(output.contains("(formula -1)"));
+        assert!(output.ends_with("0\n\")\n"));
+    }
+
+    #[test]
+    fn get_proof_rejects_nonempty_check_sat_assumptions() {
+        let output = execute(
+            "(set-option :produce-proofs true)
+             (set-logic QF_BOOL)
+             (declare-const p Bool)
+             (assert p)
+             (check-sat-assuming ((not p)))
+             (get-proof)",
+        );
+        assert_eq!(
+            output,
+            "unsat\n\
+             (error \"get-proof requires the preceding check to have an empty assumption set\")\n"
+        );
+    }
+
+    #[test]
+    fn get_proof_accepts_an_empty_check_sat_assumption_list() {
+        let output = execute(
+            "(set-option :produce-proofs true)
+             (set-logic QF_BOOL)
+             (assert false)
+             (check-sat-assuming ())
+             (get-proof)",
+        );
+        assert!(output.starts_with("unsat\n(satrap-edrat :version 1 :logic QF_BOOL"));
+        assert!(output.contains(":premises (\"false\")"));
+        assert!(output.ends_with("0\n\")\n"));
+    }
+
+    #[test]
+    fn proof_inspection_is_invalidated_by_context_mutation() {
+        let output = execute(
+            "(set-option :produce-proofs true)
+             (set-logic QF_BOOL)
+             (assert false)
+             (check-sat)
+             (push 1)
+             (get-proof)",
+        );
+        assert_eq!(
+            output,
+            "unsat\n\
+             (error \"get-proof requires a preceding unsat result\")\n"
+        );
+    }
+
+    #[test]
+    fn proof_mode_rejects_theory_logics_until_theory_certificates_exist() {
+        let output = execute(
+            "(set-option :produce-proofs true)
+             (set-logic QF_BV)
+             (set-logic QF_BOOL)
+             (check-sat)
+             (get-proof)",
+        );
+        assert_eq!(
+            output,
+            "unsupported\nsat\n\
+             (error \"get-proof requires a preceding unsat result\")\n"
+        );
     }
 
     #[test]

@@ -660,6 +660,28 @@ pub struct SolverStats {
     pub peak_active_learned_clauses: u64,
 }
 
+/// Origin of a permanent clause retained for an independently checkable SMT
+/// proof.
+///
+/// DRAT can validate the propositional refutation only after every non-Boolean
+/// premise has been justified. Keeping theory clauses distinct prevents a
+/// proof consumer from accidentally treating them as ordinary CNF input.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ProofClauseKind {
+    Formula,
+    Encoding,
+    Theory,
+    Administrative,
+}
+
+/// One normalized clause in the proof input accumulated by an incremental
+/// solver.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct ProofInputClause {
+    pub(crate) kind: ProofClauseKind,
+    pub(crate) literals: Vec<Lit>,
+}
+
 #[derive(Debug)]
 struct Clause {
     start: usize,
@@ -1500,6 +1522,7 @@ pub struct Solver {
     cached_result: Option<SolveResult>,
     failed_assumptions: Vec<Lit>,
     original_clause_count: usize,
+    proof_input: Option<Vec<ProofInputClause>>,
     stats: SolverStats,
     conflicts_since_restart: u64,
     restart_index: u32,
@@ -1712,6 +1735,7 @@ impl Solver {
             cached_result: None,
             failed_assumptions: Vec::new(),
             original_clause_count: 0,
+            proof_input: None,
             stats: SolverStats::default(),
             conflicts_since_restart: 0,
             restart_index: 0,
@@ -1814,7 +1838,7 @@ impl Solver {
 
     /// Fallible form of [`Solver::add_clause`] for interactive clients.
     pub fn try_add_clause(&mut self, literals: &[Lit]) -> Result<bool, IncrementalError> {
-        self.add_clause_internal(literals, true, true)
+        self.add_clause_internal(literals, true, true, ProofClauseKind::Formula)
     }
 
     /// Adds a permanent encoding lemma even when a user assertion scope is
@@ -1824,7 +1848,13 @@ impl Solver {
         &mut self,
         literals: &[Lit],
     ) -> Result<bool, IncrementalError> {
-        self.add_clause_internal(literals, false, false)
+        self.add_clause_internal(literals, false, false, ProofClauseKind::Encoding)
+    }
+
+    /// Adds a permanent SMT theory lemma and records its origin separately
+    /// from Boolean encoding clauses.
+    pub(crate) fn add_theory_clause(&mut self, literals: &[Lit]) -> Result<bool, IncrementalError> {
+        self.add_clause_internal(literals, false, false, ProofClauseKind::Theory)
     }
 
     fn add_clause_internal(
@@ -1832,6 +1862,7 @@ impl Solver {
         literals: &[Lit],
         guard_with_scope: bool,
         count_as_input: bool,
+        proof_kind: ProofClauseKind,
     ) -> Result<bool, IncrementalError> {
         self.prepare_incremental_mutation()?;
         if count_as_input {
@@ -1873,6 +1904,12 @@ impl Solver {
             write += 1;
         }
         normalized.truncate(write);
+        if let Some(proof_input) = &mut self.proof_input {
+            proof_input.push(ProofInputClause {
+                kind: proof_kind,
+                literals: normalized.clone(),
+            });
+        }
         if self.config.bounded_variable_addition
             && (2..=Self::FACTORIZATION_MAX_CLAUSE_LENGTH).contains(&normalized.len())
         {
@@ -2014,9 +2051,27 @@ impl Solver {
                 .scope_selectors
                 .pop()
                 .expect("scope count checked above");
-            self.add_clause_internal(&[!selector], false, false)?;
+            self.add_clause_internal(&[!selector], false, false, ProofClauseKind::Administrative)?;
         }
         Ok(())
+    }
+
+    /// Starts retaining normalized input clauses for query-specific SMT proof
+    /// construction.
+    ///
+    /// Proof recording must be selected before the session creates any SAT
+    /// variables or clauses, matching SMT-LIB's start-mode requirement for
+    /// `:produce-proofs`.
+    pub(crate) fn enable_smt_proof_recording(&mut self) {
+        assert!(
+            !self.started && self.external_variable_count == 0 && self.proof_input.is_none(),
+            "SMT proof recording must be enabled before encoding begins"
+        );
+        self.proof_input = Some(Vec::new());
+    }
+
+    pub(crate) fn proof_input(&self) -> Option<&[ProofInputClause]> {
+        self.proof_input.as_deref()
     }
 
     /// Number of currently active clause scopes.

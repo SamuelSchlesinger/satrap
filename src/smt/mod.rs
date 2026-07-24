@@ -9,6 +9,7 @@ mod arithmetic;
 mod bitvec;
 mod encode;
 mod engine;
+mod proof;
 mod session;
 mod sexpr;
 mod term;

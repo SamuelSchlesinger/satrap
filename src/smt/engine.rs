@@ -57,7 +57,7 @@ pub(crate) fn solve(
     let preparation = theories.prepare(terms, roots)?;
     for axiom in preparation.axioms {
         let literal = encoder.encode(terms, solver, axiom)?;
-        solver.add_encoding_clause(&[literal])?;
+        solver.add_theory_clause(&[literal])?;
     }
     theories.acknowledge_array_axioms(preparation.array_axiom_count);
     let validation_terms = preparation.required.clone();
@@ -120,7 +120,7 @@ pub(crate) fn solve(
                         Ok(if literal.positive { encoded } else { !encoded })
                     })
                     .collect::<Result<Vec<_>, IncrementalError>>()?;
-                solver.add_encoding_clause(&clause)?;
+                solver.add_theory_clause(&clause)?;
             }
         }
     }

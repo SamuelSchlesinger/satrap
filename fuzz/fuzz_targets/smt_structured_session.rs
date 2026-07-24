@@ -11,6 +11,7 @@ struct Fragment {
     declarations: &'static str,
     assertions: &'static [&'static str],
     values: &'static str,
+    non_boolean_assumption: &'static str,
 }
 
 const FRAGMENTS: &[Fragment] = &[
@@ -32,6 +33,7 @@ const FRAGMENTS: &[Fragment] = &[
             "(= (ite q x y) x)",
         ],
         values: "(x y (bvadd x y) (bvult x y))",
+        non_boolean_assumption: "x",
     },
     Fragment {
         logic: "QF_UF",
@@ -54,6 +56,7 @@ const FRAGMENTS: &[Fragment] = &[
             "(distinct (f (f a)) (f b))",
         ],
         values: "(a b (f a) (p a))",
+        non_boolean_assumption: "a",
     },
     Fragment {
         logic: "QF_AUFBV",
@@ -76,6 +79,7 @@ const FRAGMENTS: &[Fragment] = &[
             "(= (select (ite q a (store a i x)) i) x)",
         ],
         values: "(i j x (select a i) (f x))",
+        non_boolean_assumption: "x",
     },
     Fragment {
         logic: "QF_LIA",
@@ -95,6 +99,7 @@ const FRAGMENTS: &[Fragment] = &[
             "(or (= x y) (< x y))",
         ],
         values: "(x y (+ x y) (<= x y))",
+        non_boolean_assumption: "x",
     },
     Fragment {
         logic: "QF_LRA",
@@ -114,6 +119,7 @@ const FRAGMENTS: &[Fragment] = &[
             "(or (= x y) (< x y))",
         ],
         values: "(x y (+ x y) (<= x y))",
+        non_boolean_assumption: "x",
     },
     Fragment {
         logic: "QF_UFLIA",
@@ -134,6 +140,7 @@ const FRAGMENTS: &[Fragment] = &[
             "(or (= (f x) y) (> x y))",
         ],
         values: "(x y (f x) (+ (f x) y))",
+        non_boolean_assumption: "x",
     },
     Fragment {
         logic: "QF_AUFLIA",
@@ -155,6 +162,7 @@ const FRAGMENTS: &[Fragment] = &[
             "(= (select (ite q a (store a x y)) x) y)",
         ],
         values: "(x y (select a x) (f x))",
+        non_boolean_assumption: "x",
     },
     Fragment {
         logic: "QF_UFIDL",
@@ -175,6 +183,7 @@ const FRAGMENTS: &[Fragment] = &[
             "(or (= x y) (< x y))",
         ],
         values: "(x y (f x) (- x y))",
+        non_boolean_assumption: "x",
     },
 ];
 
@@ -215,8 +224,15 @@ fn structured_script(data: &[u8]) -> String {
                 writeln!(script, "(get-value {})", fragment.values).unwrap();
             }
             7 => {
+                writeln!(
+                    script,
+                    "(check-sat-assuming ((xor q (not q)) {}))",
+                    fragment.non_boolean_assumption
+                )
+                .unwrap();
                 script.push_str(
-                    "(check-sat-assuming (q (not q)))\n\
+                    "(check-sat)\n\
+                     (check-sat-assuming (q (not q)))\n\
                      (get-unsat-assumptions)\n",
                 );
             }

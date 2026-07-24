@@ -17,7 +17,11 @@ QF_LRA, QF_UFLIA, QF_AUFLIA, and QF_UFIDL fragments. Seed corpora preserve
 representative raw, incremental, malformed, theory-combination, and
 nontrivial-UNSAT cases. The raw corpus includes both unterminated input and
 balanced lexical/top-level errors followed by valid commands, guarding
-continued-execution resynchronization as well as rejection.
+continued-execution resynchronization as well as rejection. It also retains a
+transactionality seed with a valid assumption prefix followed by an ill-sorted
+term, failed UF term commands, a subsequent model query, and an oversized bulk
+scope request. The structured target generates the same invalid-prefix pattern
+in every fragment before continuing with ordinary checks.
 
 ## Install and run the push gate
 

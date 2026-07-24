@@ -256,6 +256,12 @@ implemented. The command state machine preserves model inspection after
 The streaming reader now also reports lexical and top-level S-expression
 errors on the regular channel, flushes before reading ahead, skips exactly the
 remaining balanced malformed command, and preserves the prior solver state.
+Recoverable front-end semantic errors now use constant-time term-arena
+checkpoints with precise rollback of provisional UF values, arithmetic terms,
+array demands, and hash-consing indexes. Assumption lists validate completely
+before installing a Boolean encoding prefix, and bulk scope creation
+preflights variable and allocation limits before changing either the SMT or
+typed-API stack.
 Closed inline `:named` terms now follow the standard postorder visibility
 rules, declaration scopes, command-error rollback, and distinct assignment
 label versus outer-assertion core semantics. The independent proof checker
@@ -268,10 +274,11 @@ fixed-width bit-vector lowering from the original script, regenerates the
 canonical CNF, and invokes pinned DRAT-trim. Its small-width arithmetic
 semantics are exhaustively tested. Standard `get-proof` requests after
 nonempty explicit assumption sets are rejected. Fragment-complete independent
-model validation, complete execution-mode conformance, sustained fuzzing, and
+model validation, complete execution-mode conformance (including injected
+failures during deep solver/theory/proof mutation), sustained fuzzing, and
 representative performance evaluation are not complete, so this gate remains
-open. The checked and open protocol boundary is catalogued in
-[SMT-LIB support](SMT_LIB.md).
+open. The checked and open protocol boundary is catalogued in [SMT-LIB
+support](SMT_LIB.md).
 
 ## Gate 4: general CDCL(T) coverage
 

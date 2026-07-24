@@ -26,6 +26,17 @@ for the closing delimiter or end of input. A failure of the underlying input
 or output stream remains a fatal I/O error rather than a recoverable SMT-LIB
 command error.
 
+Within the checked front-end boundary, continued execution is transactional.
+Rejected declarations, definitions, assertions, assumption lists, inline
+definitions, and value queries restore the term arena as well as the visible
+signature and assertion stack. This includes UF/application identities,
+arithmetic auxiliaries, array read demands, and hash-consing indexes. An
+assumption list is fully parsed and sort-checked before any Boolean prefix is
+encoded, so a bad later assumption cannot perturb the next deterministic
+check. Multi-level `push` preflights the packed-variable ceiling and reserves
+all required scope storage before changing the stack; an oversized request
+therefore fails promptly with every prior scope intact.
+
 The implemented command families are:
 
 | Family | Commands |
@@ -117,11 +128,12 @@ described in [Proof checking](PROOF_CHECKING.md).
 Rust unit and integration tests cover online response flushing, mode
 transitions, immediate output redirection and rollback, scoped declarations,
 command and syntax errors with context reuse, balanced parser
-resynchronization, model inspection after `unknown`, and `reset-assertions`
-with both local and global declarations. The shared push/CI gate also runs raw
-and structured session fuzz targets, 3,872 deterministic queries against
-pinned independent solvers, model replays, core replays, and the query-specific
-proof corpus.
+resynchronization, rejected-command term and model identity, atomic bulk scope
+limits, model inspection after `unknown`, and `reset-assertions` with both
+local and global declarations. The shared push/CI gate also runs raw and
+structured session fuzz targets, 3,872 deterministic queries against pinned
+independent solvers, model replays, core replays, and the query-specific proof
+corpus.
 
 Those checks are strong regression evidence, not a complete conformance suite.
 The remaining protocol work includes:
@@ -130,6 +142,7 @@ The remaining protocol work includes:
 - datatypes, recursion, maps, and quantifiers;
 - preserving user sort-alias spelling in every printed response; and
 - a fragment-complete, standard-section-indexed conformance corpus, including
-  broader quoted-symbol and annotation-attribute coverage.
+  broader quoted-symbol and annotation-attribute coverage and injected
+  failures during solver, theory, proof, and stream mutation.
 
 These gaps remain release blockers in the [research roadmap](ROADMAP.md).

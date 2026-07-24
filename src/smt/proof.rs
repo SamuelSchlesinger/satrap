@@ -204,6 +204,16 @@ enum ProofArithmeticVariable {
         then_expression: Box<ProofLinearExpression>,
         else_expression: Box<ProofLinearExpression>,
     },
+    Application {
+        sort: ProofSort,
+        application: Box<ProofApplication>,
+    },
+    ArrayWitness {
+        sort: ProofSort,
+        array_sort: ProofSort,
+        left: AbstractExpr,
+        right: AbstractExpr,
+    },
 }
 
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -274,6 +284,10 @@ enum ProofValue {
     Bool(BoolExpr),
     BitVec(Vec<BoolExpr>),
     Abstract(AbstractExpr),
+    Arithmetic {
+        sort: ProofSort,
+        expression: ProofLinearExpression,
+    },
 }
 
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -429,10 +443,14 @@ pub(crate) fn prove_boolean_unsat(
         (raw_roots, Vec::new())
     };
 
-    let arithmetic_problem = logic
-        .arithmetic_kind()
-        .map(|kind| ArithmeticProblem::from_roots(kind, &roots))
-        .transpose()?;
+    let arithmetic_problem = if let Some(kind) = logic.arithmetic_kind() {
+        let mut formulas = Vec::with_capacity(roots.len() + theory_axioms.len());
+        formulas.extend(roots.iter().cloned());
+        formulas.extend(theory_axioms.iter().cloned());
+        Some(ArithmeticProblem::from_roots(kind, &formulas)?)
+    } else {
+        None
+    };
     let theory_lemmas = arithmetic_problem
         .as_ref()
         .map(|problem| discover_arithmetic_lemmas(&roots, &theory_axioms, problem))
@@ -721,7 +739,9 @@ impl ArithmeticProblem {
                 continue;
             }
             match variable {
-                ProofArithmeticVariable::Declared { sort, .. } => {
+                ProofArithmeticVariable::Declared { sort, .. }
+                | ProofArithmeticVariable::Application { sort, .. }
+                | ProofArithmeticVariable::ArrayWitness { sort, .. } => {
                     if sort != &self.sort {
                         return Err(ProofError::new(
                             "arithmetic proof contains a variable of the wrong sort",
@@ -1609,6 +1629,7 @@ struct Canonicalizer {
     application_converted: HashMap<usize, ProofApplication>,
     application_results: HashMap<TermId, usize>,
     application_bits: HashMap<TermId, (usize, u32)>,
+    arithmetic_applications: HashMap<ArithmeticVariableId, usize>,
     arithmetic_converted: HashMap<ArithmeticVariableId, ProofArithmeticVariable>,
     arithmetic_ites: HashMap<ArithmeticVariableId, super::term::ArithmeticIte>,
     abstract_terms: BTreeMap<ProofSort, BTreeSet<AbstractExpr>>,
@@ -1623,6 +1644,7 @@ impl Canonicalizer {
     fn new(terms: &TermStore) -> Result<Self, ProofError> {
         let mut application_bits = HashMap::new();
         let mut application_results = HashMap::new();
+        let mut arithmetic_applications = HashMap::new();
         for (application_index, application) in terms.applications().iter().enumerate() {
             application_results.insert(application.result, application_index);
             match terms
@@ -1644,7 +1666,18 @@ impl Canonicalizer {
                         application_bits.insert(bit, (application_index, bit_index));
                     }
                 }
-                Sort::Int | Sort::Real | Sort::Uninterpreted(_) | Sort::Array(_) => {}
+                Sort::Int | Sort::Real => {
+                    let variable = terms
+                        .arithmetic_variable_for_term(application.result)
+                        .map_err(|error| ProofError::new(error.to_string()))?
+                        .ok_or_else(|| {
+                            ProofError::new(
+                                "arithmetic application result is not a canonical variable",
+                            )
+                        })?;
+                    arithmetic_applications.insert(variable, application_index);
+                }
+                Sort::Uninterpreted(_) | Sort::Array(_) => {}
             }
         }
         let mut arithmetic_ites = HashMap::new();
@@ -1663,6 +1696,7 @@ impl Canonicalizer {
             application_converted: HashMap::new(),
             application_results,
             application_bits,
+            arithmetic_applications,
             arithmetic_converted: HashMap::new(),
             arithmetic_ites,
             abstract_terms: BTreeMap::new(),
@@ -1833,6 +1867,19 @@ impl Canonicalizer {
                 sort: sort.clone(),
                 name: name.clone(),
             }
+        } else if let Some(application_index) = self.arithmetic_applications.get(&variable).copied()
+        {
+            let application = self.convert_application(terms, application_index, names)?;
+            let sort = application.range.clone();
+            if !matches!(sort, ProofSort::Int | ProofSort::Real) {
+                return Err(ProofError::new(
+                    "arithmetic proof application has a non-arithmetic result sort",
+                ));
+            }
+            ProofArithmeticVariable::Application {
+                sort,
+                application: Box::new(application),
+            }
         } else if let Some(item) = self.arithmetic_ites.get(&variable).copied() {
             let source_sort = terms
                 .sort(item.result)
@@ -1899,9 +1946,17 @@ impl Canonicalizer {
             Sort::Uninterpreted(_) | Sort::Array(_) => Ok(ProofValue::Abstract(
                 self.convert_abstract(terms, term, names)?,
             )),
-            Sort::Int | Sort::Real => Err(ProofError::new(
-                "proof replay encountered an unsupported application sort",
-            )),
+            Sort::Int | Sort::Real => Ok(ProofValue::Arithmetic {
+                sort: self.proof_sort(terms, expected, names)?,
+                expression: self.convert_linear_expression(
+                    terms,
+                    terms
+                        .arithmetic_expression_for_term(term)
+                        .map_err(|error| ProofError::new(error.to_string()))?,
+                    expected,
+                    names,
+                )?,
+            }),
         }
     }
 
@@ -2126,7 +2181,16 @@ impl Canonicalizer {
             return Ok(lowered.clone());
         }
         let lowered = match expression.node() {
-            BoolNode::False | BoolNode::True | BoolNode::Atom(_) => expression.clone(),
+            BoolNode::False | BoolNode::True => expression.clone(),
+            BoolNode::Atom(ProofAtom::ArithmeticPredicate {
+                sort,
+                expression,
+                strict,
+            }) => {
+                let expression = self.lower_linear_expression(expression)?;
+                self.arithmetic_predicate(sort.clone(), expression, *strict)?
+            }
+            BoolNode::Atom(_) => expression.clone(),
             BoolNode::Not(inner) => {
                 let inner = self.lower(inner)?;
                 self.not(inner)
@@ -2165,6 +2229,93 @@ impl Canonicalizer {
         };
         self.lowered.insert(expression.clone(), lowered.clone());
         Ok(lowered)
+    }
+
+    fn lower_linear_expression(
+        &mut self,
+        expression: &ProofLinearExpression,
+    ) -> Result<ProofLinearExpression, ProofError> {
+        let mut coefficients = BTreeMap::new();
+        for (variable, coefficient) in &expression.coefficients {
+            let variable = self.lower_arithmetic_variable(variable)?;
+            let updated = coefficients
+                .get(&variable)
+                .cloned()
+                .unwrap_or_else(BigRational::zero)
+                + coefficient;
+            if updated.is_zero() {
+                coefficients.remove(&variable);
+            } else {
+                coefficients.insert(variable, updated);
+            }
+        }
+        Ok(ProofLinearExpression {
+            constant: expression.constant.clone(),
+            coefficients,
+        })
+    }
+
+    fn lower_arithmetic_variable(
+        &mut self,
+        variable: &ProofArithmeticVariable,
+    ) -> Result<ProofArithmeticVariable, ProofError> {
+        match variable {
+            ProofArithmeticVariable::Declared { .. }
+            | ProofArithmeticVariable::Application { .. }
+            | ProofArithmeticVariable::ArrayWitness { .. } => Ok(variable.clone()),
+            ProofArithmeticVariable::Ite {
+                sort,
+                condition,
+                then_expression,
+                else_expression,
+            } => Ok(ProofArithmeticVariable::Ite {
+                sort: sort.clone(),
+                condition: self.lower(condition)?,
+                then_expression: Box::new(self.lower_linear_expression(then_expression)?),
+                else_expression: Box::new(self.lower_linear_expression(else_expression)?),
+            }),
+        }
+    }
+
+    fn arithmetic_predicate(
+        &mut self,
+        sort: ProofSort,
+        expression: ProofLinearExpression,
+        strict: bool,
+    ) -> Result<BoolExpr, ProofError> {
+        if !matches!(sort, ProofSort::Int | ProofSort::Real) {
+            return Err(ProofError::new(
+                "proof arithmetic predicate has a non-arithmetic sort",
+            ));
+        }
+        if expression.coefficients.is_empty() {
+            let satisfied = if strict {
+                expression.constant.is_negative()
+            } else {
+                expression.constant.is_negative() || expression.constant.is_zero()
+            };
+            return Ok(self.bool_constant(satisfied));
+        }
+        Ok(self.intern(BoolNode::Atom(ProofAtom::ArithmeticPredicate {
+            sort,
+            expression,
+            strict,
+        })))
+    }
+
+    fn arithmetic_equal(
+        &mut self,
+        sort: ProofSort,
+        left: &ProofLinearExpression,
+        right: &ProofLinearExpression,
+    ) -> Result<BoolExpr, ProofError> {
+        let minus_one = BigRational::from_integer(BigInt::from(-1));
+        let mut forward = left.clone();
+        forward.add_scaled(right, &minus_one);
+        let reverse = forward.clone().scaled(&minus_one);
+        let forward = self.arithmetic_predicate(sort.clone(), forward, false)?;
+        let reverse = self.arithmetic_predicate(sort, reverse, false)?;
+        Ok(self.junction(vec![forward, reverse], true))
     }
 
     fn abstract_bits(&mut self, expression: &AbstractExpr) -> Result<Vec<BoolExpr>, ProofError> {
@@ -2293,6 +2444,25 @@ impl Canonicalizer {
             (ProofValue::Abstract(left), ProofValue::Abstract(right)) => {
                 self.abstract_equal(left, right)
             }
+            (
+                ProofValue::Arithmetic {
+                    sort: left_sort,
+                    expression: left,
+                },
+                ProofValue::Arithmetic {
+                    sort: right_sort,
+                    expression: right,
+                },
+            ) => {
+                if left_sort != right_sort {
+                    return Err(ProofError::new(
+                        "arithmetic proof values have different sorts",
+                    ));
+                }
+                let left = self.lower_linear_expression(left)?;
+                let right = self.lower_linear_expression(right)?;
+                self.arithmetic_equal(left_sort.clone(), &left, &right)
+            }
             _ => Err(ProofError::new(
                 "proof values with different sorts were compared",
             )),
@@ -2326,9 +2496,13 @@ impl Canonicalizer {
                 self.register_abstract(sort, expression.clone());
                 Ok(ProofValue::Abstract(expression))
             }
-            ProofSort::Int | ProofSort::Real => Err(ProofError::new(
-                "arithmetic-valued proof applications are not yet supported",
-            )),
+            sort @ (ProofSort::Int | ProofSort::Real) => Ok(ProofValue::Arithmetic {
+                sort: sort.clone(),
+                expression: ProofLinearExpression::variable(ProofArithmeticVariable::Application {
+                    sort: sort.clone(),
+                    application: Box::new(application.clone()),
+                }),
+            }),
         }
     }
 
@@ -2446,9 +2620,17 @@ impl Canonicalizer {
             ProofSort::Array(_, _) => Err(ProofError::new(
                 "nested array indices are outside the proof boundary",
             )),
-            ProofSort::Int | ProofSort::Real => Err(ProofError::new(
-                "arithmetic array indices are outside the proof boundary",
-            )),
+            sort @ (ProofSort::Int | ProofSort::Real) => Ok(ProofValue::Arithmetic {
+                sort: sort.clone(),
+                expression: ProofLinearExpression::variable(
+                    ProofArithmeticVariable::ArrayWitness {
+                        sort: sort.clone(),
+                        array_sort: array_sort.clone(),
+                        left: left.clone(),
+                        right: right.clone(),
+                    },
+                ),
+            }),
         }
     }
 
@@ -2460,6 +2642,7 @@ impl Canonicalizer {
                     .map_err(|_| ProofError::new("proof bit-vector value is too wide"))?,
             )),
             ProofValue::Abstract(expression) => Ok(abstract_sort(expression).clone()),
+            ProofValue::Arithmetic { sort, .. } => Ok(sort.clone()),
         }
     }
 
@@ -2567,6 +2750,34 @@ impl Canonicalizer {
                         else_term: else_term.clone(),
                     },
                 ))))
+            }
+            (
+                ProofValue::Arithmetic {
+                    sort,
+                    expression: then_expression,
+                },
+                ProofValue::Arithmetic {
+                    expression: else_expression,
+                    ..
+                },
+            ) => {
+                let then_expression = self.lower_linear_expression(then_expression)?;
+                let else_expression = self.lower_linear_expression(else_expression)?;
+                if then_expression == else_expression {
+                    return Ok(ProofValue::Arithmetic {
+                        sort: sort.clone(),
+                        expression: then_expression,
+                    });
+                }
+                Ok(ProofValue::Arithmetic {
+                    sort: sort.clone(),
+                    expression: ProofLinearExpression::variable(ProofArithmeticVariable::Ite {
+                        sort: sort.clone(),
+                        condition,
+                        then_expression: Box::new(then_expression),
+                        else_expression: Box::new(else_expression),
+                    }),
+                })
             }
             _ => Err(ProofError::new(
                 "proof ite values have inconsistent representations",
@@ -3063,6 +3274,90 @@ mod tests {
         assert_eq!(first.variable_count, second.variable_count);
         assert_eq!(first.clauses, second.clauses);
         assert_eq!(first.drat, second.drat);
+    }
+
+    #[test]
+    fn canonical_lowering_combines_integer_arithmetic_with_congruence() {
+        let mut terms = TermStore::new();
+        let x = terms.fresh_term(Sort::Int).unwrap();
+        let zero = terms.arithmetic_integer(BigInt::zero()).unwrap();
+        let one = terms.arithmetic_integer(BigInt::one()).unwrap();
+        let function = terms.declare_function(&[Sort::Int], Sort::Int).unwrap();
+        let f_x = terms.apply(function, &[x]).unwrap();
+        let f_zero = terms.apply(function, &[zero]).unwrap();
+        let x_is_zero = terms.equal(&[x, zero]).unwrap();
+        let f_x_is_zero = terms.equal(&[f_x, zero]).unwrap();
+        let f_zero_is_one = terms.equal(&[f_zero, one]).unwrap();
+
+        let mut names = ProofNames::default();
+        let x_variable = terms
+            .arithmetic_variable_for_term(x)
+            .unwrap()
+            .expect("fresh arithmetic term is a variable");
+        names
+            .insert_arithmetic(x_variable, Sort::Int, "x".to_owned())
+            .unwrap();
+        names.insert_function(function, "f".to_owned());
+
+        let proof = prove_boolean_unsat(
+            ProofLogic::Lia,
+            &terms,
+            &[x_is_zero, f_x_is_zero, f_zero_is_one],
+            &[
+                "(= x 0)".to_owned(),
+                "(= (f x) 0)".to_owned(),
+                "(= (f 0) 1)".to_owned(),
+            ],
+            &names,
+        )
+        .unwrap();
+
+        assert!(proof.drat.ends_with(b"0\n"));
+        assert!(
+            proof
+                .clauses
+                .iter()
+                .any(|clause| { clause.kind == crate::solver::ProofClauseKind::Theory })
+        );
+    }
+
+    #[test]
+    fn canonical_lowering_supports_integer_array_witnesses() {
+        let mut terms = TermStore::new();
+        let array_sort = terms.array_sort(Sort::Int, Sort::Int).unwrap();
+        let array = terms.fresh_term(Sort::Array(array_sort)).unwrap();
+        let index = terms.fresh_term(Sort::Int).unwrap();
+        let selected = terms.select(array, index).unwrap();
+        let restored = terms.store(array, index, selected).unwrap();
+        let equal = terms.equal(&[restored, array]).unwrap();
+        let distinct = terms.not(equal).unwrap();
+
+        let mut names = ProofNames::default();
+        names.insert_constant(array, "a".to_owned());
+        let index_variable = terms
+            .arithmetic_variable_for_term(index)
+            .unwrap()
+            .expect("fresh arithmetic term is a variable");
+        names
+            .insert_arithmetic(index_variable, Sort::Int, "i".to_owned())
+            .unwrap();
+
+        let proof = prove_boolean_unsat(
+            ProofLogic::Lia,
+            &terms,
+            &[distinct],
+            &["(distinct (store a i (select a i)) a)".to_owned()],
+            &names,
+        )
+        .unwrap();
+
+        assert!(proof.drat.ends_with(b"0\n"));
+        assert!(
+            proof
+                .clauses
+                .iter()
+                .any(|clause| { clause.kind == crate::solver::ProofClauseKind::Theory })
+        );
     }
 
     #[test]

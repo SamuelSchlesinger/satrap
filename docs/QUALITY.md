@@ -38,12 +38,12 @@ The pre-push gate requires `cargo-audit`, ShellCheck, and Actionlint. On macOS,
 install them with:
 
 ```sh
-cargo install cargo-audit --locked
+cargo install cargo-audit --version 0.22.2 --locked
 brew install actionlint shellcheck
 ```
 
 Use the corresponding package manager on other platforms. Hosted CI installs
-its own copies and pins Actionlint to `v1.7.12`.
+its own copies and pins Actionlint to `v1.7.12` and cargo-audit to `0.22.2`.
 
 `tools/check_hygiene.py` enforces the small but easy-to-forget invariants:
 UTF-8/LF text, final newlines, no trailing whitespace, valid local Markdown

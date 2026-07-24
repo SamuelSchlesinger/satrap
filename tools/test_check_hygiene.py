@@ -80,8 +80,12 @@ class HygieneChecksTests(unittest.TestCase):
             ".githooks/pre-push": (
                 "scripts/ci.sh\nscripts/check-msrv.sh\nscripts/check-security.sh\n"
             ),
-            ".github/workflows/ci.yml": "scripts/ci.sh\nscripts/check-msrv.sh\n",
-            ".github/workflows/security.yml": "rustsec/audit-check@v2.0.0\n",
+            ".github/workflows/ci.yml": (
+                "actions/checkout@v6\nscripts/ci.sh\nscripts/check-msrv.sh\n"
+            ),
+            ".github/workflows/security.yml": (
+                "actions/checkout@v6\nscripts/check-security.sh\n"
+            ),
             "scripts/ci.sh": "scripts/quality.sh\n",
             "scripts/quality.sh": "shellcheck\nactionlint\ntools/check_hygiene.py\n",
         }
@@ -100,6 +104,29 @@ class HygieneChecksTests(unittest.TestCase):
             self.assertEqual(
                 errors,
                 ["scripts/ci.sh: must invoke scripts/quality.sh"],
+            )
+
+    def test_audit_version_check_detects_ci_drift(self) -> None:
+        directory, root = self.temporary_root()
+        with directory, patch.object(check_hygiene, "ROOT", root):
+            script = root / "scripts/check-security.sh"
+            workflow = root / ".github/workflows/security.yml"
+            script.parent.mkdir(parents=True)
+            workflow.parent.mkdir(parents=True)
+            script.write_text("required_version=0.22.2\n", encoding="utf-8")
+            workflow.write_text(
+                "run: cargo install cargo-audit --version 0.22.1 --locked\n",
+                encoding="utf-8",
+            )
+            errors: list[str] = []
+            check_hygiene.check_audit_version(errors)
+            self.assertEqual(
+                errors,
+                [
+                    "cargo-audit versions disagree: "
+                    "scripts/check-security.sh=0.22.2, "
+                    ".github/workflows/security.yml=0.22.1"
+                ],
             )
 
 

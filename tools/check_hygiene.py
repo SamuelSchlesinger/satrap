@@ -134,11 +134,11 @@ def extract_version(path: Path, pattern: str, errors: list[str]) -> tuple[int, i
         return None
     match = re.search(pattern, text, flags=re.MULTILINE)
     if match is None:
-        errors.append(f"{path.relative_to(ROOT)}: MSRV declaration not found")
+        errors.append(f"{path.relative_to(ROOT)}: version declaration not found")
         return None
     version = normalized_version(match.group(1))
     if version is None:
-        errors.append(f"{path.relative_to(ROOT)}: invalid MSRV declaration")
+        errors.append(f"{path.relative_to(ROOT)}: invalid version declaration")
     return version
 
 
@@ -168,6 +168,29 @@ def check_msrv(errors: list[str]) -> None:
             if version is not None
         )
         errors.append(f"MSRV declarations disagree: {rendered}")
+
+
+def check_audit_version(errors: list[str]) -> None:
+    declarations = {
+        "scripts/check-security.sh": extract_version(
+            ROOT / "scripts/check-security.sh",
+            r"^required_version=([0-9.]+)",
+            errors,
+        ),
+        ".github/workflows/security.yml": extract_version(
+            ROOT / ".github/workflows/security.yml",
+            r"cargo-audit --version ([0-9.]+)",
+            errors,
+        ),
+    }
+    versions = {version for version in declarations.values() if version is not None}
+    if len(versions) > 1:
+        rendered = ", ".join(
+            f"{name}={'.'.join(map(str, version))}"
+            for name, version in declarations.items()
+            if version is not None
+        )
+        errors.append(f"cargo-audit versions disagree: {rendered}")
 
 
 def require_commands(path: Path, commands: tuple[str, ...], errors: list[str]) -> None:
@@ -205,7 +228,12 @@ def check_gate_wiring(errors: list[str]) -> None:
     )
     require_commands(
         ROOT / ".github/workflows/security.yml",
-        ("rustsec/audit-check@v2.0.0",),
+        ("actions/checkout@v6", "scripts/check-security.sh"),
+        errors,
+    )
+    require_commands(
+        ROOT / ".github/workflows/ci.yml",
+        ("actions/checkout@v6",),
         errors,
     )
 
@@ -224,6 +252,7 @@ def main() -> int:
     check_text_hygiene(files, errors)
     check_markdown_links(files, errors)
     check_msrv(errors)
+    check_audit_version(errors)
     check_gate_wiring(errors)
     check_executable_scripts(errors)
 

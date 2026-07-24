@@ -5,7 +5,7 @@ Correctness comes before speed, and measured speed comes before novelty claims.
 Install the checked-in Git hooks once per clone:
 
 ```sh
-cargo install cargo-audit --locked
+cargo install cargo-audit --version 0.22.2 --locked
 brew install actionlint shellcheck  # macOS; use your package manager elsewhere
 make install-hooks
 ```

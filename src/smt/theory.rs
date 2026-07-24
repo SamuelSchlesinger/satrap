@@ -64,6 +64,10 @@ impl TheoryModel {
         self.uf.value(term)
     }
 
+    pub(crate) fn bind_abstract_value(&mut self, term: TermId, value: u32) {
+        self.uf.bind_abstract_value(term, value);
+    }
+
     pub(crate) fn application_relevant(&self, term: TermId) -> bool {
         self.uf.application_relevant(term)
     }

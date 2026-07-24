@@ -190,6 +190,7 @@ pub struct TermStore {
     applications: Vec<Application>,
     application_results: HashMap<ApplicationKey, TermId>,
     application_by_result: HashMap<TermId, usize>,
+    application_by_bit: HashMap<TermId, (TermId, usize)>,
     theory_equalities: Vec<TheoryEquality>,
     theory_equality_terms: HashMap<(TermId, TermId), TermId>,
     uf_ites: Vec<UfIte>,
@@ -272,6 +273,7 @@ impl TermStore {
             applications: Vec::new(),
             application_results: HashMap::new(),
             application_by_result: HashMap::new(),
+            application_by_bit: HashMap::new(),
             theory_equalities: Vec::new(),
             theory_equality_terms: HashMap::new(),
             uf_ites: Vec::new(),
@@ -405,6 +407,16 @@ impl TermStore {
                 .applications
                 .pop()
                 .expect("application length checked above");
+            if matches!(self.sort(application.result), Ok(Sort::BitVec(_))) {
+                let bits = self
+                    .bitvec_bits(application.result)
+                    .expect("bit-vector application remains live during rollback")
+                    .to_vec();
+                for bit in bits {
+                    let removed = self.application_by_bit.remove(&bit);
+                    debug_assert!(removed.is_some());
+                }
+            }
             let key = ApplicationKey {
                 function: application.function,
                 arguments: application.arguments.clone(),
@@ -1097,6 +1109,13 @@ impl TermStore {
         self.application_results.insert(key, result);
         self.application_by_result
             .insert(result, self.applications.len());
+        if matches!(signature.range, Sort::BitVec(_)) {
+            let bits = self.bitvec_bits(result)?.to_vec();
+            for (index, bit) in bits.into_iter().enumerate() {
+                let previous = self.application_by_bit.insert(bit, (result, index));
+                debug_assert!(previous.is_none());
+            }
+        }
         self.applications.push(Application {
             function,
             arguments: arguments.into(),
@@ -1113,6 +1132,10 @@ impl TermStore {
         self.application_by_result
             .get(&term)
             .and_then(|&index| self.applications.get(index))
+    }
+
+    pub(crate) fn application_for_bit(&self, term: TermId) -> Option<(TermId, usize)> {
+        self.application_by_bit.get(&term).copied()
     }
 
     pub(crate) fn theory_equalities(&self) -> &[TheoryEquality] {
@@ -1706,5 +1729,31 @@ mod tests {
             baseline
         );
         assert_eq!(terms.select(array, index).unwrap(), selected);
+    }
+
+    #[test]
+    fn checkpoint_restores_bitvector_application_bit_index() {
+        let mut terms = TermStore::new();
+        let function = terms
+            .declare_function(&[Sort::Bool], Sort::BitVec(2))
+            .unwrap();
+        let argument = terms.bool_constant(false);
+        let checkpoint = terms.checkpoint();
+
+        let application = terms.apply(function, &[argument]).unwrap();
+        let bits = terms.bitvec_bits(application).unwrap().to_vec();
+        for (index, &bit) in bits.iter().enumerate() {
+            assert_eq!(terms.application_for_bit(bit), Some((application, index)));
+        }
+
+        terms.rollback(checkpoint);
+        for &bit in &bits {
+            assert_eq!(terms.application_for_bit(bit), None);
+        }
+
+        assert_eq!(terms.apply(function, &[argument]).unwrap(), application);
+        for (index, &bit) in bits.iter().enumerate() {
+            assert_eq!(terms.application_for_bit(bit), Some((application, index)));
+        }
     }
 }

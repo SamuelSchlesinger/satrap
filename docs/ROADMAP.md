@@ -262,7 +262,11 @@ array demands, and hash-consing indexes. Assumption lists validate completely
 before installing a Boolean encoding prefix, and bulk scope creation
 preflights variable and allocation limits before changing either the SMT or
 typed-API stack. Uninterpreted-sort model values now carry the explicit
-SMT-LIB sort ascription required for solver-defined abstract values.
+SMT-LIB sort ascription required for solver-defined abstract values and can be
+reused in later value queries without entering the user signature. Terms
+created after a check are evaluated against one congruent UF/array,
+bit-vector, and exact-arithmetic model rather than unencoded Boolean
+fallbacks.
 Closed inline `:named` terms now follow the standard postorder visibility
 rules, declaration scopes, command-error rollback, and distinct assignment
 label versus outer-assertion core semantics. The independent proof checker

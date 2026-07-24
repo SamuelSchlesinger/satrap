@@ -20,8 +20,11 @@ balanced lexical/top-level errors followed by valid commands, guarding
 continued-execution resynchronization as well as rejection. It also retains a
 transactionality seed with a valid assumption prefix followed by an ill-sorted
 term, failed UF term commands, a subsequent model query, and an oversized bulk
-scope request. The structured target generates the same invalid-prefix pattern
-in every fragment before continuing with ordinary checks.
+scope request. A separate model seed round-trips sort-ascribed abstract values
+through a later value query, then verifies that assertion use and noncanonical
+spellings are rejected without invalidating the model. The structured target
+generates the same invalid-prefix pattern in every fragment before continuing
+with ordinary checks.
 
 ## Install and run the push gate
 

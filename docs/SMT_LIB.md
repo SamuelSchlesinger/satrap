@@ -112,7 +112,15 @@ Uninterpreted-sort values in `get-value` and `get-model` responses are
 solver-defined abstract values. Every occurrence is printed with the explicit
 SMT-LIB sort ascription required by Section 4.2.6, for example
 `(as @uc!0!0 U)`. The symbol is model-local and is not added to the user
-signature.
+signature. A returned abstract value can be used, with that ascription, inside
+a later `get-value` term for the same current model. It remains unavailable to
+`assert` and every other term-bearing command.
+
+Terms first introduced by `get-value` are evaluated in the same total model as
+earlier queries. This includes congruent UF applications, array reads, exact
+arithmetic predicates, and Boolean or bit-vector expressions built around
+those applications; query-local Boolean atoms do not silently fall back to a
+fresh SAT assignment.
 
 ## Logics
 
@@ -135,11 +143,12 @@ Rust unit and integration tests cover online response flushing, mode
 transitions, immediate output redirection and rollback, scoped declarations,
 command and syntax errors with context reuse, balanced parser
 resynchronization, rejected-command term and model identity, atomic bulk scope
-limits, model inspection after `unknown`, sort-ascribed abstract model values,
-and `reset-assertions` with both local and global declarations. The shared
-push/CI gate also runs raw and structured session fuzz targets, 3,872
-deterministic queries against pinned independent solvers, model replays, core
-replays, and the query-specific proof corpus.
+limits, model inspection after `unknown`, sort-ascribed and reusable abstract
+model values, query-local model consistency, and `reset-assertions` with both
+local and global declarations. The shared push/CI gate also runs raw and
+structured session fuzz targets, 3,872 deterministic queries against pinned
+independent solvers, model replays, core replays, and the query-specific proof
+corpus.
 
 Those checks are strong regression evidence, not a complete conformance suite.
 The remaining protocol work includes:

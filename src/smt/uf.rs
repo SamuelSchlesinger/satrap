@@ -30,6 +30,10 @@ impl UfModel {
         self.values.get(&term).copied()
     }
 
+    pub(crate) fn bind_abstract_value(&mut self, term: TermId, value: u32) {
+        self.values.insert(term, value);
+    }
+
     pub(crate) fn application_relevant(&self, term: TermId) -> bool {
         self.relevant_applications.contains(&term)
     }

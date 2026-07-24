@@ -16,7 +16,7 @@ use super::engine::{SmtSolveResult, solve as solve_smt};
 use super::proof::{BooleanRefutation, ProofLogic, ProofNames, prove_boolean_unsat};
 use super::sexpr::{Reader, SExpr};
 use super::term::{
-    ArraySortId, FunctionId, Sort, SymbolId, TermId, TermKind, TermStore, TermStoreCheckpoint,
+    ArraySortId, FunctionId, Sort, TermId, TermKind, TermStore, TermStoreCheckpoint,
     UninterpretedSortId,
 };
 use super::theory::{TheoryManager, TheoryModel};
@@ -956,12 +956,14 @@ impl Session {
             return Err(CommandError::message("get-value expects at least one term"));
         }
         let model = self.sat_model()?.clone();
-        let theory = self.sat_theory_model()?.clone();
+        let mut theory = self.sat_theory_model()?.clone();
         let checkpoint = self.terms.checkpoint();
         let result = (|| {
+            let abstract_values = self.prepare_query_abstract_values(expressions, &mut theory)?;
+            let locals = std::slice::from_ref(&abstract_values);
             let mut values = Vec::with_capacity(expressions.len());
             for expression in expressions {
-                let term = self.parse_term(expression, &[])?;
+                let term = self.parse_term(expression, locals)?;
                 let value = self.render_term_value(&model, &theory, term)?;
                 values.push(format!("({} {value})", render(expression)));
             }
@@ -979,18 +981,19 @@ impl Session {
             ));
         }
         let model = self.sat_model()?;
+        let theory = self.sat_theory_model()?;
         let assignments = self
             .frames
             .iter()
             .flat_map(|frame| frame.assignment_labels.iter())
             .map(|label| {
-                format!(
+                Ok(format!(
                     "({} {})",
                     quote_symbol(&label.name),
-                    bool_text(self.bool_term_value(model, label.term))
-                )
+                    bool_text(self.bool_term_value(model, theory, label.term)?)
+                ))
             })
-            .collect::<Vec<_>>();
+            .collect::<Result<Vec<_>, CommandError>>()?;
         Ok(CommandValue::Text(format!("({})", assignments.join(" "))))
     }
 
@@ -1232,6 +1235,83 @@ impl Session {
         result
     }
 
+    fn prepare_query_abstract_values(
+        &mut self,
+        expressions: &[SExpr],
+        theory: &mut TheoryModel,
+    ) -> Result<HashMap<String, TermId>, CommandError> {
+        let mut values = HashMap::new();
+        for expression in expressions {
+            self.register_query_abstract_values(expression, theory, &mut values)?;
+        }
+        Ok(values)
+    }
+
+    fn register_query_abstract_values(
+        &mut self,
+        expression: &SExpr,
+        theory: &mut TheoryModel,
+        values: &mut HashMap<String, TermId>,
+    ) -> Result<(), CommandError> {
+        let SExpr::List(items) = expression else {
+            return Ok(());
+        };
+        if items.len() == 3
+            && items[0].word() == Some("as")
+            && items[1]
+                .symbol()
+                .is_some_and(|symbol| symbol.starts_with('@'))
+        {
+            let name = items[1]
+                .symbol()
+                .expect("abstract-value shape checked above");
+            let sort = self.parse_sort(&items[2])?;
+            let Sort::Uninterpreted(sort_id) = sort else {
+                return Err(CommandError::message(format!(
+                    "abstract value `{name}` does not name an uninterpreted-sort value"
+                )));
+            };
+            let Some(encoded) = name.strip_prefix("@uc!") else {
+                return Err(CommandError::message(format!(
+                    "abstract value `{name}` was not produced by this solver"
+                )));
+            };
+            let Some((encoded_sort, encoded_value)) = encoded.split_once('!') else {
+                return Err(CommandError::message(format!(
+                    "malformed solver abstract value `{name}`"
+                )));
+            };
+            let encoded_sort = encoded_sort.parse::<u32>().map_err(|_| {
+                CommandError::message(format!("malformed solver abstract value `{name}`"))
+            })?;
+            let value = encoded_value.parse::<u32>().map_err(|_| {
+                CommandError::message(format!("malformed solver abstract value `{name}`"))
+            })?;
+            if encoded_sort != sort_id.index() || name != format!("@uc!{}!{value}", sort_id.index())
+            {
+                return Err(CommandError::message(format!(
+                    "abstract value `{name}` does not match its sort ascription"
+                )));
+            }
+            if let Some(&term) = values.get(name) {
+                if self.terms.sort(term).map_err(CommandError::from)? != sort {
+                    return Err(CommandError::message(format!(
+                        "abstract value `{name}` has conflicting sort ascriptions"
+                    )));
+                }
+            } else {
+                let term = self.terms.fresh_term(sort).map_err(CommandError::from)?;
+                theory.bind_abstract_value(term, value);
+                values.insert(name.to_owned(), term);
+            }
+            return Ok(());
+        }
+        for item in items {
+            self.register_query_abstract_values(item, theory, values)?;
+        }
+        Ok(())
+    }
+
     fn parse_term(
         &mut self,
         expression: &SExpr,
@@ -1273,6 +1353,9 @@ impl Session {
             return match symbol {
                 "true" => Ok(self.terms.bool_constant(true)),
                 "false" => Ok(self.terms.bool_constant(false)),
+                _ if symbol.starts_with('@') => Err(CommandError::message(
+                    "abstract values require an explicit sort ascription",
+                )),
                 _ => locals
                     .iter()
                     .rev()
@@ -1304,6 +1387,9 @@ impl Session {
                 return Err(CommandError::message("annotation requires a term"));
             }
             return self.parse_term(&arguments[0], locals);
+        }
+        if operator == "as" {
+            return self.parse_abstract_value(arguments, locals);
         }
         let terms = arguments
             .iter()
@@ -1566,6 +1652,34 @@ impl Session {
             .map_err(CommandError::from)
     }
 
+    fn parse_abstract_value(
+        &mut self,
+        arguments: &[SExpr],
+        locals: &[HashMap<String, TermId>],
+    ) -> Result<TermId, CommandError> {
+        expect_arity(arguments, 2, "qualified abstract value")?;
+        let name = expect_symbol(&arguments[0], "abstract value")?;
+        if !name.starts_with('@') {
+            return Err(CommandError::Unsupported);
+        }
+        let term = locals
+            .iter()
+            .rev()
+            .find_map(|scope| scope.get(name).copied())
+            .ok_or_else(|| {
+                CommandError::message(format!(
+                    "abstract value `{name}` is not available in this model query"
+                ))
+            })?;
+        let sort = self.parse_sort(&arguments[1])?;
+        if self.terms.sort(term).map_err(CommandError::from)? != sort {
+            return Err(CommandError::message(format!(
+                "abstract value `{name}` has a different sort"
+            )));
+        }
+        Ok(term)
+    }
+
     fn parse_indexed_application(
         &mut self,
         identifier: &[SExpr],
@@ -1655,10 +1769,138 @@ impl Session {
         }
     }
 
-    fn bool_term_value(&self, model: &Model, term: TermId) -> bool {
+    fn bool_term_value(
+        &self,
+        model: &Model,
+        theory: &TheoryModel,
+        term: TermId,
+    ) -> Result<bool, CommandError> {
+        self.bool_model_value(model, theory, term, &mut HashSet::new())
+    }
+
+    fn bool_model_value(
+        &self,
+        model: &Model,
+        theory: &TheoryModel,
+        term: TermId,
+        visiting: &mut HashSet<TermId>,
+    ) -> Result<bool, CommandError> {
+        if self.terms.application_for_result(term).is_some() {
+            return match self.model_value(model, theory, term, visiting)? {
+                ModelValue::Bool(value) => Ok(value),
+                _ => Err(CommandError::message(
+                    "internal Boolean application has a non-Boolean model value",
+                )),
+            };
+        }
+        match self.terms.node(term).kind.clone() {
+            TermKind::Bool(value) => Ok(value),
+            TermKind::Atom(symbol) => {
+                if let Some(value) = self.application_bit_value(model, theory, term, visiting)? {
+                    Ok(value)
+                } else {
+                    Ok(self
+                        .encoder
+                        .atom_literal(symbol)
+                        .is_some_and(|literal| model.literal_value(literal)))
+                }
+            }
+            TermKind::TheoryEquality(_, left, right) => {
+                let left = self.model_value(model, theory, left, visiting)?;
+                let right = self.model_value(model, theory, right, visiting)?;
+                Ok(left == right)
+            }
+            TermKind::ArithmeticPredicate(_, expression, strict) => {
+                let expression = self
+                    .terms
+                    .arithmetic_expression(expression)
+                    .map_err(CommandError::from)?;
+                let value = theory.arithmetic.expression_value(expression);
+                Ok(if strict {
+                    value < BigRational::zero()
+                } else {
+                    value <= BigRational::zero()
+                })
+            }
+            TermKind::Not(inner) => Ok(!self.bool_model_value(model, theory, inner, visiting)?),
+            TermKind::And(terms) => {
+                for term in terms.iter().copied() {
+                    if !self.bool_model_value(model, theory, term, visiting)? {
+                        return Ok(false);
+                    }
+                }
+                Ok(true)
+            }
+            TermKind::Or(terms) => {
+                for term in terms.iter().copied() {
+                    if self.bool_model_value(model, theory, term, visiting)? {
+                        return Ok(true);
+                    }
+                }
+                Ok(false)
+            }
+            TermKind::Xor(left, right) => Ok(self
+                .bool_model_value(model, theory, left, visiting)?
+                != self.bool_model_value(model, theory, right, visiting)?),
+            TermKind::Iff(left, right) => Ok(self
+                .bool_model_value(model, theory, left, visiting)?
+                == self.bool_model_value(model, theory, right, visiting)?),
+            TermKind::Ite(condition, then_term, else_term) => {
+                let selected = if self.bool_model_value(model, theory, condition, visiting)? {
+                    then_term
+                } else {
+                    else_term
+                };
+                self.bool_model_value(model, theory, selected, visiting)
+            }
+            TermKind::UfConstant(_)
+            | TermKind::UfApplication(_, _)
+            | TermKind::UfIte(_, _, _)
+            | TermKind::Arithmetic(_)
+            | TermKind::ArrayConst(_)
+            | TermKind::ArrayStore(_, _, _)
+            | TermKind::BitVec(_) => Err(CommandError::message(
+                "internal non-Boolean term reached Boolean model evaluation",
+            )),
+        }
+    }
+
+    fn application_bit_value(
+        &self,
+        model: &Model,
+        theory: &TheoryModel,
+        bit: TermId,
+        visiting: &mut HashSet<TermId>,
+    ) -> Result<Option<bool>, CommandError> {
+        let Some((application, index)) = self.terms.application_for_bit(bit) else {
+            return Ok(None);
+        };
+        let ModelValue::BitVec(values) = self.model_value(model, theory, application, visiting)?
+        else {
+            return Err(CommandError::message(
+                "internal bit-vector application has a non-bit-vector model value",
+            ));
+        };
+        values
+            .get(index)
+            .copied()
+            .map(Some)
+            .ok_or_else(|| CommandError::message("internal bit-vector model has the wrong width"))
+    }
+
+    fn bitvec_model_value(
+        &self,
+        model: &Model,
+        theory: &TheoryModel,
+        term: TermId,
+        visiting: &mut HashSet<TermId>,
+    ) -> Result<Vec<bool>, CommandError> {
         self.terms
-            .evaluate_bool(term, |symbol| self.symbol_value(model, symbol))
-            .expect("asserted and queried terms are Boolean")
+            .bitvec_bits(term)
+            .map_err(CommandError::from)?
+            .iter()
+            .map(|&bit| self.bool_model_value(model, theory, bit, visiting))
+            .collect()
     }
 
     fn render_term_value(
@@ -1704,7 +1946,7 @@ impl Session {
     ) -> Result<ModelValue, CommandError> {
         let application = self.terms.application_for_result(term);
         if application.is_none() {
-            return self.direct_model_value(model, theory, term);
+            return self.direct_model_value(model, theory, term, visiting);
         }
         if theory.application_relevant(term) {
             if let Some(value) = self.direct_application_value(model, theory, term)? {
@@ -1937,13 +2179,14 @@ impl Session {
         model: &Model,
         theory: &TheoryModel,
         term: TermId,
+        visiting: &mut HashSet<TermId>,
     ) -> Result<ModelValue, CommandError> {
         match self.terms.sort(term).map_err(CommandError::from)? {
-            Sort::Bool => Ok(ModelValue::Bool(self.bool_term_value(model, term))),
+            Sort::Bool => Ok(ModelValue::Bool(
+                self.bool_model_value(model, theory, term, visiting)?,
+            )),
             Sort::BitVec(_) => Ok(ModelValue::BitVec(
-                self.terms
-                    .evaluate_bitvec(term, |symbol| self.symbol_value(model, symbol))
-                    .map_err(CommandError::from)?,
+                self.bitvec_model_value(model, theory, term, visiting)?,
             )),
             sort @ (Sort::Int | Sort::Real) => Ok(ModelValue::Arithmetic(
                 sort,
@@ -2125,12 +2368,6 @@ impl Session {
                 )
             }
         }
-    }
-
-    fn symbol_value(&self, model: &Model, symbol: SymbolId) -> bool {
-        self.encoder
-            .atom_literal(symbol)
-            .is_some_and(|literal| model.literal_value(literal))
     }
 
     fn active_declarations(&self) -> impl Iterator<Item = &Declaration> {
@@ -3935,6 +4172,86 @@ mod tests {
     }
 
     #[test]
+    fn post_check_uf_value_queries_use_one_congruent_model() {
+        let output = execute(
+            "(set-option :produce-models true)
+             (set-logic QF_UF)
+             (declare-sort U 0)
+             (declare-const a U)
+             (declare-const b U)
+             (declare-fun f (U) U)
+             (assert (= a b))
+             (check-sat)
+             (get-value
+               ((f a) (f b) (= (f a) (f b)) (distinct (f a) (f b))))",
+        );
+        assert_eq!(
+            output,
+            "sat\n\
+             (((f a) (as @uc!0!0 U)) ((f b) (as @uc!0!0 U)) \
+             ((= (f a) (f b)) true) ((distinct (f a) (f b)) false))\n"
+        );
+    }
+
+    #[test]
+    fn post_check_value_queries_evaluate_new_bv_and_arithmetic_terms() {
+        let bitvectors = execute(
+            "(set-option :produce-models true)
+             (set-logic QF_UFBV)
+             (declare-sort U 0)
+             (declare-const a U)
+             (declare-const b U)
+             (declare-fun f (U) (_ BitVec 2))
+             (assert (= a b))
+             (check-sat)
+             (get-value
+               ((f a) (f b)
+                (= (bvadd (f a) #b01) (bvadd (f b) #b01))
+                (distinct (f a) (f b))))",
+        );
+        assert_eq!(
+            bitvectors,
+            "sat\n\
+             (((f a) #b00) ((f b) #b00) \
+             ((= (bvadd (f a) #b01) (bvadd (f b) #b01)) true) \
+             ((distinct (f a) (f b)) false))\n"
+        );
+
+        let arithmetic = execute(
+            "(set-option :produce-models true)
+             (set-logic QF_LRA)
+             (declare-const x Real)
+             (assert (= x (/ 1.0 2.0)))
+             (check-sat)
+             (get-value
+               ((+ x 1.0) (> (+ x 1.0) x)
+                (= (+ x 1.0) (/ 3.0 2.0))))",
+        );
+        assert_eq!(
+            arithmetic,
+            "sat\n\
+             (((+ x 1.0) (/ 3.0 2.0)) ((> (+ x 1.0) x) true) \
+             ((= (+ x 1.0) (/ 3.0 2.0)) true))\n"
+        );
+
+        let arrays = execute(
+            "(set-option :produce-models true)
+             (set-logic QF_ABV)
+             (declare-const a (Array (_ BitVec 1) (_ BitVec 2)))
+             (check-sat)
+             (get-value
+               ((select a #b0) (select a #b1)
+                (= (select a #b0) (select a #b1))))",
+        );
+        assert_eq!(
+            arrays,
+            "sat\n\
+             (((select a #b0) #b00) ((select a #b1) #b00) \
+             ((= (select a #b0) (select a #b1)) true))\n"
+        );
+    }
+
+    #[test]
     fn abstract_values_are_sort_ascribed_in_functions_and_arrays() {
         let output = execute(
             "(set-option :produce-models true)
@@ -3957,6 +4274,42 @@ mod tests {
             output.matches("@uc!").count(),
             output.matches("(as @uc!").count(),
             "every abstract value must carry its SMT-LIB sort ascription:\n{output}"
+        );
+    }
+
+    #[test]
+    fn returned_abstract_values_are_reusable_only_in_model_queries() {
+        let output = execute(
+            "(set-option :produce-models true)
+             (set-logic QF_UF)
+             (declare-sort U 0)
+             (declare-const a U)
+             (declare-fun f (U) U)
+             (assert (distinct (f a) a))
+             (check-sat)
+             (get-value (a (f a)))
+             (get-value
+               ((as @uc!0!0 U)
+                (as @uc!0!1 U)
+                (f (as @uc!0!0 U))
+                (= (f (as @uc!0!0 U)) (as @uc!0!1 U))
+                (distinct (as @uc!0!0 U) (as @uc!0!1 U))))
+             (assert (= a (as @uc!0!0 U)))
+             (get-value ((as @uc!0!01 U)))
+             (get-value (a (f a)))",
+        );
+        assert_eq!(
+            output,
+            "sat\n\
+             ((a (as @uc!0!0 U)) ((f a) (as @uc!0!1 U)))\n\
+             (((as @uc!0!0 U) (as @uc!0!0 U)) \
+             ((as @uc!0!1 U) (as @uc!0!1 U)) \
+             ((f (as @uc!0!0 U)) (as @uc!0!1 U)) \
+             ((= (f (as @uc!0!0 U)) (as @uc!0!1 U)) true) \
+             ((distinct (as @uc!0!0 U) (as @uc!0!1 U)) true))\n\
+             (error \"abstract value `@uc!0!0` is not available in this model query\")\n\
+             (error \"abstract value `@uc!0!01` does not match its sort ascription\")\n\
+             ((a (as @uc!0!0 U)) ((f a) (as @uc!0!1 U)))\n"
         );
     }
 

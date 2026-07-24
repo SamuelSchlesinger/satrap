@@ -1,0 +1,11 @@
+(set-option :produce-proofs true)
+(set-logic QF_LRA)
+(declare-const x Real)
+(declare-const y Real)
+(assert
+  (or (> (+ (* 2.0 x) y) 4.0)
+      (> (+ x (* 2.0 y)) 5.0)))
+(assert (<= x 1.0))
+(assert (<= y 2.0))
+(check-sat)
+(get-proof)

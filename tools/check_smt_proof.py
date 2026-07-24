@@ -1083,6 +1083,7 @@ class ProofSession:
                 "QF_AUFBV",
                 "QF_IDL",
                 "QF_RDL",
+                "QF_LRA",
             }:
                 raise ProofCheckError("proof script uses an unsupported logic")
             self.logic = logic
@@ -1548,8 +1549,8 @@ class ProofSession:
             raise ProofCheckError("QF_UF proof contains a non-UF declaration")
         if self.logic == "QF_IDL" and not isinstance(parsed_sort, (BoolSort, IntSort)):
             raise ProofCheckError("QF_IDL proof contains a declaration outside Bool or Int")
-        if self.logic == "QF_RDL" and not isinstance(parsed_sort, (BoolSort, RealSort)):
-            raise ProofCheckError("QF_RDL proof contains a declaration outside Bool or Real")
+        if self.logic in {"QF_RDL", "QF_LRA"} and not isinstance(parsed_sort, (BoolSort, RealSort)):
+            raise ProofCheckError(f"{self.logic} proof contains a declaration outside Bool or Real")
         if parsed_sort == BOOL_SORT:
             term: TermExpr = (2, 0, name)
         elif isinstance(parsed_sort, BitVecSort):
@@ -1591,11 +1592,11 @@ class ProofSession:
             raise ProofCheckError("bit-vector term used outside a bit-vector proof logic")
 
     def _require_arithmetic(self) -> None:
-        if self.logic not in {"QF_IDL", "QF_RDL"}:
+        if self.logic not in {"QF_IDL", "QF_RDL", "QF_LRA"}:
             raise ProofCheckError("arithmetic term used outside an arithmetic proof logic")
 
     def _require_reals(self) -> None:
-        if self.logic != "QF_RDL":
+        if self.logic not in {"QF_RDL", "QF_LRA"}:
             raise ProofCheckError("real term used outside a real proof logic")
 
     @staticmethod
@@ -1624,7 +1625,7 @@ class ProofSession:
                     raise ProofCheckError("Int sort used outside an integer proof logic")
                 return INT_SORT
             if value == "Real":
-                if self.logic != "QF_RDL":
+                if self.logic not in {"QF_RDL", "QF_LRA"}:
                     raise ProofCheckError("Real sort used outside a real proof logic")
                 return REAL_SORT
             if value in self.sorts:
@@ -2365,10 +2366,10 @@ class LinearConstraint:
     strict: bool
 
 
-class DifferenceProblem:
+class ArithmeticProblem:
     def __init__(self, sort: SortExpr, roots: tuple[BoolExpr, ...]):
         if not isinstance(sort, (IntSort, RealSort)):
-            raise ProofCheckError("difference problem has a non-arithmetic sort")
+            raise ProofCheckError("arithmetic problem has a non-arithmetic sort")
         self.sort = sort
         self.predicates: dict[BoolExpr, LinearConstraint] = {}
         self.ites: set[ArithmeticVariable] = set()
@@ -2397,9 +2398,7 @@ class DifferenceProblem:
                     raise ProofCheckError("malformed arithmetic proof atom")
                 _, _, sort, linear, strict = expression
                 if sort != self.sort or not isinstance(linear, LinearExpr):
-                    raise ProofCheckError(
-                        "difference-logic proof contains a predicate of the wrong sort"
-                    )
+                    raise ProofCheckError("arithmetic proof contains a predicate of the wrong sort")
                 if not isinstance(strict, bool):
                     raise ProofCheckError("arithmetic proof predicate has a malformed strictness")
                 self.predicates[expression] = LinearConstraint(sort, linear, strict)
@@ -2422,7 +2421,7 @@ class DifferenceProblem:
             self._collect_bool(expression[3], visited_boolean, visited_variables)
             return
         if kind == 9:
-            raise ProofCheckError("difference-logic proof contains an unlowered theory equality")
+            raise ProofCheckError("arithmetic proof contains an unlowered theory equality")
         raise ProofCheckError(f"unknown canonical Boolean node {kind}")
 
     def _collect_linear(
@@ -2440,9 +2439,7 @@ class DifferenceProblem:
             kind = variable[0]
             if kind == 0:
                 if len(variable) != 3 or variable[1] != self.sort:
-                    raise ProofCheckError(
-                        "difference-logic proof contains a variable of the wrong sort"
-                    )
+                    raise ProofCheckError("arithmetic proof contains a variable of the wrong sort")
                 continue
             if kind != 1 or len(variable) != 5:
                 raise ProofCheckError("malformed arithmetic proof variable")
@@ -2452,7 +2449,7 @@ class DifferenceProblem:
                 or not isinstance(then_expression, LinearExpr)
                 or not isinstance(else_expression, LinearExpr)
             ):
-                raise ProofCheckError("difference-logic proof contains an ite of the wrong sort")
+                raise ProofCheckError("arithmetic proof contains an ite of the wrong sort")
             self.ites.add(variable)
             self.required.add(condition)
             self._collect_bool(condition, visited_boolean, visited_variables)
@@ -2466,7 +2463,7 @@ class DifferenceProblem:
         constraints = []
         for term, predicate in sorted(self.predicates.items()):
             if term not in assignment:
-                raise ProofCheckError("difference-logic predicate has no Boolean assignment")
+                raise ProofCheckError("arithmetic predicate has no Boolean assignment")
             positive = assignment[term]
             expression = (
                 predicate.expression
@@ -2479,7 +2476,7 @@ class DifferenceProblem:
         for variable in sorted(self.ites):
             _, _, condition, then_expression, else_expression = variable
             if condition not in assignment:
-                raise ProofCheckError("difference-logic ite condition has no Boolean assignment")
+                raise ProofCheckError("arithmetic ite condition has no Boolean assignment")
             selected = then_expression if assignment[condition] else else_expression
             forward = linear_add_scaled(
                 linear_variable(variable),
@@ -2495,6 +2492,76 @@ class DifferenceProblem:
                 )
             )
         return constraints
+
+
+def real_linear_constraints_unsat(constraints: list[LinearConstraint]) -> bool:
+    simplified = simplify_real_constraints(constraints)
+    if simplified is None:
+        return True
+    constraints = simplified
+    variables = sorted(
+        {
+            variable
+            for constraint in constraints
+            for variable, _ in constraint.expression.coefficients
+        }
+    )
+
+    for variable in variables:
+        independent = []
+        upper = []
+        lower = []
+        for constraint in constraints:
+            if constraint.sort != REAL_SORT:
+                raise ProofCheckError("linear-real proof contains a constraint of the wrong sort")
+            coefficient = dict(constraint.expression.coefficients).get(variable, Fraction(0))
+            if coefficient == 0:
+                independent.append(constraint)
+            elif coefficient > 0:
+                upper.append((constraint, coefficient))
+            else:
+                lower.append((constraint, coefficient))
+        for upper_constraint, upper_coefficient in upper:
+            for lower_constraint, lower_coefficient in lower:
+                expression = linear_add_scaled(
+                    linear_scaled(upper_constraint.expression, -lower_coefficient),
+                    lower_constraint.expression,
+                    upper_coefficient,
+                )
+                independent.append(
+                    LinearConstraint(
+                        REAL_SORT,
+                        expression,
+                        upper_constraint.strict or lower_constraint.strict,
+                    )
+                )
+        simplified = simplify_real_constraints(independent)
+        if simplified is None:
+            return True
+        constraints = simplified
+    return False
+
+
+def simplify_real_constraints(
+    constraints: list[LinearConstraint],
+) -> list[LinearConstraint] | None:
+    seen = set()
+    result = []
+    for constraint in constraints:
+        if constraint.sort != REAL_SORT:
+            raise ProofCheckError("linear-real proof contains a constraint of the wrong sort")
+        if not constraint.expression.coefficients:
+            satisfied = (
+                constraint.expression.constant < 0
+                if constraint.strict
+                else constraint.expression.constant <= 0
+            )
+            if not satisfied:
+                return None
+        elif constraint not in seen:
+            seen.add(constraint)
+            result.append(constraint)
+    return result
 
 
 @dataclass(frozen=True)
@@ -2615,12 +2682,12 @@ def normalized_clause(literals: tuple[int, ...]) -> tuple[int, ...] | None:
     return normalized
 
 
-def validate_difference_encoding(
+def validate_arithmetic_encoding(
     certificate: Certificate,
     roots: tuple[BoolExpr, ...],
 ) -> None:
     sort = INT_SORT if certificate.logic == "QF_IDL" else REAL_SORT
-    problem = DifferenceProblem(sort, roots)
+    problem = ArithmeticProblem(sort, roots)
     encoder = CnfEncoder()
     encoder.build(roots)
     for expression in sorted(problem.required):
@@ -2644,15 +2711,15 @@ def validate_difference_encoding(
     for kind, literals in theory_clauses:
         if kind != "theory":
             raise ProofCheckError(
-                "difference-logic proof has a non-theory clause after its encoding prefix"
+                "arithmetic proof has a non-theory clause after its encoding prefix"
             )
         if normalized_clause(literals) != literals:
-            raise ProofCheckError("difference-logic theory clause is not canonically normalized")
+            raise ProofCheckError("arithmetic theory clause is not canonically normalized")
         if any(abs(literal) > certificate.variable_count for literal in literals):
-            raise ProofCheckError("difference-logic theory clause uses an out-of-range variable")
+            raise ProofCheckError("arithmetic theory clause uses an out-of-range variable")
         if {abs(literal) for literal in literals} != required_variables:
             raise ProofCheckError(
-                "difference-logic theory clause does not block a complete required assignment"
+                "arithmetic theory clause does not block a complete required assignment"
             )
         blocked_variables = {abs(literal): literal < 0 for literal in literals}
         assignment = {
@@ -2663,10 +2730,14 @@ def validate_difference_encoding(
             )
             for expression, literal in required_literals.items()
         }
-        if not difference_constraints_unsat(problem.constraints(assignment), sort):
-            raise ProofCheckError(
-                "difference-logic theory clause blocks a satisfiable theory assignment"
-            )
+        constraints = problem.constraints(assignment)
+        unsatisfiable = (
+            real_linear_constraints_unsat(constraints)
+            if certificate.logic == "QF_LRA"
+            else difference_constraints_unsat(constraints, sort)
+        )
+        if not unsatisfiable:
+            raise ProofCheckError("arithmetic theory clause blocks a satisfiable theory assignment")
 
 
 @dataclass(frozen=True)
@@ -2724,6 +2795,7 @@ def parse_certificate(text: str) -> Certificate:
         "QF_AUFBV",
         "QF_IDL",
         "QF_RDL",
+        "QF_LRA",
     }:
         raise ProofCheckError(f"satrap-edrat checker does not accept logic `{logic}`")
     variable_count = parse_numeral(fields.get(":variables", []), "proof variable count")
@@ -2748,6 +2820,7 @@ def parse_certificate(text: str) -> Certificate:
                 "QF_AUFBV",
                 "QF_IDL",
                 "QF_RDL",
+                "QF_LRA",
             }
             else {"formula", "encoding"}
         )
@@ -2787,8 +2860,8 @@ def validate_encoding(script: str, proof: str) -> Certificate:
     else:
         roots = raw_roots
         theory_axioms = ()
-    if certificate.logic in {"QF_IDL", "QF_RDL"}:
-        validate_difference_encoding(certificate, roots)
+    if certificate.logic in {"QF_IDL", "QF_RDL", "QF_LRA"}:
+        validate_arithmetic_encoding(certificate, roots)
         return certificate
     encoder = CnfEncoder()
     expected_clauses = tuple(encoder.build(roots, theory_axioms))

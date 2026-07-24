@@ -75,6 +75,7 @@ pub(crate) enum ProofLogic {
     Aufbv,
     Idl,
     Rdl,
+    Lra,
 }
 
 impl ProofLogic {
@@ -88,6 +89,7 @@ impl ProofLogic {
             "QF_AUFBV" => Some(Self::Aufbv),
             "QF_IDL" => Some(Self::Idl),
             "QF_RDL" => Some(Self::Rdl),
+            "QF_LRA" => Some(Self::Lra),
             _ => None,
         }
     }
@@ -102,21 +104,39 @@ impl ProofLogic {
             Self::Aufbv => "QF_AUFBV",
             Self::Idl => "QF_IDL",
             Self::Rdl => "QF_RDL",
+            Self::Lra => "QF_LRA",
         }
     }
 
     fn admits_theory_clauses(self) -> bool {
         matches!(
             self,
-            Self::Uf | Self::UfBv | Self::Abv | Self::Aufbv | Self::Idl | Self::Rdl
+            Self::Uf | Self::UfBv | Self::Abv | Self::Aufbv | Self::Idl | Self::Rdl | Self::Lra
         )
     }
 
-    fn difference_sort(self) -> Option<ProofSort> {
+    fn arithmetic_kind(self) -> Option<ArithmeticProofKind> {
         match self {
-            Self::Idl => Some(ProofSort::Int),
-            Self::Rdl => Some(ProofSort::Real),
+            Self::Idl => Some(ArithmeticProofKind::IntegerDifference),
+            Self::Rdl => Some(ArithmeticProofKind::RealDifference),
+            Self::Lra => Some(ArithmeticProofKind::LinearReal),
             _ => None,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ArithmeticProofKind {
+    IntegerDifference,
+    RealDifference,
+    LinearReal,
+}
+
+impl ArithmeticProofKind {
+    fn sort(self) -> ProofSort {
+        match self {
+            Self::IntegerDifference => ProofSort::Int,
+            Self::RealDifference | Self::LinearReal => ProofSort::Real,
         }
     }
 }
@@ -360,9 +380,9 @@ impl Error for ProofError {}
 /// `get-proof` only after a check with an empty explicit assumption set. A
 /// proof-specific canonical lowering makes the CNF independent of term-ID
 /// allocation history. Ground UF and arrays are reduced to finite class bits
-/// plus independently validated theory axioms. Difference-logic replay learns
-/// only clauses whose blocked Boolean assignments have an independently
-/// detected negative cycle. A separate checker can therefore reconstruct and
+/// plus independently validated theory axioms. Arithmetic replay learns only
+/// clauses whose blocked Boolean assignments have an independently detected
+/// exact theory conflict. A separate checker can therefore reconstruct and
 /// validate the entire propositional input from the original SMT-LIB query
 /// before validating the DRAT suffix.
 pub(crate) fn prove_boolean_unsat(
@@ -397,17 +417,17 @@ pub(crate) fn prove_boolean_unsat(
         (raw_roots, Vec::new())
     };
 
-    let difference_problem = logic
-        .difference_sort()
-        .map(|sort| DifferenceProblem::from_roots(sort, &roots))
+    let arithmetic_problem = logic
+        .arithmetic_kind()
+        .map(|kind| ArithmeticProblem::from_roots(kind, &roots))
         .transpose()?;
-    let theory_lemmas = difference_problem
+    let theory_lemmas = arithmetic_problem
         .as_ref()
-        .map(|problem| discover_difference_lemmas(&roots, &theory_axioms, problem))
+        .map(|problem| discover_arithmetic_lemmas(&roots, &theory_axioms, problem))
         .transpose()?
         .unwrap_or_default();
     let empty_required = BTreeSet::new();
-    let required = difference_problem
+    let required = arithmetic_problem
         .as_ref()
         .map_or(&empty_required, |problem| &problem.required);
 
@@ -508,10 +528,10 @@ fn install_proof_input(
     Ok(())
 }
 
-fn discover_difference_lemmas(
+fn discover_arithmetic_lemmas(
     roots: &[BoolExpr],
     theory_axioms: &[BoolExpr],
-    problem: &DifferenceProblem,
+    problem: &ArithmeticProblem,
 ) -> Result<Vec<Vec<ProofSignedBool>>, ProofError> {
     let mut solver = Solver::new();
     let mut encoder = ProofEncoder::default();
@@ -536,9 +556,9 @@ fn discover_difference_lemmas(
                     })
                     .collect::<Result<BTreeMap<_, _>, ProofError>>()?;
                 let constraints = problem.constraints(&assignment)?;
-                if !difference_constraints_unsat(&constraints, &problem.sort)? {
+                if !arithmetic_constraints_unsat(&constraints, problem.kind)? {
                     return Err(ProofError::new(
-                        "fresh difference-logic proof replay found a theory-consistent model",
+                        "fresh arithmetic proof replay found a theory-consistent model",
                     ));
                 }
                 let lemma = problem.blocking_lemma(&assignment)?;
@@ -557,7 +577,7 @@ fn discover_difference_lemmas(
             SolveResult::Unsat => return Ok(lemmas),
             SolveResult::Unknown(reason) => {
                 return Err(ProofError::new(format!(
-                    "difference-logic proof discovery stopped with {reason:?}"
+                    "arithmetic proof discovery stopped with {reason:?}"
                 )));
             }
         }
@@ -594,17 +614,19 @@ struct ProofSignedBool {
 }
 
 #[derive(Debug)]
-struct DifferenceProblem {
+struct ArithmeticProblem {
+    kind: ArithmeticProofKind,
     sort: ProofSort,
     predicates: BTreeMap<BoolExpr, ProofLinearConstraint>,
     ites: BTreeSet<ProofArithmeticVariable>,
     required: BTreeSet<BoolExpr>,
 }
 
-impl DifferenceProblem {
-    fn from_roots(sort: ProofSort, roots: &[BoolExpr]) -> Result<Self, ProofError> {
+impl ArithmeticProblem {
+    fn from_roots(kind: ArithmeticProofKind, roots: &[BoolExpr]) -> Result<Self, ProofError> {
         let mut problem = Self {
-            sort,
+            kind,
+            sort: kind.sort(),
             predicates: BTreeMap::new(),
             ites: BTreeSet::new(),
             required: BTreeSet::new(),
@@ -636,7 +658,7 @@ impl DifferenceProblem {
             }) => {
                 if sort != &self.sort {
                     return Err(ProofError::new(
-                        "difference-logic proof contains a predicate of the wrong sort",
+                        "arithmetic proof contains a predicate of the wrong sort",
                     ));
                 }
                 self.predicates.insert(
@@ -669,7 +691,7 @@ impl DifferenceProblem {
             }
             BoolNode::TheoryEquality(_, _) => {
                 return Err(ProofError::new(
-                    "difference-logic proof contains an unlowered theory equality",
+                    "arithmetic proof contains an unlowered theory equality",
                 ));
             }
         }
@@ -690,7 +712,7 @@ impl DifferenceProblem {
                 ProofArithmeticVariable::Declared { sort, .. } => {
                     if sort != &self.sort {
                         return Err(ProofError::new(
-                            "difference-logic proof contains a variable of the wrong sort",
+                            "arithmetic proof contains a variable of the wrong sort",
                         ));
                     }
                 }
@@ -702,7 +724,7 @@ impl DifferenceProblem {
                 } => {
                     if sort != &self.sort {
                         return Err(ProofError::new(
-                            "difference-logic proof contains an ite of the wrong sort",
+                            "arithmetic proof contains an ite of the wrong sort",
                         ));
                     }
                     self.ites.insert(variable.clone());
@@ -723,9 +745,10 @@ impl DifferenceProblem {
         let minus_one = BigRational::from_integer(BigInt::from(-1));
         let mut constraints = Vec::new();
         for (term, predicate) in &self.predicates {
-            let positive = assignment.get(term).copied().ok_or_else(|| {
-                ProofError::new("difference-logic predicate has no Boolean assignment")
-            })?;
+            let positive = assignment
+                .get(term)
+                .copied()
+                .ok_or_else(|| ProofError::new("arithmetic predicate has no Boolean assignment"))?;
             let expression = if positive {
                 predicate.expression.clone()
             } else {
@@ -748,7 +771,7 @@ impl DifferenceProblem {
                 unreachable!("the ite set contains only ite variables");
             };
             let selected = if assignment.get(condition).copied().ok_or_else(|| {
-                ProofError::new("difference-logic ite condition has no Boolean assignment")
+                ProofError::new("arithmetic ite condition has no Boolean assignment")
             })? {
                 then_expression.as_ref()
             } else {
@@ -780,12 +803,108 @@ impl DifferenceProblem {
                 Ok(ProofSignedBool {
                     expression: expression.clone(),
                     positive: !assignment.get(expression).copied().ok_or_else(|| {
-                        ProofError::new("difference-logic required term has no Boolean assignment")
+                        ProofError::new("arithmetic required term has no Boolean assignment")
                     })?,
                 })
             })
             .collect()
     }
+}
+
+fn arithmetic_constraints_unsat(
+    constraints: &[ProofLinearConstraint],
+    kind: ArithmeticProofKind,
+) -> Result<bool, ProofError> {
+    match kind {
+        ArithmeticProofKind::IntegerDifference | ArithmeticProofKind::RealDifference => {
+            difference_constraints_unsat(constraints, &kind.sort())
+        }
+        ArithmeticProofKind::LinearReal => real_linear_constraints_unsat(constraints),
+    }
+}
+
+fn real_linear_constraints_unsat(
+    constraints: &[ProofLinearConstraint],
+) -> Result<bool, ProofError> {
+    let Some(mut constraints) = simplify_real_constraints(constraints.iter().cloned())? else {
+        return Ok(true);
+    };
+    let variables = constraints
+        .iter()
+        .flat_map(|constraint| constraint.expression.coefficients.keys().cloned())
+        .collect::<BTreeSet<_>>();
+
+    for variable in variables {
+        let mut independent = Vec::new();
+        let mut upper = Vec::new();
+        let mut lower = Vec::new();
+        for constraint in constraints {
+            if constraint.sort != ProofSort::Real {
+                return Err(ProofError::new(
+                    "linear-real proof contains a constraint of the wrong sort",
+                ));
+            }
+            let coefficient = constraint
+                .expression
+                .coefficients
+                .get(&variable)
+                .cloned()
+                .unwrap_or_else(BigRational::zero);
+            if coefficient.is_zero() {
+                independent.push(constraint);
+            } else if coefficient.is_positive() {
+                upper.push((constraint, coefficient));
+            } else {
+                lower.push((constraint, coefficient));
+            }
+        }
+        for (upper_constraint, upper_coefficient) in &upper {
+            for (lower_constraint, lower_coefficient) in &lower {
+                let mut expression = upper_constraint
+                    .expression
+                    .clone()
+                    .scaled(&(-lower_coefficient));
+                expression.add_scaled(&lower_constraint.expression, upper_coefficient);
+                expression.coefficients.remove(&variable);
+                independent.push(ProofLinearConstraint {
+                    sort: ProofSort::Real,
+                    expression,
+                    strict: upper_constraint.strict || lower_constraint.strict,
+                });
+            }
+        }
+        let Some(next) = simplify_real_constraints(independent)? else {
+            return Ok(true);
+        };
+        constraints = next;
+    }
+    Ok(false)
+}
+
+fn simplify_real_constraints(
+    constraints: impl IntoIterator<Item = ProofLinearConstraint>,
+) -> Result<Option<Vec<ProofLinearConstraint>>, ProofError> {
+    let mut seen = BTreeSet::new();
+    for constraint in constraints {
+        if constraint.sort != ProofSort::Real {
+            return Err(ProofError::new(
+                "linear-real proof contains a constraint of the wrong sort",
+            ));
+        }
+        if constraint.expression.coefficients.is_empty() {
+            let satisfied = if constraint.strict {
+                constraint.expression.constant.is_negative()
+            } else {
+                !constraint.expression.constant.is_positive()
+            };
+            if !satisfied {
+                return Ok(None);
+            }
+        } else {
+            seen.insert(constraint);
+        }
+    }
+    Ok(Some(seen.into_iter().collect()))
 }
 
 #[derive(Clone, Debug)]

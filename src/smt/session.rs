@@ -3174,6 +3174,68 @@ mod tests {
     }
 
     #[test]
+    fn qf_lra_proofs_include_exact_fourier_motzkin_lemmas() {
+        let output = execute(
+            "(set-option :produce-proofs true)
+             (set-logic QF_LRA)
+             (declare-const x Real)
+             (declare-const y Real)
+             (assert (> (+ (* 2.0 x) y) 4.0))
+             (assert (<= x 1.0))
+             (assert (<= y 2.0))
+             (check-sat)
+             (get-proof)",
+        );
+        assert!(output.starts_with("unsat\n(satrap-edrat :version 1 :logic QF_LRA"));
+        assert!(output.contains("(theory "));
+        assert!(output.ends_with("0\n\")\n"));
+    }
+
+    #[test]
+    fn qf_lra_proofs_cover_selected_arithmetic_ite_branches() {
+        let output = execute(
+            "(set-option :produce-proofs true)
+             (set-logic QF_LRA)
+             (declare-const p Bool)
+             (declare-const x Real)
+             (declare-const y Real)
+             (assert p)
+             (assert (= x (ite p (+ (* 2.0 y) 1.0) 0.0)))
+             (assert (> x (+ (* 2.0 y) 1.0)))
+             (check-sat)
+             (get-proof)",
+        );
+        assert!(output.starts_with("unsat\n(satrap-edrat :version 1 :logic QF_LRA"));
+        assert!(output.contains("(theory "));
+        assert!(output.ends_with("0\n\")\n"));
+    }
+
+    #[test]
+    fn qf_lra_proofs_ignore_unrelated_internal_allocation_history() {
+        let query = "
+             (declare-const x Real)
+             (declare-const y Real)
+             (assert (> (+ (* 2.0 x) y) 4.0))
+             (assert (<= x 1.0))
+             (assert (<= y 2.0))
+             (check-sat)
+             (get-proof)";
+        let baseline = execute(&format!(
+            "(set-option :produce-proofs true)
+             (set-logic QF_LRA)
+             {query}"
+        ));
+        let shifted = execute(&format!(
+            "(set-option :produce-proofs true)
+             (set-logic QF_LRA)
+             (declare-const unused Real)
+             (define-const unused-offset Real (+ (* 7.0 unused) 11.0))
+             {query}"
+        ));
+        assert_eq!(baseline, shifted);
+    }
+
+    #[test]
     fn qf_lra_fourier_motzkin_handles_general_linear_constraints_and_models() {
         let output = execute(
             "(set-option :produce-models true)

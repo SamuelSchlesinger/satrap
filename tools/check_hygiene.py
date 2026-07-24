@@ -43,6 +43,8 @@ REQUIRED_QUALITY_ASSETS = (
     Path("benchmarks/smt-proof-smoke/qf-ufbv-congruence.smt2"),
     Path("benchmarks/smt-proof-smoke/qf-idl-cycle.smt2"),
     Path("benchmarks/smt-proof-smoke/qf-idl-ite.smt2"),
+    Path("benchmarks/smt-proof-smoke/qf-lra-ite.smt2"),
+    Path("benchmarks/smt-proof-smoke/qf-lra-linear.smt2"),
     Path("benchmarks/smt-proof-smoke/qf-rdl-rational.smt2"),
     Path("benchmarks/smt-proof-smoke/qf-rdl-strict.smt2"),
 )

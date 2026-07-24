@@ -65,6 +65,26 @@ RDL_PROOF = """unsat
 ")
 """
 
+LRA_SCRIPT = """
+(set-option :produce-proofs true)
+(set-logic QF_LRA)
+(declare-const x Real)
+(declare-const y Real)
+(assert (> (+ (* 2.0 x) y) 4.0))
+(assert (<= x 1.0))
+(assert (<= y 2.0))
+(check-sat)
+(get-proof)
+"""
+
+LRA_PROOF = """unsat
+(satrap-edrat :version 1 :logic QF_LRA :variables 3
+ :premises ("(> (+ (* 2.0 x) y) 4.0)" "(<= x 1.0)" "(<= y 2.0)")
+ :clauses ((formula 1) (formula 2) (formula 3) (theory -1 -2 -3))
+ :drat "0
+")
+"""
+
 
 def cnf_satisfiable(encoder: CnfEncoder, clauses) -> bool:
     pending = tuple(frozenset(literals) for _, literals in clauses)
@@ -331,6 +351,21 @@ class SmtProofCheckerTests(unittest.TestCase):
     def test_real_strict_cycle_is_independently_validated(self):
         certificate = validate_encoding(RDL_SCRIPT, RDL_PROOF)
         self.assertEqual(certificate.logic, "QF_RDL")
+
+    def test_general_linear_real_clause_is_independently_validated(self):
+        certificate = validate_encoding(LRA_SCRIPT, LRA_PROOF)
+        self.assertEqual(certificate.logic, "QF_LRA")
+        self.assertEqual(certificate.clauses[-1], ("theory", (-1, -2, -3)))
+
+    def test_rejects_a_linear_real_clause_that_blocks_a_satisfiable_assignment(self):
+        with self.assertRaisesRegex(
+            ProofCheckError,
+            "blocks a satisfiable theory assignment",
+        ):
+            validate_encoding(
+                LRA_SCRIPT,
+                LRA_PROOF.replace("(theory -1 -2 -3)", "(theory 1 -2 -3)"),
+            )
 
     def test_rejects_a_difference_clause_that_blocks_a_satisfiable_assignment(self):
         with self.assertRaisesRegex(

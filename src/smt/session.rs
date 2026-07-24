@@ -1,6 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::error::Error;
 use std::fmt;
+use std::fs::{File, OpenOptions};
 use std::io::{BufRead, Write};
 
 use num_bigint::BigInt;
@@ -112,6 +113,8 @@ struct Options {
     produce_proofs: bool,
     global_declarations: bool,
     resource_limit: Option<u64>,
+    regular_output_channel: Option<String>,
+    diagnostic_output_channel: Option<String>,
 }
 
 /// A persistent SMT-LIB session for the currently implemented Core-Boolean
@@ -302,6 +305,16 @@ impl Session {
                 self.require_start_mode(option)?;
                 self.options.global_declarations = expect_bool_atom(&arguments[1], option)?;
             }
+            ":regular-output-channel" => {
+                let channel = expect_string(&arguments[1], option)?;
+                self.options.regular_output_channel =
+                    (channel != "stdout").then(|| channel.to_owned());
+            }
+            ":diagnostic-output-channel" => {
+                let channel = expect_string(&arguments[1], option)?;
+                self.options.diagnostic_output_channel =
+                    (channel != "stderr").then(|| channel.to_owned());
+            }
             ":reproducible-resource-limit" => {
                 let value = parse_usize(&arguments[1], option)?;
                 self.options.resource_limit =
@@ -326,6 +339,16 @@ impl Session {
             ":produce-unsat-assumptions" => bool_text(self.options.produce_unsat_assumptions),
             ":produce-proofs" => bool_text(self.options.produce_proofs),
             ":global-declarations" => bool_text(self.options.global_declarations),
+            ":regular-output-channel" => {
+                return Ok(CommandValue::Text(quote_string(
+                    self.regular_output_channel(),
+                )));
+            }
+            ":diagnostic-output-channel" => {
+                return Ok(CommandValue::Text(quote_string(
+                    self.diagnostic_output_channel(),
+                )));
+            }
             ":reproducible-resource-limit" => {
                 return Ok(CommandValue::Text(
                     self.options.resource_limit.unwrap_or(0).to_string(),
@@ -958,10 +981,30 @@ impl Session {
 
     fn echo(&self, arguments: &[SExpr]) -> Result<CommandValue, CommandError> {
         expect_arity(arguments, 1, "echo")?;
-        let value = arguments[0]
-            .string()
-            .ok_or_else(|| CommandError::message("echo expects a string literal"))?;
+        let value = expect_string(&arguments[0], "echo argument")?;
         Ok(CommandValue::Text(quote_string(value)))
+    }
+
+    fn regular_output_channel(&self) -> &str {
+        self.options
+            .regular_output_channel
+            .as_deref()
+            .unwrap_or("stdout")
+    }
+
+    fn diagnostic_output_channel(&self) -> &str {
+        self.options
+            .diagnostic_output_channel
+            .as_deref()
+            .unwrap_or("stderr")
+    }
+
+    fn restore_regular_output_channel(&mut self, channel: String) {
+        self.options.regular_output_channel = (channel != "stdout").then_some(channel);
+    }
+
+    fn restore_diagnostic_output_channel(&mut self, channel: String) {
+        self.options.diagnostic_output_channel = (channel != "stderr").then_some(channel);
     }
 
     fn parse_term(
@@ -2188,19 +2231,119 @@ impl<E: Error> From<E> for CommandError {
 pub fn run<R: BufRead, W: Write>(input: R, mut output: W) -> Result<(), SessionIoError> {
     let mut reader = Reader::new(input);
     let mut session = Session::new();
+    let mut channels = OutputChannels::new(&mut output);
     loop {
         let Some(command) = reader.next().map_err(SessionIoError::parse)? else {
             return Ok(());
         };
+        let previous_regular = session.regular_output_channel().to_owned();
+        let previous_diagnostic = session.diagnostic_output_channel().to_owned();
         let result = session.execute(&command);
+        let requested_regular = session.regular_output_channel().to_owned();
+        let requested_diagnostic = session.diagnostic_output_channel().to_owned();
+        if let Err(error) = channels.prepare_regular(&requested_regular) {
+            session.restore_regular_output_channel(previous_regular.clone());
+            let response = CommandOutput::error(&format!(
+                "could not open regular output channel `{requested_regular}`: {error}"
+            ));
+            channels.write_regular(
+                &previous_regular,
+                response.response.as_deref().expect("errors have responses"),
+            )?;
+            continue;
+        }
+        if let Err(error) = channels.prepare_diagnostic(&requested_diagnostic) {
+            session.restore_diagnostic_output_channel(previous_diagnostic);
+            let response = CommandOutput::error(&format!(
+                "could not open diagnostic output channel `{requested_diagnostic}`: {error}"
+            ));
+            channels.write_regular(
+                &requested_regular,
+                response.response.as_deref().expect("errors have responses"),
+            )?;
+            continue;
+        }
         if let Some(response) = result.response {
-            writeln!(output, "{response}").map_err(SessionIoError::io)?;
-            output.flush().map_err(SessionIoError::io)?;
+            channels.write_regular(&requested_regular, &response)?;
         }
         if result.exit {
             return Ok(());
         }
     }
+}
+
+struct OutputChannels<'a, W> {
+    stdout: &'a mut W,
+    regular_file: Option<(String, File)>,
+    diagnostic_file: Option<(String, File)>,
+}
+
+impl<'a, W: Write> OutputChannels<'a, W> {
+    fn new(stdout: &'a mut W) -> Self {
+        Self {
+            stdout,
+            regular_file: None,
+            diagnostic_file: None,
+        }
+    }
+
+    fn prepare_regular(&mut self, channel: &str) -> std::io::Result<()> {
+        if channel == "stdout" {
+            self.regular_file = None;
+            return Ok(());
+        }
+        if self
+            .regular_file
+            .as_ref()
+            .is_some_and(|(current, _)| current == channel)
+        {
+            return Ok(());
+        }
+        let file = open_output_channel(channel)?;
+        self.regular_file = Some((channel.to_owned(), file));
+        Ok(())
+    }
+
+    fn prepare_diagnostic(&mut self, channel: &str) -> std::io::Result<()> {
+        if channel == "stderr" {
+            self.diagnostic_file = None;
+            return Ok(());
+        }
+        if self
+            .diagnostic_file
+            .as_ref()
+            .is_some_and(|(current, _)| current == channel)
+        {
+            return Ok(());
+        }
+        let file = open_output_channel(channel)?;
+        self.diagnostic_file = Some((channel.to_owned(), file));
+        Ok(())
+    }
+
+    fn write_regular(&mut self, channel: &str, response: &str) -> Result<(), SessionIoError> {
+        let output: &mut dyn Write = if channel == "stdout" {
+            self.stdout
+        } else {
+            let Some((current, file)) = &mut self.regular_file else {
+                return Err(SessionIoError::io(std::io::Error::other(format!(
+                    "regular output channel `{channel}` is not open"
+                ))));
+            };
+            if current != channel {
+                return Err(SessionIoError::io(std::io::Error::other(format!(
+                    "regular output channel `{channel}` is not active"
+                ))));
+            }
+            file
+        };
+        writeln!(output, "{response}").map_err(SessionIoError::io)?;
+        output.flush().map_err(SessionIoError::io)
+    }
+}
+
+fn open_output_channel(channel: &str) -> std::io::Result<File> {
+    OpenOptions::new().create(true).append(true).open(channel)
 }
 
 #[derive(Debug)]
@@ -2247,6 +2390,12 @@ fn expect_keyword<'a>(expression: &'a SExpr, role: &str) -> Result<&'a str, Comm
     expression
         .keyword()
         .ok_or_else(|| CommandError::message(format!("{role} must be a keyword")))
+}
+
+fn expect_string<'a>(expression: &'a SExpr, role: &str) -> Result<&'a str, CommandError> {
+    expression
+        .string()
+        .ok_or_else(|| CommandError::message(format!("{role} must be a string literal")))
 }
 
 fn expect_arity(items: &[SExpr], expected: usize, name: &str) -> Result<(), CommandError> {
@@ -2483,14 +2632,27 @@ fn quote_symbol(symbol: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
     use std::io::{BufReader, Cursor};
+    use std::path::PathBuf;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     use super::run;
+
+    static NEXT_OUTPUT_FILE: AtomicUsize = AtomicUsize::new(0);
 
     fn execute(script: &str) -> String {
         let mut output = Vec::new();
         run(BufReader::new(Cursor::new(script.as_bytes())), &mut output).unwrap();
         String::from_utf8(output).unwrap()
+    }
+
+    fn output_test_path(label: &str) -> PathBuf {
+        let sequence = NEXT_OUTPUT_FILE.fetch_add(1, Ordering::Relaxed);
+        std::env::temp_dir().join(format!(
+            "satrap-smt-session-{label}-{}-{sequence}.log",
+            std::process::id()
+        ))
     }
 
     #[test]
@@ -3685,5 +3847,62 @@ mod tests {
         );
         assert!(output.contains("(define-fun |let| () Bool false)"));
         assert!(output.ends_with(")\nsuccess\n"));
+    }
+
+    #[test]
+    fn standard_output_channels_redirect_immediately_and_append() {
+        let regular_path = output_test_path("regular");
+        let diagnostic_path = output_test_path("diagnostic");
+        fs::write(&regular_path, "existing\n").unwrap();
+        let _ = fs::remove_file(&diagnostic_path);
+        let regular = regular_path.to_string_lossy();
+        let diagnostic = diagnostic_path.to_string_lossy();
+        let output = execute(&format!(
+            "(set-option :print-success true)
+             (set-option :diagnostic-output-channel \"{diagnostic}\")
+             (get-option :diagnostic-output-channel)
+             (set-option :regular-output-channel \"{regular}\")
+             (echo \"redirected\")
+             (get-option :regular-output-channel)
+             (set-option :regular-output-channel \"stdout\")
+             (echo \"primary\")
+             (exit)"
+        ));
+        let redirected = fs::read_to_string(&regular_path).unwrap();
+        let diagnostic_metadata = fs::metadata(&diagnostic_path).unwrap();
+        fs::remove_file(&regular_path).unwrap();
+        fs::remove_file(&diagnostic_path).unwrap();
+
+        assert_eq!(
+            output,
+            format!("success\nsuccess\n\"{diagnostic}\"\nsuccess\n\"primary\"\nsuccess\n")
+        );
+        assert_eq!(
+            redirected,
+            format!("existing\nsuccess\n\"redirected\"\n\"{regular}\"\n")
+        );
+        assert_eq!(diagnostic_metadata.len(), 0);
+    }
+
+    #[test]
+    fn failed_output_redirection_rolls_back_and_continues() {
+        let missing = output_test_path("missing")
+            .with_extension("dir")
+            .join("output.log");
+        let missing = missing.to_string_lossy();
+        let output = execute(&format!(
+            "(set-option :print-success true)
+             (set-option :regular-output-channel \"{missing}\")
+             (get-option :regular-output-channel)
+             (set-option :diagnostic-output-channel \"{missing}\")
+             (get-option :diagnostic-output-channel)
+             (echo \"still-open\")
+             (exit)"
+        ));
+
+        assert!(output.starts_with("success\n(error \"could not open regular output channel"));
+        assert!(output.contains("\n\"stdout\"\n"));
+        assert!(output.contains("\n(error \"could not open diagnostic output channel"));
+        assert!(output.ends_with("\n\"stderr\"\n\"still-open\"\nsuccess\n"));
     }
 }

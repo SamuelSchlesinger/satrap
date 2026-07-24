@@ -108,6 +108,12 @@ Any assertion, declaration, scope change, or reset invalidates the preceding
 result. Resource exhaustion and incomplete theory combinations return
 `unknown`; they do not guess `sat` or `unsat`.
 
+Uninterpreted-sort values in `get-value` and `get-model` responses are
+solver-defined abstract values. Every occurrence is printed with the explicit
+SMT-LIB sort ascription required by Section 4.2.6, for example
+`(as @uc!0!0 U)`. The symbol is model-local and is not added to the user
+signature.
+
 ## Logics
 
 The session accepts 14 explicit quantifier-free selectors:
@@ -129,11 +135,11 @@ Rust unit and integration tests cover online response flushing, mode
 transitions, immediate output redirection and rollback, scoped declarations,
 command and syntax errors with context reuse, balanced parser
 resynchronization, rejected-command term and model identity, atomic bulk scope
-limits, model inspection after `unknown`, and `reset-assertions` with both
-local and global declarations. The shared push/CI gate also runs raw and
-structured session fuzz targets, 3,872 deterministic queries against pinned
-independent solvers, model replays, core replays, and the query-specific proof
-corpus.
+limits, model inspection after `unknown`, sort-ascribed abstract model values,
+and `reset-assertions` with both local and global declarations. The shared
+push/CI gate also runs raw and structured session fuzz targets, 3,872
+deterministic queries against pinned independent solvers, model replays, core
+replays, and the query-specific proof corpus.
 
 Those checks are strong regression evidence, not a complete conformance suite.
 The remaining protocol work includes:

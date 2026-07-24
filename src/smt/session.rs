@@ -2095,7 +2095,11 @@ impl Session {
     }
 
     fn render_uninterpreted_value(&self, sort: UninterpretedSortId, value: u32) -> String {
-        format!("@uc!{}!{value}", sort.index())
+        format!(
+            "(as @uc!{}!{value} {})",
+            sort.index(),
+            self.render_sort(Sort::Uninterpreted(sort))
+        )
     }
 
     fn render_sort(&self, sort: Sort) -> String {
@@ -3822,23 +3826,28 @@ mod tests {
              (get-model)",
         );
         assert!(output.starts_with("unsat\n(arguments)\nsat\n"));
-        assert!(output.contains("((a @uc!0!0) (b @uc!0!0)"));
+        assert!(output.contains("((a (as @uc!0!0 U)) (b (as @uc!0!0 U))"));
         let values = output
             .lines()
             .find(|line| line.starts_with("((a "))
             .expect("get-value response");
         let f_value = values
             .split_once("((f a) ")
-            .and_then(|(_, suffix)| suffix.split_once(')'))
-            .map(|(value, _)| value)
+            .and_then(|(_, suffix)| suffix.split_once("))"))
+            .map(|(value, _)| format!("{value})"))
             .expect("f(a) value");
         assert!(
             values.contains(&format!("((f b) {f_value})")),
             "unexpected UF values:\n{output}"
         );
-        assert!(output.contains("(define-fun a () U @uc!0!0)"));
-        assert!(output.contains("(define-fun b () U @uc!0!0)"));
+        assert!(output.contains("(define-fun a () U (as @uc!0!0 U))"));
+        assert!(output.contains("(define-fun b () U (as @uc!0!0 U))"));
         assert!(output.contains("(define-fun f ((x!0 U)) U "));
+        assert_eq!(
+            output.matches("@uc!").count(),
+            output.matches("(as @uc!").count(),
+            "every abstract value must carry its SMT-LIB sort ascription:\n{output}"
+        );
     }
 
     #[test]
@@ -3920,7 +3929,34 @@ mod tests {
         assert_eq!(
             output,
             "sat\n\
-             ((a @uc!0!0) (b @uc!0!0) ((f a) @uc!0!1) ((f b) @uc!0!1))\n"
+             ((a (as @uc!0!0 U)) (b (as @uc!0!0 U)) \
+             ((f a) (as @uc!0!1 U)) ((f b) (as @uc!0!1 U)))\n"
+        );
+    }
+
+    #[test]
+    fn abstract_values_are_sort_ascribed_in_functions_and_arrays() {
+        let output = execute(
+            "(set-option :produce-models true)
+             (set-logic ALL)
+             (declare-sort U 0)
+             (declare-const a (Array U U))
+             (declare-const i U)
+             (declare-const v U)
+             (declare-fun f (U) U)
+             (assert (distinct i v))
+             (assert (= (select a i) (f v)))
+             (check-sat)
+             (get-value (a i v (f v) (select a i)))
+             (get-model)",
+        );
+        assert!(output.starts_with("sat\n"));
+        assert!(output.contains("((as const (Array U U)) (as @uc!"));
+        assert!(output.contains("(define-fun f ((x!0 U)) U "));
+        assert_eq!(
+            output.matches("@uc!").count(),
+            output.matches("(as @uc!").count(),
+            "every abstract value must carry its SMT-LIB sort ascription:\n{output}"
         );
     }
 

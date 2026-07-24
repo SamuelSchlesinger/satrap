@@ -234,11 +234,18 @@ pub(crate) fn prove_boolean_unsat(
         .iter()
         .map(|&root| canonicalizer.convert(terms, root, names))
         .collect::<Result<Vec<_>, _>>()?;
-    let roots = raw_roots
-        .iter()
-        .map(|root| canonicalizer.lower(root))
-        .collect::<Result<Vec<_>, _>>()?;
-    let theory_axioms = canonicalizer.congruence_axioms()?;
+    let (roots, theory_axioms) = if logic.admits_theory_clauses() {
+        let roots = raw_roots
+            .iter()
+            .map(|root| canonicalizer.lower(root))
+            .collect::<Result<Vec<_>, _>>()?;
+        (roots, canonicalizer.congruence_axioms()?)
+    } else {
+        // Boolean and bit-vector conversion already produces the final
+        // canonical DAG. Rewalking and structurally hashing that potentially
+        // large circuit is only needed when ground-UF equalities remain.
+        (raw_roots, Vec::new())
+    };
 
     let output = SharedBuffer::default();
     let mut solver = Solver::new();

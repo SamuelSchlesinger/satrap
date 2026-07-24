@@ -2077,6 +2077,25 @@ impl Session {
                 TermKind::UfConstant(_) => {
                     names.insert_constant(declaration.term, declaration.name.clone());
                 }
+                TermKind::Arithmetic(_) => {
+                    let variable = self
+                        .terms
+                        .arithmetic_variable_for_term(declaration.term)
+                        .map_err(CommandError::from)?
+                        .ok_or_else(|| {
+                            CommandError::message(format!(
+                                "proof declaration `{}` is not a canonical arithmetic variable",
+                                declaration.name
+                            ))
+                        })?;
+                    let sort = self
+                        .terms
+                        .sort(declaration.term)
+                        .map_err(CommandError::from)?;
+                    names
+                        .insert_arithmetic(variable, sort, declaration.name.clone())
+                        .map_err(CommandError::from)?;
+                }
                 _ => {
                     return Err(CommandError::message(format!(
                         "proof declaration `{}` has an unsupported sort",
@@ -3065,6 +3084,66 @@ mod tests {
     }
 
     #[test]
+    fn qf_idl_proofs_include_negative_cycle_theory_lemmas() {
+        let output = execute(
+            "(set-option :produce-proofs true)
+             (set-logic QF_IDL)
+             (declare-const x Int)
+             (declare-const y Int)
+             (assert (<= (- x y) 1))
+             (assert (<= (- y x) (- 2)))
+             (check-sat)
+             (get-proof)",
+        );
+        assert!(output.starts_with("unsat\n(satrap-edrat :version 1 :logic QF_IDL"));
+        assert!(output.contains(":premises (\"(<= (- x y) 1)\" \"(<= (- y x) (- 2))\")"));
+        assert!(output.contains("(theory "));
+        assert!(output.ends_with("0\n\")\n"));
+    }
+
+    #[test]
+    fn qf_idl_proofs_cover_arithmetic_ite_conditions() {
+        let output = execute(
+            "(set-option :produce-proofs true)
+             (set-logic QF_IDL)
+             (declare-const c Bool)
+             (declare-const x Int)
+             (declare-const y Int)
+             (assert c)
+             (assert (> (ite c x y) x))
+             (check-sat)
+             (get-proof)",
+        );
+        assert!(output.starts_with("unsat\n(satrap-edrat :version 1 :logic QF_IDL"));
+        assert!(output.contains("(theory "));
+        assert!(output.ends_with("0\n\")\n"));
+    }
+
+    #[test]
+    fn qf_idl_proofs_ignore_unrelated_internal_allocation_history() {
+        let query = "
+             (declare-const x Int)
+             (declare-const y Int)
+             (assert (<= (- x y) 1))
+             (assert (<= (- y x) (- 2)))
+             (check-sat)
+             (get-proof)";
+        let baseline = execute(&format!(
+            "(set-option :produce-proofs true)
+             (set-logic QF_IDL)
+             {query}"
+        ));
+        let shifted = execute(&format!(
+            "(set-option :produce-proofs true)
+             (set-logic QF_IDL)
+             (declare-const unused Int)
+             (define-const unused-offset Int (+ unused 17))
+             {query}"
+        ));
+        assert_eq!(baseline, shifted);
+    }
+
+    #[test]
     fn qf_rdl_strict_cycles_are_unsatisfiable() {
         let output = execute(
             "(set-logic QF_RDL)
@@ -3075,6 +3154,23 @@ mod tests {
              (check-sat)",
         );
         assert_eq!(output, "unsat\n");
+    }
+
+    #[test]
+    fn qf_rdl_proofs_include_strict_negative_cycle_lemmas() {
+        let output = execute(
+            "(set-option :produce-proofs true)
+             (set-logic QF_RDL)
+             (declare-const x Real)
+             (declare-const y Real)
+             (assert (< x y))
+             (assert (<= y x))
+             (check-sat)
+             (get-proof)",
+        );
+        assert!(output.starts_with("unsat\n(satrap-edrat :version 1 :logic QF_RDL"));
+        assert!(output.contains("(theory "));
+        assert!(output.ends_with("0\n\")\n"));
     }
 
     #[test]

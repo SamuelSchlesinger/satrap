@@ -627,6 +627,21 @@ impl TermStore {
         self.arithmetic_expression(expression)
     }
 
+    pub(crate) fn arithmetic_variable_for_term(
+        &self,
+        term: TermId,
+    ) -> Result<Option<ArithmeticVariableId>, TermError> {
+        let expression = self.arithmetic_expression_for_term(term)?;
+        if !expression.constant.is_zero() || expression.coefficients.len() != 1 {
+            return Ok(None);
+        }
+        let (&variable, coefficient) = expression
+            .coefficients
+            .first_key_value()
+            .expect("length checked");
+        Ok((coefficient == &BigRational::one()).then_some(variable))
+    }
+
     fn arithmetic_expression_as(
         &self,
         term: TermId,

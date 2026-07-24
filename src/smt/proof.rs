@@ -4,8 +4,13 @@ use std::fmt;
 use std::io::{self, Write};
 use std::sync::{Arc, Mutex};
 
+use num_bigint::BigInt;
+use num_rational::BigRational;
+use num_traits::{One, Signed, Zero};
+
 use crate::{Lit, SolveResult, Solver};
 
+use super::arithmetic::{ArithmeticExpressionId, ArithmeticVariableId, LinearExpression};
 use super::term::{FunctionId, Sort, SymbolId, TermId, TermKind, TermStore, UninterpretedSortId};
 
 #[derive(Clone, Debug)]
@@ -68,6 +73,8 @@ pub(crate) enum ProofLogic {
     UfBv,
     Abv,
     Aufbv,
+    Idl,
+    Rdl,
 }
 
 impl ProofLogic {
@@ -79,6 +86,8 @@ impl ProofLogic {
             "QF_UFBV" => Some(Self::UfBv),
             "QF_ABV" => Some(Self::Abv),
             "QF_AUFBV" => Some(Self::Aufbv),
+            "QF_IDL" => Some(Self::Idl),
+            "QF_RDL" => Some(Self::Rdl),
             _ => None,
         }
     }
@@ -91,11 +100,24 @@ impl ProofLogic {
             Self::UfBv => "QF_UFBV",
             Self::Abv => "QF_ABV",
             Self::Aufbv => "QF_AUFBV",
+            Self::Idl => "QF_IDL",
+            Self::Rdl => "QF_RDL",
         }
     }
 
     fn admits_theory_clauses(self) -> bool {
-        matches!(self, Self::Uf | Self::UfBv | Self::Abv | Self::Aufbv)
+        matches!(
+            self,
+            Self::Uf | Self::UfBv | Self::Abv | Self::Aufbv | Self::Idl | Self::Rdl
+        )
+    }
+
+    fn difference_sort(self) -> Option<ProofSort> {
+        match self {
+            Self::Idl => Some(ProofSort::Int),
+            Self::Rdl => Some(ProofSort::Real),
+            _ => None,
+        }
     }
 }
 
@@ -121,6 +143,11 @@ enum ProofAtom {
         right: AbstractExpr,
         index: u32,
     },
+    ArithmeticPredicate {
+        sort: ProofSort,
+        expression: ProofLinearExpression,
+        strict: bool,
+    },
 }
 
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -129,6 +156,71 @@ enum ProofSort {
     BitVec(u32),
     Uninterpreted(String),
     Array(Box<ProofSort>, Box<ProofSort>),
+    Int,
+    Real,
+}
+
+#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+enum ProofArithmeticVariable {
+    Declared {
+        sort: ProofSort,
+        name: String,
+    },
+    Ite {
+        sort: ProofSort,
+        condition: BoolExpr,
+        then_expression: Box<ProofLinearExpression>,
+        else_expression: Box<ProofLinearExpression>,
+    },
+}
+
+#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+struct ProofLinearExpression {
+    constant: BigRational,
+    coefficients: BTreeMap<ProofArithmeticVariable, BigRational>,
+}
+
+impl ProofLinearExpression {
+    fn variable(variable: ProofArithmeticVariable) -> Self {
+        Self {
+            constant: BigRational::zero(),
+            coefficients: BTreeMap::from([(variable, BigRational::one())]),
+        }
+    }
+
+    fn scaled(mut self, scale: &BigRational) -> Self {
+        self.constant *= scale;
+        for coefficient in self.coefficients.values_mut() {
+            *coefficient *= scale;
+        }
+        self.coefficients
+            .retain(|_, coefficient| !coefficient.is_zero());
+        self
+    }
+
+    fn add_scaled(&mut self, other: &Self, scale: &BigRational) {
+        self.constant += &other.constant * scale;
+        for (variable, coefficient) in &other.coefficients {
+            let updated = self
+                .coefficients
+                .get(variable)
+                .cloned()
+                .unwrap_or_else(BigRational::zero)
+                + coefficient * scale;
+            if updated.is_zero() {
+                self.coefficients.remove(variable);
+            } else {
+                self.coefficients.insert(variable.clone(), updated);
+            }
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+struct ProofLinearConstraint {
+    sort: ProofSort,
+    expression: ProofLinearExpression,
+    strict: bool,
 }
 
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -198,6 +290,7 @@ pub(crate) struct ProofNames {
     constants: HashMap<TermId, String>,
     functions: HashMap<FunctionId, String>,
     sorts: HashMap<UninterpretedSortId, String>,
+    arithmetic_variables: HashMap<ArithmeticVariableId, (ProofSort, String)>,
 }
 
 impl ProofNames {
@@ -220,6 +313,25 @@ impl ProofNames {
 
     pub(crate) fn insert_sort(&mut self, sort: UninterpretedSortId, name: String) {
         self.sorts.insert(sort, name);
+    }
+
+    pub(crate) fn insert_arithmetic(
+        &mut self,
+        variable: ArithmeticVariableId,
+        sort: Sort,
+        name: String,
+    ) -> Result<(), ProofError> {
+        let sort = match sort {
+            Sort::Int => ProofSort::Int,
+            Sort::Real => ProofSort::Real,
+            _ => {
+                return Err(ProofError::new(
+                    "arithmetic proof name has a non-arithmetic sort",
+                ));
+            }
+        };
+        self.arithmetic_variables.insert(variable, (sort, name));
+        Ok(())
     }
 }
 
@@ -247,10 +359,12 @@ impl Error for ProofError {}
 /// "global empty clause under temporary assumptions" problem. SMT-LIB permits
 /// `get-proof` only after a check with an empty explicit assumption set. A
 /// proof-specific canonical lowering makes the CNF independent of term-ID
-/// allocation history. Ground UF is reduced to finite class bits plus
-/// congruence axioms. A separate checker can therefore reconstruct the entire
-/// propositional input from the original SMT-LIB query before validating the
-/// DRAT suffix.
+/// allocation history. Ground UF and arrays are reduced to finite class bits
+/// plus independently validated theory axioms. Difference-logic replay learns
+/// only clauses whose blocked Boolean assignments have an independently
+/// detected negative cycle. A separate checker can therefore reconstruct and
+/// validate the entire propositional input from the original SMT-LIB query
+/// before validating the DRAT suffix.
 pub(crate) fn prove_boolean_unsat(
     logic: ProofLogic,
     terms: &TermStore,
@@ -283,22 +397,32 @@ pub(crate) fn prove_boolean_unsat(
         (raw_roots, Vec::new())
     };
 
+    let difference_problem = logic
+        .difference_sort()
+        .map(|sort| DifferenceProblem::from_roots(sort, &roots))
+        .transpose()?;
+    let theory_lemmas = difference_problem
+        .as_ref()
+        .map(|problem| discover_difference_lemmas(&roots, &theory_axioms, problem))
+        .transpose()?
+        .unwrap_or_default();
+    let empty_required = BTreeSet::new();
+    let required = difference_problem
+        .as_ref()
+        .map_or(&empty_required, |problem| &problem.required);
+
     let output = SharedBuffer::default();
     let mut solver = Solver::new();
     solver.enable_smt_proof_recording();
     let mut encoder = ProofEncoder::default();
-    for root in &roots {
-        let literal = encoder.encode(&mut solver, root)?;
-        solver
-            .try_add_clause(&[literal])
-            .map_err(|error| ProofError::new(error.to_string()))?;
-    }
-    for axiom in &theory_axioms {
-        let literal = encoder.encode(&mut solver, axiom)?;
-        solver
-            .add_theory_clause(&[literal])
-            .map_err(|error| ProofError::new(error.to_string()))?;
-    }
+    install_proof_input(
+        &mut solver,
+        &mut encoder,
+        &roots,
+        &theory_axioms,
+        required,
+        &theory_lemmas,
+    )?;
     let clauses = solver
         .proof_input()
         .expect("proof recording was enabled")
@@ -346,6 +470,100 @@ pub(crate) fn prove_boolean_unsat(
     })
 }
 
+fn install_proof_input(
+    solver: &mut Solver,
+    encoder: &mut ProofEncoder,
+    roots: &[BoolExpr],
+    theory_axioms: &[BoolExpr],
+    required: &BTreeSet<BoolExpr>,
+    theory_lemmas: &[Vec<ProofSignedBool>],
+) -> Result<(), ProofError> {
+    for root in roots {
+        let literal = encoder.encode(solver, root)?;
+        solver
+            .try_add_clause(&[literal])
+            .map_err(|error| ProofError::new(error.to_string()))?;
+    }
+    for axiom in theory_axioms {
+        let literal = encoder.encode(solver, axiom)?;
+        solver
+            .add_theory_clause(&[literal])
+            .map_err(|error| ProofError::new(error.to_string()))?;
+    }
+    for expression in required {
+        encoder.encode(solver, expression)?;
+    }
+    for lemma in theory_lemmas {
+        let clause = lemma
+            .iter()
+            .map(|signed| {
+                let literal = encoder.encode(solver, &signed.expression)?;
+                Ok(if signed.positive { literal } else { !literal })
+            })
+            .collect::<Result<Vec<_>, ProofError>>()?;
+        solver
+            .add_theory_clause(&clause)
+            .map_err(|error| ProofError::new(error.to_string()))?;
+    }
+    Ok(())
+}
+
+fn discover_difference_lemmas(
+    roots: &[BoolExpr],
+    theory_axioms: &[BoolExpr],
+    problem: &DifferenceProblem,
+) -> Result<Vec<Vec<ProofSignedBool>>, ProofError> {
+    let mut solver = Solver::new();
+    let mut encoder = ProofEncoder::default();
+    install_proof_input(
+        &mut solver,
+        &mut encoder,
+        roots,
+        theory_axioms,
+        &problem.required,
+        &[],
+    )?;
+    let mut lemmas = Vec::new();
+    loop {
+        match solver.solve() {
+            SolveResult::Sat(model) => {
+                let assignment = problem
+                    .required
+                    .iter()
+                    .map(|expression| {
+                        let literal = encoder.encode(&mut solver, expression)?;
+                        Ok((expression.clone(), model.literal_value(literal)))
+                    })
+                    .collect::<Result<BTreeMap<_, _>, ProofError>>()?;
+                let constraints = problem.constraints(&assignment)?;
+                if !difference_constraints_unsat(&constraints, &problem.sort)? {
+                    return Err(ProofError::new(
+                        "fresh difference-logic proof replay found a theory-consistent model",
+                    ));
+                }
+                let lemma = problem.blocking_lemma(&assignment)?;
+                let clause = lemma
+                    .iter()
+                    .map(|signed| {
+                        let literal = encoder.encode(&mut solver, &signed.expression)?;
+                        Ok(if signed.positive { literal } else { !literal })
+                    })
+                    .collect::<Result<Vec<_>, ProofError>>()?;
+                solver
+                    .add_theory_clause(&clause)
+                    .map_err(|error| ProofError::new(error.to_string()))?;
+                lemmas.push(lemma);
+            }
+            SolveResult::Unsat => return Ok(lemmas),
+            SolveResult::Unknown(reason) => {
+                return Err(ProofError::new(format!(
+                    "difference-logic proof discovery stopped with {reason:?}"
+                )));
+            }
+        }
+    }
+}
+
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 struct BoolExpr(Arc<BoolNode>);
 
@@ -369,6 +587,350 @@ impl BoolExpr {
     }
 }
 
+#[derive(Clone, Debug)]
+struct ProofSignedBool {
+    expression: BoolExpr,
+    positive: bool,
+}
+
+#[derive(Debug)]
+struct DifferenceProblem {
+    sort: ProofSort,
+    predicates: BTreeMap<BoolExpr, ProofLinearConstraint>,
+    ites: BTreeSet<ProofArithmeticVariable>,
+    required: BTreeSet<BoolExpr>,
+}
+
+impl DifferenceProblem {
+    fn from_roots(sort: ProofSort, roots: &[BoolExpr]) -> Result<Self, ProofError> {
+        let mut problem = Self {
+            sort,
+            predicates: BTreeMap::new(),
+            ites: BTreeSet::new(),
+            required: BTreeSet::new(),
+        };
+        let mut visited_boolean = HashSet::new();
+        let mut visited_variables = HashSet::new();
+        for root in roots {
+            problem.collect_bool(root, &mut visited_boolean, &mut visited_variables)?;
+        }
+        problem.required.extend(problem.predicates.keys().cloned());
+        Ok(problem)
+    }
+
+    fn collect_bool(
+        &mut self,
+        expression: &BoolExpr,
+        visited_boolean: &mut HashSet<BoolExpr>,
+        visited_variables: &mut HashSet<ProofArithmeticVariable>,
+    ) -> Result<(), ProofError> {
+        if !visited_boolean.insert(expression.clone()) {
+            return Ok(());
+        }
+        match expression.node() {
+            BoolNode::False | BoolNode::True => {}
+            BoolNode::Atom(ProofAtom::ArithmeticPredicate {
+                sort,
+                expression: linear,
+                strict,
+            }) => {
+                if sort != &self.sort {
+                    return Err(ProofError::new(
+                        "difference-logic proof contains a predicate of the wrong sort",
+                    ));
+                }
+                self.predicates.insert(
+                    expression.clone(),
+                    ProofLinearConstraint {
+                        sort: sort.clone(),
+                        expression: linear.clone(),
+                        strict: *strict,
+                    },
+                );
+                self.collect_linear(linear, visited_boolean, visited_variables)?;
+            }
+            BoolNode::Atom(_) => {}
+            BoolNode::Not(inner) => {
+                self.collect_bool(inner, visited_boolean, visited_variables)?;
+            }
+            BoolNode::And(items) | BoolNode::Or(items) => {
+                for item in items {
+                    self.collect_bool(item, visited_boolean, visited_variables)?;
+                }
+            }
+            BoolNode::Xor(left, right) | BoolNode::Iff(left, right) => {
+                self.collect_bool(left, visited_boolean, visited_variables)?;
+                self.collect_bool(right, visited_boolean, visited_variables)?;
+            }
+            BoolNode::Ite(condition, then_term, else_term) => {
+                self.collect_bool(condition, visited_boolean, visited_variables)?;
+                self.collect_bool(then_term, visited_boolean, visited_variables)?;
+                self.collect_bool(else_term, visited_boolean, visited_variables)?;
+            }
+            BoolNode::TheoryEquality(_, _) => {
+                return Err(ProofError::new(
+                    "difference-logic proof contains an unlowered theory equality",
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    fn collect_linear(
+        &mut self,
+        expression: &ProofLinearExpression,
+        visited_boolean: &mut HashSet<BoolExpr>,
+        visited_variables: &mut HashSet<ProofArithmeticVariable>,
+    ) -> Result<(), ProofError> {
+        for variable in expression.coefficients.keys() {
+            if !visited_variables.insert(variable.clone()) {
+                continue;
+            }
+            match variable {
+                ProofArithmeticVariable::Declared { sort, .. } => {
+                    if sort != &self.sort {
+                        return Err(ProofError::new(
+                            "difference-logic proof contains a variable of the wrong sort",
+                        ));
+                    }
+                }
+                variable @ ProofArithmeticVariable::Ite {
+                    sort,
+                    condition,
+                    then_expression,
+                    else_expression,
+                } => {
+                    if sort != &self.sort {
+                        return Err(ProofError::new(
+                            "difference-logic proof contains an ite of the wrong sort",
+                        ));
+                    }
+                    self.ites.insert(variable.clone());
+                    self.required.insert(condition.clone());
+                    self.collect_bool(condition, visited_boolean, visited_variables)?;
+                    self.collect_linear(then_expression, visited_boolean, visited_variables)?;
+                    self.collect_linear(else_expression, visited_boolean, visited_variables)?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn constraints(
+        &self,
+        assignment: &BTreeMap<BoolExpr, bool>,
+    ) -> Result<Vec<ProofLinearConstraint>, ProofError> {
+        let minus_one = BigRational::from_integer(BigInt::from(-1));
+        let mut constraints = Vec::new();
+        for (term, predicate) in &self.predicates {
+            let positive = assignment.get(term).copied().ok_or_else(|| {
+                ProofError::new("difference-logic predicate has no Boolean assignment")
+            })?;
+            let expression = if positive {
+                predicate.expression.clone()
+            } else {
+                predicate.expression.clone().scaled(&minus_one)
+            };
+            constraints.push(ProofLinearConstraint {
+                sort: self.sort.clone(),
+                expression,
+                strict: predicate.strict == positive,
+            });
+        }
+        for variable in &self.ites {
+            let ProofArithmeticVariable::Ite {
+                condition,
+                then_expression,
+                else_expression,
+                ..
+            } = variable
+            else {
+                unreachable!("the ite set contains only ite variables");
+            };
+            let selected = if assignment.get(condition).copied().ok_or_else(|| {
+                ProofError::new("difference-logic ite condition has no Boolean assignment")
+            })? {
+                then_expression.as_ref()
+            } else {
+                else_expression.as_ref()
+            };
+            let mut forward = ProofLinearExpression::variable(variable.clone());
+            forward.add_scaled(selected, &minus_one);
+            constraints.push(ProofLinearConstraint {
+                sort: self.sort.clone(),
+                expression: forward.clone(),
+                strict: false,
+            });
+            constraints.push(ProofLinearConstraint {
+                sort: self.sort.clone(),
+                expression: forward.scaled(&minus_one),
+                strict: false,
+            });
+        }
+        Ok(constraints)
+    }
+
+    fn blocking_lemma(
+        &self,
+        assignment: &BTreeMap<BoolExpr, bool>,
+    ) -> Result<Vec<ProofSignedBool>, ProofError> {
+        self.required
+            .iter()
+            .map(|expression| {
+                Ok(ProofSignedBool {
+                    expression: expression.clone(),
+                    positive: !assignment.get(expression).copied().ok_or_else(|| {
+                        ProofError::new("difference-logic required term has no Boolean assignment")
+                    })?,
+                })
+            })
+            .collect()
+    }
+}
+
+#[derive(Clone, Debug)]
+struct DifferenceEdge {
+    from: usize,
+    to: usize,
+    weight: BigRational,
+    epsilon: i64,
+}
+
+fn difference_constraints_unsat(
+    constraints: &[ProofLinearConstraint],
+    expected_sort: &ProofSort,
+) -> Result<bool, ProofError> {
+    let mut variables = BTreeSet::new();
+    for constraint in constraints {
+        if &constraint.sort != expected_sort {
+            return Err(ProofError::new(
+                "difference-logic constraint has an inconsistent sort",
+            ));
+        }
+        variables.extend(constraint.expression.coefficients.keys().cloned());
+    }
+    let variable_indices = variables
+        .into_iter()
+        .enumerate()
+        .map(|(index, variable)| (variable, index))
+        .collect::<BTreeMap<_, _>>();
+    let zero = variable_indices.len();
+    let mut edges = Vec::new();
+    for constraint in constraints {
+        if constraint.expression.coefficients.is_empty() {
+            let satisfied = if constraint.strict {
+                constraint.expression.constant.is_negative()
+            } else {
+                !constraint.expression.constant.is_positive()
+            };
+            if !satisfied {
+                return Ok(true);
+            }
+            continue;
+        }
+        edges.push(proof_difference_edge(
+            constraint,
+            expected_sort,
+            &variable_indices,
+            zero,
+        )?);
+    }
+
+    let vertex_count = variable_indices.len() + 1;
+    let mut distances = vec![(BigRational::zero(), 0_i64); vertex_count];
+    for iteration in 0..vertex_count {
+        let mut changed = false;
+        for edge in &edges {
+            let candidate = (
+                &distances[edge.from].0 + &edge.weight,
+                distances[edge.from].1.saturating_add(edge.epsilon),
+            );
+            if candidate.0 < distances[edge.to].0
+                || (candidate.0 == distances[edge.to].0 && candidate.1 < distances[edge.to].1)
+            {
+                distances[edge.to] = candidate;
+                changed = true;
+            }
+        }
+        if !changed {
+            return Ok(false);
+        }
+        if iteration + 1 == vertex_count {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+fn proof_difference_edge(
+    constraint: &ProofLinearConstraint,
+    expected_sort: &ProofSort,
+    variable_indices: &BTreeMap<ProofArithmeticVariable, usize>,
+    zero: usize,
+) -> Result<DifferenceEdge, ProofError> {
+    let coefficients = constraint
+        .expression
+        .coefficients
+        .iter()
+        .collect::<Vec<_>>();
+    let (positive, negative, scale) = match coefficients.as_slice() {
+        [(variable, coefficient)] if coefficient.is_positive() => {
+            (variable_indices[*variable], zero, (*coefficient).clone())
+        }
+        [(variable, coefficient)] if coefficient.is_negative() => {
+            (zero, variable_indices[*variable], -(*coefficient).clone())
+        }
+        [(first, first_coefficient), (second, second_coefficient)]
+            if first_coefficient.is_positive()
+                && *first_coefficient == &(-(*second_coefficient)) =>
+        {
+            (
+                variable_indices[*first],
+                variable_indices[*second],
+                (*first_coefficient).clone(),
+            )
+        }
+        [(first, first_coefficient), (second, second_coefficient)]
+            if second_coefficient.is_positive()
+                && *second_coefficient == &(-(*first_coefficient)) =>
+        {
+            (
+                variable_indices[*second],
+                variable_indices[*first],
+                (*second_coefficient).clone(),
+            )
+        }
+        _ => {
+            return Err(ProofError::new(
+                "proof predicate is outside the declared difference-logic fragment",
+            ));
+        }
+    };
+    let bound = -constraint.expression.constant.clone() / scale;
+    let (weight, epsilon) = match expected_sort {
+        ProofSort::Int => {
+            let integer = if constraint.strict {
+                bound.ceil().to_integer() - BigInt::one()
+            } else {
+                bound.floor().to_integer()
+            };
+            (BigRational::from_integer(integer), 0)
+        }
+        ProofSort::Real => (bound, if constraint.strict { -1 } else { 0 }),
+        _ => {
+            return Err(ProofError::new(
+                "difference-logic proof selected a non-arithmetic sort",
+            ));
+        }
+    };
+    Ok(DifferenceEdge {
+        from: negative,
+        to: positive,
+        weight,
+        epsilon,
+    })
+}
+
 #[derive(Debug)]
 struct Canonicalizer {
     converted: HashMap<TermId, BoolExpr>,
@@ -376,6 +938,8 @@ struct Canonicalizer {
     application_converted: HashMap<usize, ProofApplication>,
     application_results: HashMap<TermId, usize>,
     application_bits: HashMap<TermId, (usize, u32)>,
+    arithmetic_converted: HashMap<ArithmeticVariableId, ProofArithmeticVariable>,
+    arithmetic_ites: HashMap<ArithmeticVariableId, super::term::ArithmeticIte>,
     abstract_terms: BTreeMap<ProofSort, BTreeSet<AbstractExpr>>,
     applications: BTreeSet<ProofApplication>,
     processed_array_selects: BTreeSet<ProofApplication>,
@@ -412,12 +976,24 @@ impl Canonicalizer {
                 Sort::Int | Sort::Real | Sort::Uninterpreted(_) | Sort::Array(_) => {}
             }
         }
+        let mut arithmetic_ites = HashMap::new();
+        for item in terms.arithmetic_ites() {
+            let variable = terms
+                .arithmetic_variable_for_term(item.result)
+                .map_err(|error| ProofError::new(error.to_string()))?
+                .ok_or_else(|| {
+                    ProofError::new("arithmetic ite result is not a canonical variable")
+                })?;
+            arithmetic_ites.insert(variable, *item);
+        }
         Ok(Self {
             converted: HashMap::new(),
             abstract_converted: HashMap::new(),
             application_converted: HashMap::new(),
             application_results,
             application_bits,
+            arithmetic_converted: HashMap::new(),
+            arithmetic_ites,
             abstract_terms: BTreeMap::new(),
             applications: BTreeSet::new(),
             processed_array_selects: BTreeSet::new(),
@@ -497,8 +1073,20 @@ impl Canonicalizer {
                 let (left, right) = ordered_abstract_pair(left, right);
                 self.intern(BoolNode::TheoryEquality(left, right))
             }
-            TermKind::ArithmeticPredicate(_, _, _)
-            | TermKind::UfConstant(_)
+            TermKind::ArithmeticPredicate(_, expression, strict) => {
+                let source_sort = terms
+                    .arithmetic_expression_sort(expression)
+                    .map_err(|error| ProofError::new(error.to_string()))?;
+                let sort = self.proof_sort(terms, source_sort, names)?;
+                let expression =
+                    self.convert_arithmetic_expression(terms, expression, source_sort, names)?;
+                self.intern(BoolNode::Atom(ProofAtom::ArithmeticPredicate {
+                    sort,
+                    expression,
+                    strict,
+                }))
+            }
+            TermKind::UfConstant(_)
             | TermKind::UfApplication(_, _)
             | TermKind::UfIte(_, _, _)
             | TermKind::Arithmetic(_)
@@ -512,6 +1100,104 @@ impl Canonicalizer {
         };
         self.converted.insert(term, expression.clone());
         Ok(expression)
+    }
+
+    fn convert_arithmetic_expression(
+        &mut self,
+        terms: &TermStore,
+        expression: ArithmeticExpressionId,
+        sort: Sort,
+        names: &ProofNames,
+    ) -> Result<ProofLinearExpression, ProofError> {
+        let expression = terms
+            .arithmetic_expression(expression)
+            .map_err(|error| ProofError::new(error.to_string()))?;
+        self.convert_linear_expression(terms, expression, sort, names)
+    }
+
+    fn convert_linear_expression(
+        &mut self,
+        terms: &TermStore,
+        expression: &LinearExpression,
+        sort: Sort,
+        names: &ProofNames,
+    ) -> Result<ProofLinearExpression, ProofError> {
+        let expected_sort = self.proof_sort(terms, sort, names)?;
+        if !matches!(expected_sort, ProofSort::Int | ProofSort::Real) {
+            return Err(ProofError::new(
+                "proof arithmetic expression has a non-arithmetic sort",
+            ));
+        }
+        let mut coefficients = BTreeMap::new();
+        for (&variable, coefficient) in &expression.coefficients {
+            let variable = self.convert_arithmetic_variable(terms, variable, names)?;
+            let updated = coefficients
+                .get(&variable)
+                .cloned()
+                .unwrap_or_else(BigRational::zero)
+                + coefficient;
+            if updated.is_zero() {
+                coefficients.remove(&variable);
+            } else {
+                coefficients.insert(variable, updated);
+            }
+        }
+        Ok(ProofLinearExpression {
+            constant: expression.constant.clone(),
+            coefficients,
+        })
+    }
+
+    fn convert_arithmetic_variable(
+        &mut self,
+        terms: &TermStore,
+        variable: ArithmeticVariableId,
+        names: &ProofNames,
+    ) -> Result<ProofArithmeticVariable, ProofError> {
+        if let Some(converted) = self.arithmetic_converted.get(&variable) {
+            return Ok(converted.clone());
+        }
+        let converted = if let Some((sort, name)) = names.arithmetic_variables.get(&variable) {
+            ProofArithmeticVariable::Declared {
+                sort: sort.clone(),
+                name: name.clone(),
+            }
+        } else if let Some(item) = self.arithmetic_ites.get(&variable).copied() {
+            let source_sort = terms
+                .sort(item.result)
+                .map_err(|error| ProofError::new(error.to_string()))?;
+            let sort = self.proof_sort(terms, source_sort, names)?;
+            let then_expression = self.convert_linear_expression(
+                terms,
+                terms
+                    .arithmetic_expression_for_term(item.then_term)
+                    .map_err(|error| ProofError::new(error.to_string()))?,
+                source_sort,
+                names,
+            )?;
+            let else_expression = self.convert_linear_expression(
+                terms,
+                terms
+                    .arithmetic_expression_for_term(item.else_term)
+                    .map_err(|error| ProofError::new(error.to_string()))?,
+                source_sort,
+                names,
+            )?;
+            ProofArithmeticVariable::Ite {
+                sort,
+                condition: self.convert(terms, item.condition, names)?,
+                then_expression: Box::new(then_expression),
+                else_expression: Box::new(else_expression),
+            }
+        } else {
+            return Err(ProofError::new(format!(
+                "arithmetic proof variable {} has no active declaration or canonical definition",
+                variable.0
+            )));
+        };
+        self.arithmetic_converted
+            .insert(variable, converted.clone());
+        Ok(converted)
     }
 
     fn convert_value(
@@ -740,9 +1426,8 @@ impl Canonicalizer {
                     Box::new(self.proof_sort(terms, signature.element, names)?),
                 ))
             }
-            Sort::Int | Sort::Real => Err(ProofError::new(
-                "proof replay encountered an unsupported sort",
-            )),
+            Sort::Int => Ok(ProofSort::Int),
+            Sort::Real => Ok(ProofSort::Real),
         }
     }
 
@@ -970,6 +1655,9 @@ impl Canonicalizer {
                 self.register_abstract(sort, expression.clone());
                 Ok(ProofValue::Abstract(expression))
             }
+            ProofSort::Int | ProofSort::Real => Err(ProofError::new(
+                "arithmetic-valued proof applications are not yet supported",
+            )),
         }
     }
 
@@ -1086,6 +1774,9 @@ impl Canonicalizer {
             }
             ProofSort::Array(_, _) => Err(ProofError::new(
                 "nested array indices are outside the proof boundary",
+            )),
+            ProofSort::Int | ProofSort::Real => Err(ProofError::new(
+                "arithmetic array indices are outside the proof boundary",
             )),
         }
     }

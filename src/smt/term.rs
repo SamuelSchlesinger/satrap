@@ -204,11 +204,34 @@ pub struct TermStore {
     array_sort_ids: HashMap<(Sort, Sort), ArraySortId>,
     array_axioms: Vec<TermId>,
     array_semantic_selects: HashSet<TermId>,
+    array_semantic_select_log: Vec<TermId>,
     /// Indices at which each concrete array term is observed. Array
     /// preparation propagates these demands only across relationships that
     /// can identify arrays, rather than materializing the global Cartesian
     /// product of every array and every index of the same sort.
     array_reads: HashMap<TermId, Vec<TermId>>,
+    array_read_log: Vec<(TermId, TermId)>,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct TermStoreCheckpoint {
+    nodes: usize,
+    sorts: usize,
+    next_symbol: u32,
+    next_uninterpreted_sort: u32,
+    next_uninterpreted_value: u32,
+    functions: usize,
+    applications: usize,
+    theory_equalities: usize,
+    uf_ites: usize,
+    arithmetic_expressions: usize,
+    arithmetic_variable_sorts: usize,
+    arithmetic_predicates: usize,
+    arithmetic_ites: usize,
+    array_sorts: usize,
+    array_axioms: usize,
+    array_semantic_select_log: usize,
+    array_read_log: usize,
 }
 
 impl Default for TermStore {
@@ -263,8 +286,149 @@ impl TermStore {
             array_sort_ids: HashMap::new(),
             array_axioms: Vec::new(),
             array_semantic_selects: HashSet::new(),
+            array_semantic_select_log: Vec::new(),
             array_reads: HashMap::new(),
+            array_read_log: Vec::new(),
         }
+    }
+
+    pub(crate) fn checkpoint(&self) -> TermStoreCheckpoint {
+        TermStoreCheckpoint {
+            nodes: self.nodes.len(),
+            sorts: self.sorts.len(),
+            next_symbol: self.next_symbol,
+            next_uninterpreted_sort: self.next_uninterpreted_sort,
+            next_uninterpreted_value: self.next_uninterpreted_value,
+            functions: self.functions.len(),
+            applications: self.applications.len(),
+            theory_equalities: self.theory_equalities.len(),
+            uf_ites: self.uf_ites.len(),
+            arithmetic_expressions: self.arithmetic_expressions.len(),
+            arithmetic_variable_sorts: self.arithmetic_variable_sorts.len(),
+            arithmetic_predicates: self.arithmetic_predicates.len(),
+            arithmetic_ites: self.arithmetic_ites.len(),
+            array_sorts: self.array_sorts.len(),
+            array_axioms: self.array_axioms.len(),
+            array_semantic_select_log: self.array_semantic_select_log.len(),
+            array_read_log: self.array_read_log.len(),
+        }
+    }
+
+    pub(crate) fn rollback(&mut self, checkpoint: TermStoreCheckpoint) {
+        while self.array_read_log.len() > checkpoint.array_read_log {
+            let (array, index) = self
+                .array_read_log
+                .pop()
+                .expect("array-read log length checked above");
+            let remove_entry = {
+                let indices = self
+                    .array_reads
+                    .get_mut(&array)
+                    .expect("logged array read has an index list");
+                let removed = indices.pop();
+                debug_assert_eq!(removed, Some(index));
+                indices.is_empty()
+            };
+            if remove_entry {
+                self.array_reads.remove(&array);
+            }
+        }
+        while self.array_semantic_select_log.len() > checkpoint.array_semantic_select_log {
+            let term = self
+                .array_semantic_select_log
+                .pop()
+                .expect("semantic-select log length checked above");
+            let removed = self.array_semantic_selects.remove(&term);
+            debug_assert!(removed);
+        }
+
+        self.array_axioms.truncate(checkpoint.array_axioms);
+        while self.array_sorts.len() > checkpoint.array_sorts {
+            let signature = self
+                .array_sorts
+                .pop()
+                .expect("array-sort length checked above");
+            let removed = self
+                .array_sort_ids
+                .remove(&(signature.index, signature.element));
+            debug_assert!(removed.is_some());
+        }
+        while self.arithmetic_ites.len() > checkpoint.arithmetic_ites {
+            let item = self
+                .arithmetic_ites
+                .pop()
+                .expect("arithmetic-ite length checked above");
+            let sort = self
+                .sort(item.result)
+                .expect("arithmetic ite result remains live during rollback");
+            let removed = self.arithmetic_ite_terms.remove(&(
+                item.condition,
+                item.then_term,
+                item.else_term,
+                sort,
+            ));
+            debug_assert!(removed.is_some());
+        }
+        while self.arithmetic_predicates.len() > checkpoint.arithmetic_predicates {
+            let predicate = self
+                .arithmetic_predicates
+                .pop()
+                .expect("arithmetic-predicate length checked above");
+            let removed = self
+                .arithmetic_predicate_terms
+                .remove(&(predicate.expression, predicate.strict));
+            debug_assert!(removed.is_some());
+        }
+        self.arithmetic_variable_sorts
+            .truncate(checkpoint.arithmetic_variable_sorts);
+        while self.arithmetic_expressions.len() > checkpoint.arithmetic_expressions {
+            let (sort, expression) = self
+                .arithmetic_expressions
+                .pop()
+                .expect("arithmetic-expression length checked above");
+            let removed = self.arithmetic_expression_ids.remove(&(sort, expression));
+            debug_assert!(removed.is_some());
+        }
+        self.uf_ites.truncate(checkpoint.uf_ites);
+        while self.theory_equalities.len() > checkpoint.theory_equalities {
+            let equality = self
+                .theory_equalities
+                .pop()
+                .expect("theory-equality length checked above");
+            let removed = self
+                .theory_equality_terms
+                .remove(&ordered_pair(equality.left, equality.right));
+            debug_assert!(removed.is_some());
+        }
+        while self.applications.len() > checkpoint.applications {
+            let application = self
+                .applications
+                .pop()
+                .expect("application length checked above");
+            let key = ApplicationKey {
+                function: application.function,
+                arguments: application.arguments.clone(),
+            };
+            let removed_result = self.application_results.remove(&key);
+            let removed_index = self.application_by_result.remove(&application.result);
+            debug_assert_eq!(removed_result, Some(application.result));
+            debug_assert!(removed_index.is_some());
+        }
+        self.functions.truncate(checkpoint.functions);
+
+        while self.nodes.len() > checkpoint.nodes {
+            let node = self.nodes.pop().expect("term-node length checked above");
+            let removed = self.interned.remove(&node);
+            debug_assert!(removed.is_some());
+        }
+        while self.sorts.len() > checkpoint.sorts {
+            let sort = self.sorts.pop().expect("sort length checked above");
+            let removed = self.sort_ids.remove(&sort);
+            debug_assert!(removed.is_some());
+        }
+        self.next_symbol = checkpoint.next_symbol;
+        self.next_uninterpreted_sort = checkpoint.next_uninterpreted_sort;
+        self.next_uninterpreted_value = checkpoint.next_uninterpreted_value;
     }
 
     #[must_use]
@@ -801,6 +965,7 @@ impl TermStore {
         self.register_array_read(array, index);
         let result = self.apply(signature.select_function, &[array, index])?;
         if self.array_semantic_selects.insert(result) {
+            self.array_semantic_select_log.push(result);
             let semantic_value = match self.node(array).kind.clone() {
                 TermKind::ArrayConst(value) => Some(value),
                 TermKind::ArrayStore(base, stored_index, stored_value) => {
@@ -863,6 +1028,7 @@ impl TermStore {
         let indices = self.array_reads.entry(array).or_default();
         if !indices.contains(&index) {
             indices.push(index);
+            self.array_read_log.push((array, index));
         }
     }
 
@@ -1507,5 +1673,38 @@ mod tests {
         assert_eq!(terms.sort(condition).unwrap(), Sort::Bool);
         let selected = terms.ite(condition, a, b).unwrap();
         assert_eq!(terms.sort(selected).unwrap(), Sort::BitVec(3));
+    }
+
+    #[test]
+    fn checkpoint_restores_array_demand_and_hash_consing_state() {
+        let mut terms = TermStore::new();
+        let array_sort = terms.array_sort(Sort::BitVec(1), Sort::BitVec(1)).unwrap();
+        let array = terms.fresh_term(Sort::Array(array_sort)).unwrap();
+        let index = terms.fresh_term(Sort::BitVec(1)).unwrap();
+        let checkpoint = terms.checkpoint();
+        let baseline = (
+            terms.nodes.len(),
+            terms.applications.len(),
+            terms.array_axioms.len(),
+            terms.array_reads.len(),
+            terms.array_semantic_selects.len(),
+        );
+
+        let selected = terms.select(array, index).unwrap();
+        assert!(terms.array_reads.contains_key(&array));
+        assert!(terms.array_semantic_selects.contains(&selected));
+        terms.rollback(checkpoint);
+
+        assert_eq!(
+            (
+                terms.nodes.len(),
+                terms.applications.len(),
+                terms.array_axioms.len(),
+                terms.array_reads.len(),
+                terms.array_semantic_selects.len(),
+            ),
+            baseline
+        );
+        assert_eq!(terms.select(array, index).unwrap(), selected);
     }
 }

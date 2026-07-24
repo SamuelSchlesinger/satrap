@@ -16,7 +16,8 @@ use super::engine::{SmtSolveResult, solve as solve_smt};
 use super::proof::{BooleanRefutation, ProofLogic, ProofNames, prove_boolean_unsat};
 use super::sexpr::{Reader, SExpr};
 use super::term::{
-    ArraySortId, FunctionId, Sort, SymbolId, TermId, TermKind, TermStore, UninterpretedSortId,
+    ArraySortId, FunctionId, Sort, SymbolId, TermId, TermKind, TermStore, TermStoreCheckpoint,
+    UninterpretedSortId,
 };
 use super::theory::{TheoryManager, TheoryModel};
 
@@ -78,6 +79,7 @@ struct PreparedCommand {
     command: SExpr,
     definitions: Vec<InlineDefinition>,
     assertion_label: Option<String>,
+    term_checkpoint: Option<TermStoreCheckpoint>,
 }
 
 #[derive(Debug, Default)]
@@ -197,6 +199,7 @@ impl Session {
             command: stripped,
             definitions,
             assertion_label,
+            term_checkpoint,
         } = match self.prepare_inline_definitions(command) {
             Ok(prepared) => prepared,
             Err(CommandError::Unsupported) => return CommandOutput::text("unsupported"),
@@ -207,6 +210,9 @@ impl Session {
             self.commit_inline_definitions(&definitions);
         } else {
             self.rollback_inline_definitions(&definitions);
+            if let Some(checkpoint) = term_checkpoint {
+                self.terms.rollback(checkpoint);
+            }
         }
         match result {
             Ok(CommandValue::Success) => {
@@ -490,7 +496,14 @@ impl Session {
         if !parameters.is_empty() {
             return Err(CommandError::Unsupported);
         }
-        let sort = self.parse_sort(&arguments[2])?;
+        let checkpoint = self.terms.checkpoint();
+        let sort = match self.parse_sort(&arguments[2]) {
+            Ok(sort) => sort,
+            Err(error) => {
+                self.terms.rollback(checkpoint);
+                return Err(error);
+            }
+        };
         self.sorts.insert(name.clone(), sort);
         let target = self.declaration_frame();
         self.frames[target].bound_sorts.push(name);
@@ -501,37 +514,45 @@ impl Session {
     fn declare_const(&mut self, arguments: &[SExpr]) -> Result<CommandValue, CommandError> {
         expect_arity(arguments, 2, "declare-const")?;
         let name = expect_symbol(&arguments[0], "constant name")?.to_owned();
-        let sort = self.parse_sort(&arguments[1])?;
-        self.declare_term(name, sort)
+        let checkpoint = self.terms.checkpoint();
+        let result = (|| {
+            let sort = self.parse_sort(&arguments[1])?;
+            self.declare_term(name, sort)
+        })();
+        self.finish_term_transaction(checkpoint, result)
     }
 
     fn declare_fun(&mut self, arguments: &[SExpr]) -> Result<CommandValue, CommandError> {
         expect_arity(arguments, 3, "declare-fun")?;
         let name = expect_symbol(&arguments[0], "function name")?.to_owned();
-        let parameters = expect_list(&arguments[1], "function parameter sorts")?;
-        let domain = parameters
-            .iter()
-            .map(|parameter| self.parse_sort(parameter))
-            .collect::<Result<Vec<_>, _>>()?;
-        let range = self.parse_sort(&arguments[2])?;
-        if domain.is_empty() {
-            return self.declare_term(name, range);
-        }
-        self.require_uf()?;
-        self.ensure_fresh_name(&name)?;
-        let function = self
-            .terms
-            .declare_function(&domain, range)
-            .map_err(CommandError::from)?;
-        self.functions
-            .insert(name.clone(), FunctionBinding::Declared(function));
-        let target = self.declaration_frame();
-        self.frames[target].bound_functions.push(name.clone());
-        self.frames[target]
-            .function_declarations
-            .push(FunctionDeclaration { name, function });
-        self.invalidate_check();
-        Ok(CommandValue::Success)
+        let checkpoint = self.terms.checkpoint();
+        let result = (|| {
+            let parameters = expect_list(&arguments[1], "function parameter sorts")?;
+            let domain = parameters
+                .iter()
+                .map(|parameter| self.parse_sort(parameter))
+                .collect::<Result<Vec<_>, _>>()?;
+            let range = self.parse_sort(&arguments[2])?;
+            if domain.is_empty() {
+                return self.declare_term(name, range);
+            }
+            self.require_uf()?;
+            self.ensure_fresh_name(&name)?;
+            let function = self
+                .terms
+                .declare_function(&domain, range)
+                .map_err(CommandError::from)?;
+            self.functions
+                .insert(name.clone(), FunctionBinding::Declared(function));
+            let target = self.declaration_frame();
+            self.frames[target].bound_functions.push(name.clone());
+            self.frames[target]
+                .function_declarations
+                .push(FunctionDeclaration { name, function });
+            self.invalidate_check();
+            Ok(CommandValue::Success)
+        })();
+        self.finish_term_transaction(checkpoint, result)
     }
 
     fn declare_term(&mut self, name: String, sort: Sort) -> Result<CommandValue, CommandError> {
@@ -551,61 +572,77 @@ impl Session {
     fn define_const(&mut self, arguments: &[SExpr]) -> Result<CommandValue, CommandError> {
         expect_arity(arguments, 3, "define-const")?;
         let name = expect_symbol(&arguments[0], "constant name")?.to_owned();
-        let sort = self.parse_sort(&arguments[1])?;
-        let term = self.parse_term(&arguments[2], &[])?;
-        self.define_term(name, sort, term)
+        let checkpoint = self.terms.checkpoint();
+        let result = (|| {
+            let sort = self.parse_sort(&arguments[1])?;
+            let term = self.parse_term(&arguments[2], &[])?;
+            self.define_term(name, sort, term)
+        })();
+        self.finish_term_transaction(checkpoint, result)
     }
 
     fn define_fun(&mut self, arguments: &[SExpr]) -> Result<CommandValue, CommandError> {
         expect_arity(arguments, 4, "define-fun")?;
         let name = expect_symbol(&arguments[0], "function name")?.to_owned();
-        let parameters = expect_list(&arguments[1], "function parameters")?;
-        let mut names = HashSet::new();
-        let mut parameter_names = Vec::with_capacity(parameters.len());
-        let mut domain = Vec::with_capacity(parameters.len());
-        for parameter in parameters {
-            let fields = expect_list(parameter, "function parameter")?;
-            expect_arity(fields, 2, "function parameter")?;
-            let parameter_name = expect_symbol(&fields[0], "parameter name")?.to_owned();
-            if !names.insert(parameter_name.clone()) {
+        let command_checkpoint = self.terms.checkpoint();
+        let result = (|| {
+            let parameters = expect_list(&arguments[1], "function parameters")?;
+            let mut names = HashSet::new();
+            let mut parameter_names = Vec::with_capacity(parameters.len());
+            let mut domain = Vec::with_capacity(parameters.len());
+            for parameter in parameters {
+                let fields = expect_list(parameter, "function parameter")?;
+                expect_arity(fields, 2, "function parameter")?;
+                let parameter_name = expect_symbol(&fields[0], "parameter name")?.to_owned();
+                if !names.insert(parameter_name.clone()) {
+                    return Err(CommandError::message(format!(
+                        "duplicate function parameter `{parameter_name}`"
+                    )));
+                }
+                parameter_names.push(parameter_name);
+                domain.push(self.parse_sort(&fields[1])?);
+            }
+            let range = self.parse_sort(&arguments[2])?;
+            if domain.is_empty() {
+                let term = self.parse_term(&arguments[3], &[])?;
+                return self.define_term(name, range, term);
+            }
+            self.require_uf()?;
+            self.ensure_fresh_name(&name)?;
+            // Parameter placeholders exist only to sort-check the macro body.
+            // Roll them back so neither a rejected definition nor a successful
+            // one consumes persistent symbols or model values.
+            let body_checkpoint = self.terms.checkpoint();
+            let body_sort = (|| {
+                let mut locals = HashMap::new();
+                for (&sort, parameter) in domain.iter().zip(parameter_names.iter()) {
+                    let term = self.terms.fresh_term(sort).map_err(CommandError::from)?;
+                    locals.insert(parameter.clone(), term);
+                }
+                let body_term = self.parse_term(&arguments[3], &[locals])?;
+                self.terms.sort(body_term).map_err(CommandError::from)
+            })();
+            self.terms.rollback(body_checkpoint);
+            if body_sort? != range {
                 return Err(CommandError::message(format!(
-                    "duplicate function parameter `{parameter_name}`"
+                    "definition of `{name}` does not have its declared result sort"
                 )));
             }
-            parameter_names.push(parameter_name);
-            domain.push(self.parse_sort(&fields[1])?);
-        }
-        let range = self.parse_sort(&arguments[2])?;
-        if domain.is_empty() {
-            let term = self.parse_term(&arguments[3], &[])?;
-            return self.define_term(name, range, term);
-        }
-        self.require_uf()?;
-        self.ensure_fresh_name(&name)?;
-        let mut locals = HashMap::new();
-        for (&sort, parameter) in domain.iter().zip(parameter_names.iter()) {
-            let term = self.terms.fresh_term(sort).map_err(CommandError::from)?;
-            locals.insert(parameter.clone(), term);
-        }
-        let body_term = self.parse_term(&arguments[3], &[locals])?;
-        if self.terms.sort(body_term).map_err(CommandError::from)? != range {
-            return Err(CommandError::message(format!(
-                "definition of `{name}` does not have its declared result sort"
-            )));
-        }
-        self.functions.insert(
-            name.clone(),
-            FunctionBinding::Defined {
-                parameters: parameter_names,
-                domain,
-                range,
-                body: arguments[3].clone(),
-            },
-        );
-        let target = self.declaration_frame();
-        self.frames[target].bound_functions.push(name);
-        self.invalidate_check();
-        Ok(CommandValue::Success)
+            self.functions.insert(
+                name.clone(),
+                FunctionBinding::Defined {
+                    parameters: parameter_names,
+                    domain,
+                    range,
+                    body: arguments[3].clone(),
+                },
+            );
+            let target = self.declaration_frame();
+            self.frames[target].bound_functions.push(name);
+            self.invalidate_check();
+            Ok(CommandValue::Success)
+        })();
+        self.finish_term_transaction(command_checkpoint, result)
     }
 
     fn define_term(
@@ -637,8 +674,17 @@ impl Session {
         expect_arity(arguments, 1, "assert")?;
         expect_arity(original_arguments, 1, "assert")?;
         self.require_logic()?;
-        let term = self.parse_term(&arguments[0], &[])?;
-        self.terms.require_bool(term).map_err(CommandError::from)?;
+        let checkpoint = self.terms.checkpoint();
+        let term = match self.parse_term(&arguments[0], &[]).and_then(|term| {
+            self.terms.require_bool(term).map_err(CommandError::from)?;
+            Ok(term)
+        }) {
+            Ok(term) => term,
+            Err(error) => {
+                self.terms.rollback(checkpoint);
+                return Err(error);
+            }
+        };
         let literal = self
             .encoder
             .encode(&self.terms, &mut self.solver, term)
@@ -722,16 +768,36 @@ impl Session {
     fn check_sat_assuming(&mut self, arguments: &[SExpr]) -> Result<CommandValue, CommandError> {
         expect_arity(arguments, 1, "check-sat-assuming")?;
         let expressions = expect_list(&arguments[0], "assumption list")?;
-        let mut assumptions = Vec::with_capacity(expressions.len());
+        let checkpoint = self.terms.checkpoint();
+        let mut parsed = Vec::with_capacity(expressions.len());
         for expression in expressions {
-            let term = self.parse_term(expression, &[])?;
-            self.terms.require_bool(term).map_err(CommandError::from)?;
+            let term = match self.parse_term(expression, &[]) {
+                Ok(term) => term,
+                Err(error) => {
+                    self.terms.rollback(checkpoint);
+                    return Err(error);
+                }
+            };
+            if let Err(error) = self.terms.require_bool(term) {
+                self.terms.rollback(checkpoint);
+                return Err(CommandError::from(error));
+            }
+            parsed.push((render(expression), term));
+        }
+
+        // Validate every assumption before lowering any of them. Encoding is a
+        // persistent, conservative extension of the SAT state, so installing a
+        // valid prefix before a later malformed assumption would make an
+        // error-generating command observably affect subsequent deterministic
+        // checks.
+        let mut assumptions = Vec::with_capacity(parsed.len());
+        for (source, term) in parsed {
             let literal = self
                 .encoder
                 .encode(&self.terms, &mut self.solver, term)
                 .map_err(CommandError::from)?;
             assumptions.push(Assumption {
-                source: render(expression),
+                source,
                 term,
                 literal,
             });
@@ -885,13 +951,18 @@ impl Session {
         }
         let model = self.sat_model()?.clone();
         let theory = self.sat_theory_model()?.clone();
-        let mut values = Vec::with_capacity(expressions.len());
-        for expression in expressions {
-            let term = self.parse_term(expression, &[])?;
-            let value = self.render_term_value(&model, &theory, term)?;
-            values.push(format!("({} {value})", render(expression)));
-        }
-        Ok(CommandValue::Text(format!("({})", values.join(" "))))
+        let checkpoint = self.terms.checkpoint();
+        let result = (|| {
+            let mut values = Vec::with_capacity(expressions.len());
+            for expression in expressions {
+                let term = self.parse_term(expression, &[])?;
+                let value = self.render_term_value(&model, &theory, term)?;
+                values.push(format!("({} {value})", render(expression)));
+            }
+            Ok(CommandValue::Text(format!("({})", values.join(" "))))
+        })();
+        self.terms.rollback(checkpoint);
+        result
     }
 
     fn get_assignment(&self, arguments: &[SExpr]) -> Result<CommandValue, CommandError> {
@@ -1069,6 +1140,7 @@ impl Session {
         command: &SExpr,
     ) -> Result<PreparedCommand, CommandError> {
         let (command, syntax, assertion_label) = strip_inline_definitions(command)?;
+        let term_checkpoint = (!syntax.is_empty()).then(|| self.terms.checkpoint());
         let mut names = HashSet::new();
         for definition in &syntax {
             self.ensure_fresh_name(&definition.name)?;
@@ -1086,6 +1158,9 @@ impl Session {
                 Ok(term) => term,
                 Err(error) => {
                     self.rollback_inline_definitions(&definitions);
+                    if let Some(checkpoint) = term_checkpoint {
+                        self.terms.rollback(checkpoint);
+                    }
                     return Err(error);
                 }
             };
@@ -1093,6 +1168,9 @@ impl Session {
                 Ok(sort) => sort == Sort::Bool,
                 Err(error) => {
                     self.rollback_inline_definitions(&definitions);
+                    if let Some(checkpoint) = term_checkpoint {
+                        self.terms.rollback(checkpoint);
+                    }
                     return Err(CommandError::from(error));
                 }
             };
@@ -1109,6 +1187,7 @@ impl Session {
             command,
             definitions,
             assertion_label,
+            term_checkpoint,
         })
     }
 
@@ -1134,6 +1213,17 @@ impl Session {
         for definition in definitions {
             self.bindings.remove(&definition.name);
         }
+    }
+
+    fn finish_term_transaction<T>(
+        &mut self,
+        checkpoint: TermStoreCheckpoint,
+        result: Result<T, CommandError>,
+    ) -> Result<T, CommandError> {
+        if result.is_err() {
+            self.terms.rollback(checkpoint);
+        }
+        result
     }
 
     fn parse_term(
@@ -3462,6 +3552,147 @@ mod tests {
         assert!(output.contains(
             "(error \"option `:produce-models` can only be set before set-logic\")\nfalse\nsat\n"
         ));
+    }
+
+    #[test]
+    fn rejected_assumption_lists_do_not_install_valid_prefix_encodings() {
+        let baseline = execute(
+            "(set-option :produce-models true)
+             (set-logic QF_UF)
+             (declare-const p Bool)
+             (declare-const q Bool)
+             (declare-sort U 0)
+             (declare-const a U)
+             (check-sat)
+             (get-model)",
+        );
+        let after_error = execute(
+            "(set-option :produce-models true)
+             (set-logic QF_UF)
+             (declare-const p Bool)
+             (declare-const q Bool)
+             (declare-sort U 0)
+             (declare-const a U)
+             (check-sat-assuming ((xor p q) a))
+             (check-sat)
+             (get-model)",
+        );
+        assert_eq!(
+            after_error,
+            format!("(error \"expected a term of sort Bool\")\n{baseline}")
+        );
+    }
+
+    #[test]
+    fn function_definition_typechecking_does_not_consume_model_values() {
+        let baseline = execute(
+            "(set-option :produce-models true)
+             (set-logic QF_UF)
+             (declare-sort U 0)
+             (declare-const a U)
+             (check-sat)
+             (get-model)",
+        );
+        let after_error = execute(
+            "(set-option :produce-models true)
+             (set-logic QF_UF)
+             (declare-sort U 0)
+             (define-fun bad ((x U)) U true)
+             (declare-const a U)
+             (check-sat)
+             (get-model)",
+        );
+        assert_eq!(
+            after_error,
+            format!(
+                "(error \"definition of `bad` does not have its declared result sort\")\n\
+                 {baseline}"
+            )
+        );
+
+        let after_definition = execute(
+            "(set-option :produce-models true)
+             (set-logic QF_UF)
+             (declare-sort U 0)
+             (define-fun identity ((x U)) U x)
+             (declare-const a U)
+             (check-sat)
+             (get-model)",
+        );
+        assert_eq!(after_definition, baseline);
+    }
+
+    #[test]
+    fn rejected_term_commands_restore_the_term_arena() {
+        let baseline = execute(
+            "(set-option :produce-models true)
+             (set-logic QF_UF)
+             (declare-sort U 0)
+             (declare-const a U)
+             (declare-fun f (U) U)
+             (declare-const b U)
+             (check-sat)
+             (get-model)",
+        );
+        let after_bad_definition = execute(
+            "(set-option :produce-models true)
+             (set-logic QF_UF)
+             (declare-sort U 0)
+             (declare-const a U)
+             (declare-fun f (U) U)
+             (define-const bad Bool (f a))
+             (declare-const b U)
+             (check-sat)
+             (get-model)",
+        );
+        assert_eq!(
+            after_bad_definition,
+            format!("(error \"definition of `bad` does not have its declared sort\")\n{baseline}")
+        );
+
+        let after_bad_assertion = execute(
+            "(set-option :produce-models true)
+             (set-logic QF_UF)
+             (declare-sort U 0)
+             (declare-const a U)
+             (declare-fun f (U) U)
+             (assert (f a))
+             (declare-const b U)
+             (check-sat)
+             (get-model)",
+        );
+        assert_eq!(
+            after_bad_assertion,
+            format!("(error \"expected a term of sort Bool\")\n{baseline}")
+        );
+
+        let checked_baseline = execute(
+            "(set-option :produce-models true)
+             (set-logic QF_UF)
+             (declare-sort U 0)
+             (declare-const a U)
+             (declare-fun f (U) U)
+             (check-sat)
+             (declare-const b U)
+             (check-sat)
+             (get-model)",
+        );
+        let after_bad_value_query = execute(
+            "(set-option :produce-models true)
+             (set-logic QF_UF)
+             (declare-sort U 0)
+             (declare-const a U)
+             (declare-fun f (U) U)
+             (check-sat)
+             (get-value ((f a) missing))
+             (declare-const b U)
+             (check-sat)
+             (get-model)",
+        );
+        assert_eq!(
+            after_bad_value_query,
+            checked_baseline.replacen("sat\n", "sat\n(error \"unknown symbol `missing`\")\n", 1)
+        );
     }
 
     #[test]

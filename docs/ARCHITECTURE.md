@@ -614,15 +614,16 @@ those two logical-work budgets.
 
 DRAT additions and deletions remain globally valid across assumption queries,
 but an assumption-only UNSAT deliberately does not append the empty clause.
-For QF_BOOL and QF_BV, `get-proof` instead starts a fresh replay of the active
-assertion context and returns a versioned `satrap-edrat` container. Boolean
-declarations and named bit positions are canonical proof atoms, independent
-of internal term-allocation history. An independent checker reconstructs the
-scoped source query, repeats the fixed-width bit-vector lowering and canonical
-Tseitin encoding, then gives the DRAT suffix to pinned DRAT-trim. In accordance
-with SMT-LIB 2.7, `get-proof` is rejected after a nonempty
-`check-sat-assuming` call. Extending this proof boundary through checkable UF,
-array, and arithmetic explanations remains future work.
+For QF_BOOL, QF_BV, QF_UF, and QF_UFBV, `get-proof` instead starts a fresh
+replay of the active assertion context and returns a versioned
+`satrap-edrat` container. Boolean declarations, named bit positions, sorts,
+constants, and applications are canonical proof atoms, independent of internal
+allocation history. An independent checker reconstructs the scoped source
+query, repeats the Boolean/BV/ground-UF lowering and canonical Tseitin
+encoding, then gives the DRAT suffix to pinned DRAT-trim. In accordance with
+SMT-LIB 2.7, `get-proof` is rejected after a nonempty
+`check-sat-assuming` call. Extending this proof boundary through checkable
+array and arithmetic explanations remains future work.
 
 ## Implemented SMT boundary
 
@@ -699,10 +700,17 @@ bit-vector encoding  UF + extensional arrays  exact linear arithmetic
 
 Theory lemmas and unconditional axioms are permanent because term definitions
 are permanent even when the assertion that first exposed them is scoped.
+Proof replay for ground UF is separate from this live congruence-closure path.
+It assigns finite class bits to the canonical ground constants and applications
+reachable from the query, encodes equality as class-bit equality, and adds
+canonical pairwise congruence implications. UF-valued `ite` selects a class
+label; Boolean and bit-vector arguments/results retain their native encodings.
+The finite reduction is independently reconstructed before DRAT checking.
+
 Resource limits currently charge SAT conflicts/propagations, not parsing,
-lowering, theory preparation, or final checking. Trail-level propagation,
-fragment-complete independent SMT model validation, and independently
-checkable UF, array, and arithmetic theory proofs remain future work.
+lowering, theory preparation, proof replay, or final checking. Trail-level
+propagation, fragment-complete independent SMT model validation, and
+independently checkable array and arithmetic theory proofs remain future work.
 
 ## Performance policy
 

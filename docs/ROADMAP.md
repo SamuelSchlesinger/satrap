@@ -292,14 +292,16 @@ corpus except 128 custom-sort constant-array queries, and Bitwuzla covers 800
 finite QF_BV/QF_AUFBV queries. The
 custom-sort/constant-array exclusion records an oracle capability boundary;
 `unknown` is never accepted as agreement. Fragment-complete independent model
-validation and trail-level theory propagation remain open. QF_UF and QF_UFBV
-UNSAT queries now have query-specific certificates: an independent checker
-reparses the scoped source, reconstructs a canonical finite class-bit reduction
-with Ackermann congruence axioms, regenerates the exact CNF, and checks the DRAT
-suffix. The required smoke corpus covers UF/BV/Boolean arguments and results,
-definitions, `ite`, scopes, resets, and global declarations. Array and
-arithmetic proofs remain open, and these generated corpora are not a complete
-validation argument.
+validation and trail-level theory propagation remain open. QF_UF, QF_UFBV,
+QF_ABV, and QF_AUFBV UNSAT queries now have query-specific certificates: an
+independent checker reparses the scoped source, reconstructs canonical finite
+class-bit, Ackermann-congruence, read-over-write, and extensional-witness
+reductions, regenerates the exact CNF, and checks the DRAT suffix. The required
+smoke corpus covers UF/BV/Boolean arguments and results, constant arrays,
+stores, selects, array `ite`, extensionality, definitions, scopes, resets, and
+global declarations. Satisfiable unit cases guard against an over-strong array
+reduction. Nested-array and arithmetic proofs remain open, and these generated
+corpora are not a complete validation argument.
 
 ## Gate 5: algorithmic research and world-class evaluation
 

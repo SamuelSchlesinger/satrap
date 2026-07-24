@@ -111,7 +111,9 @@ fragment-complete, and named core subsets have representative independent
 replays in all 14 advertised fragments. The finite core cases additionally
 pass Bitwuzla, and a core produced with a failed assumption is replayed with
 that assumption. This is not yet generated or benchmark-wide core validation,
-and theory UNSAT results do not yet carry independently checkable proofs.
+and arithmetic-theory UNSAT results do not yet carry independently checkable
+proofs. Ground UF and non-nested array proofs have a separate finite-reduction
+gate described in [Proof checking](PROOF_CHECKING.md).
 
 Coverage-guided smoke campaigns now run on every push. One target passes
 arbitrary bytes through the public SMT-LIB session, another generates
@@ -576,8 +578,9 @@ kernel. The present UF/array integration checks complete Boolean models and
 learns permanent explained lemmas; its interface is trail-shaped, but native
 theory propagation is not yet connected to the live CDCL trail. That
 distinction matters: the current solver is interactive and semantically useful,
-but arithmetic coverage, proof production, conformance, and competition-scale
-performance still separate it from a general world-class SMT solver.
+but arithmetic proof production, conformance, fragment-complete validation, and
+competition-scale performance still separate it from a general world-class SMT
+solver.
 
 ## Repository map
 

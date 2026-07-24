@@ -614,16 +614,16 @@ those two logical-work budgets.
 
 DRAT additions and deletions remain globally valid across assumption queries,
 but an assumption-only UNSAT deliberately does not append the empty clause.
-For QF_BOOL, QF_BV, QF_UF, and QF_UFBV, `get-proof` instead starts a fresh
-replay of the active assertion context and returns a versioned
-`satrap-edrat` container. Boolean declarations, named bit positions, sorts,
-constants, and applications are canonical proof atoms, independent of internal
-allocation history. An independent checker reconstructs the scoped source
-query, repeats the Boolean/BV/ground-UF lowering and canonical Tseitin
-encoding, then gives the DRAT suffix to pinned DRAT-trim. In accordance with
-SMT-LIB 2.7, `get-proof` is rejected after a nonempty
-`check-sat-assuming` call. Extending this proof boundary through checkable
-array and arithmetic explanations remains future work.
+For QF_BOOL, QF_BV, QF_UF, QF_UFBV, QF_ABV, and QF_AUFBV, `get-proof`
+instead starts a fresh replay of the active assertion context and returns a
+versioned `satrap-edrat` container. Boolean declarations, named bit positions,
+sorts, constants, applications, array operations, and extensional witnesses
+are canonical proof terms, independent of internal allocation history. An
+independent checker reconstructs the scoped source query, repeats the
+Boolean/BV/ground-UF/ground-array lowering and canonical Tseitin encoding, then
+gives the DRAT suffix to pinned DRAT-trim. In accordance with SMT-LIB 2.7,
+`get-proof` is rejected after a nonempty `check-sat-assuming` call. Nested
+arrays and arithmetic explanations remain outside this proof boundary.
 
 ## Implemented SMT boundary
 
@@ -700,17 +700,21 @@ bit-vector encoding  UF + extensional arrays  exact linear arithmetic
 
 Theory lemmas and unconditional axioms are permanent because term definitions
 are permanent even when the assertion that first exposed them is scoped.
-Proof replay for ground UF is separate from this live congruence-closure path.
-It assigns finite class bits to the canonical ground constants and applications
-reachable from the query, encodes equality as class-bit equality, and adds
-canonical pairwise congruence implications. UF-valued `ite` selects a class
-label; Boolean and bit-vector arguments/results retain their native encodings.
-The finite reduction is independently reconstructed before DRAT checking.
+Proof replay for ground UF and arrays is separate from this live theory path.
+It assigns finite class bits to canonical ground constants, applications, and
+non-`ite` array terms reachable from the query; equality is class-bit equality,
+and canonical pairwise congruence implications constrain applications.
+UF-valued and array-valued `ite` terms select class labels. Array replay closes
+the reachable hidden-select applications, adds constant/read-over-write/`ite`
+semantics, and creates one canonical extensional witness for each pair of
+ground array terms. Boolean and bit-vector arguments/results retain their
+native encodings. The closure is frozen before Boolean lowering and the entire
+finite reduction is independently reconstructed before DRAT checking.
 
 Resource limits currently charge SAT conflicts/propagations, not parsing,
 lowering, theory preparation, proof replay, or final checking. Trail-level
 propagation, fragment-complete independent SMT model validation, and
-independently checkable array and arithmetic theory proofs remain future work.
+independently checkable arithmetic theory proofs remain future work.
 
 ## Performance policy
 

@@ -25,10 +25,10 @@ is not yet a general or state-of-the-art SMT solver. The
   storage, and a contiguous long-clause arena.
 - SAT models and streaming DRAT proofs, checked by pinned DRAT-trim in the
   local and hosted integration gates.
-- Query-specific QF_BOOL, QF_BV, QF_UF, and QF_UFBV `get-proof` certificates
-  whose active premises, Boolean/BV/ground-UF lowering, and canonical CNF are
-  reconstructed independently before DRAT checking; SMT-LIB's
-  empty-explicit-assumption rule is enforced.
+- Query-specific QF_BOOL, QF_BV, QF_UF, QF_UFBV, QF_ABV, and QF_AUFBV
+  `get-proof` certificates. A separate checker reconstructs the active query
+  and its Boolean, bit-vector, ground-UF, and non-nested-array reduction before
+  DRAT checking.
 - Interactive SMT-LIB with `push`/`pop`, `check-sat-assuming`, models, values,
   assignments, named unsat cores, resource limits, and interruption.
 - Complete fixed-width QF_BV lowering, congruence closure for QF_UF, and
@@ -107,8 +107,9 @@ The corresponding QF_UFIDL, QF_UFLIA, QF_UFLRA, and QF_AUFLIA combinations
 are also implemented. Protocol edge cases, proof production,
 fragment-complete independent validation, sustained fuzz campaigns, and
 competition-scale performance remain open. Proof production is currently
-available for QF_BOOL, QF_BV, QF_UF, and QF_UFBV. Array and arithmetic logics
-are rejected in proof mode until they have independently checked certificates.
+available for QF_BOOL, QF_BV, QF_UF, QF_UFBV, QF_ABV, and QF_AUFBV.
+Nested arrays and arithmetic logics remain outside the independently checked
+proof boundary.
 
 ## Rust API
 
@@ -150,11 +151,11 @@ shared integration gate requires exact versions of Ruff, all three solvers,
 and the proof checker, runs bounded coverage-guided parser, session, and proof
 fuzzing, and independently checks the SAT proof-mode matrix. It never silently
 skips a linter, oracle, fuzz target, or proof check. The proof gate also
-reconstructs scoped QF_BOOL, QF_BV, QF_UF, and QF_UFBV queries from their
-original SMT-LIB input, independently repeats the bit-vector and finite
-ground-UF lowering, and checks each query-specific DRAT refutation. These
-generated checks are correctness evidence, not representative performance
-benchmarks. See the
+reconstructs scoped QF_BOOL, QF_BV, QF_UF, QF_UFBV, QF_ABV, and QF_AUFBV
+queries from their original SMT-LIB input, independently repeats the
+bit-vector, finite ground-UF, and ground extensional-array reductions, and
+checks each query-specific DRAT refutation. These generated checks are
+correctness evidence, not representative performance benchmarks. See the
 [fuzzing guide](docs/FUZZING.md) and [proof-checking guide](docs/PROOF_CHECKING.md)
 for the exact boundaries and longer-running work.
 

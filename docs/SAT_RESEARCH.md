@@ -32,7 +32,9 @@ instance” will mean a model or proof artifact that another tool can verify.
 - a streaming SMT-LIB 2.7 command session plus a typed Rust API, with scoped
   declarations/assertions, `check-sat-assuming`, models, values, assignments,
   assertions, named unsat cores, failed assumptions, deterministic limits, and
-  continued command processing after recoverable command errors;
+  continued command processing after recoverable command errors, plus required
+  regular/diagnostic output channels, exact `reset-assertions` declaration
+  handling, the standard `ALL` selector, and model inspection after `unknown`;
 - typed, hash-consed Core and bit-vector terms with complete fixed-width
   QF_BV lowering, including division-by-zero, signed corner cases, rotations,
   extensions, extraction, and the SMT-LIB 2.7 overflow predicates;
@@ -128,7 +130,8 @@ These sanitizer-backed campaigns are a durable baseline, not evidence of
 coverage completeness; sustained runs, measured coverage, and corpus curation
 remain open. Complete protocol conformance, signal-driven interruption, and
 the world-class benchmark gates are tracked candidly in
-[the roadmap](ROADMAP.md) and [fuzzing guide](FUZZING.md).
+[the roadmap](ROADMAP.md), [SMT-LIB support](SMT_LIB.md), and
+[fuzzing guide](FUZZING.md).
 
 The SAT proof stream has been checked with DRAT-trim on smoke and real
 competition instances. The pinned checker now runs on every push against the

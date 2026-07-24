@@ -679,8 +679,10 @@ assertions do not keep expanding the current arrangement.
 Before an arithmetic candidate escapes as `sat`, a separate evaluator checks
 the original active roots, exact predicate truth values, integer integrality,
 and every relevant selected arithmetic-`ite` branch. Failure is reported as
-`unknown`, and model inspection is available only after `sat`; resource or
-incompleteness results never manufacture a placeholder model. The integration
+`unknown`. In accordance with SMT-LIB's result modes, model inspection remains
+available after `unknown`; the session exposes a deterministic arbitrary total
+structure and does not claim that it satisfies the assertions. The context
+remains reusable after resource exhaustion or incompleteness. The integration
 suite additionally checks deterministic results against pinned Z3, cvc5, and
 Bitwuzla releases. Z3 covers all 3,872 generated queries, cvc5 covers 3,744,
 and Bitwuzla covers the 800 finite QF_BV/QF_AUFBV queries within its supported

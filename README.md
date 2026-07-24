@@ -100,7 +100,9 @@ Or talk to the solver interactively:
 ```
 
 The process responds after each complete command and keeps reading after
-recoverable command errors, so it can be used as a long-lived subprocess.
+recoverable command errors, so it can be used as a long-lived subprocess. See
+[SMT-LIB support](docs/SMT_LIB.md) for the implemented commands, execution
+modes, output channels, and explicit conformance gaps.
 
 Current SMT coverage includes Core, QF_BV, QF_UF, QF_UFBV, QF_ABV, and
 QF_AUFBV, plus experimental exact QF_IDL, QF_LIA, QF_RDL, and QF_LRA.
@@ -109,7 +111,7 @@ are also implemented. Protocol edge cases, fragment-complete independent
 validation, sustained fuzz campaigns, and competition-scale performance
 remain open. Proof production currently covers all 14 listed fragments,
 including the four arithmetic theory combinations. See
-[Proof checking](docs/PROOF_CHECKING.md) for the exact boundary.
+[Proof checking](docs/PROOF_CHECKING.md) for the certificate boundary.
 
 ## Rust API
 

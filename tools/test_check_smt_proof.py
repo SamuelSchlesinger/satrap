@@ -1,7 +1,9 @@
 import unittest
+from itertools import product
 
 from check_smt_proof import (
     INT_SORT,
+    ArithmeticProblem,
     CnfEncoder,
     LinearConstraint,
     ProofCheckError,
@@ -152,6 +154,34 @@ def lower_script(script: str):
     roots, axioms = UfLowering(queries[0].roots).lower_roots(queries[0].roots)
     encoder = CnfEncoder()
     return encoder, encoder.build(roots, axioms), axioms
+
+
+def combined_integer_encoding_is_satisfiable(script: str) -> bool:
+    queries = ProofSession().execute_all(SExprReader(script).read_all())
+    if len(queries) != 1:
+        raise AssertionError("test script must expose exactly one proof query")
+    roots, axioms = UfLowering(queries[0].roots).lower_roots(queries[0].roots)
+    problem = ArithmeticProblem(INT_SORT, (*roots, *axioms))
+    encoder = CnfEncoder()
+    encoder.build(roots, axioms)
+    required_literals = {
+        expression: encoder.encode(expression) for expression in sorted(problem.required)
+    }
+    required = tuple(sorted(problem.required))
+    for values in product((False, True), repeat=len(required)):
+        assignment = dict(zip(required, values, strict=True))
+        if not integer_linear_constraints_unsat(problem.constraints(assignment)):
+            continue
+        encoder.add_clause(
+            "theory",
+            [
+                -required_literals[expression]
+                if assignment[expression]
+                else required_literals[expression]
+                for expression in required
+            ],
+        )
+    return cnf_satisfiable(encoder, encoder.clauses)
 
 
 class SmtProofCheckerTests(unittest.TestCase):
@@ -365,6 +395,32 @@ class SmtProofCheckerTests(unittest.TestCase):
         encoder, clauses, axioms = lower_script(script)
         self.assertGreater(len(axioms), 0)
         self.assertTrue(cnf_satisfiable(encoder, clauses))
+
+    def test_mixed_lowering_combines_integer_arithmetic_with_congruence(self):
+        script = """
+        (set-option :produce-proofs true)
+        (set-logic QF_UFLIA)
+        (declare-const x Int)
+        (declare-fun f (Int) Int)
+        (assert (= x 0))
+        (assert (= (f x) 0))
+        (assert (= (f 0) 1))
+        (check-sat)
+        (get-proof)
+        """
+        self.assertFalse(combined_integer_encoding_is_satisfiable(script))
+
+    def test_mixed_lowering_supports_integer_array_witnesses(self):
+        script = """
+        (set-option :produce-proofs true)
+        (set-logic QF_AUFLIA)
+        (declare-const a (Array Int Int))
+        (declare-const i Int)
+        (assert (distinct (store a i (select a i)) a))
+        (check-sat)
+        (get-proof)
+        """
+        self.assertFalse(combined_integer_encoding_is_satisfiable(script))
 
     def test_integer_difference_theory_clause_is_independently_validated(self):
         certificate = validate_encoding(IDL_SCRIPT, IDL_PROOF)

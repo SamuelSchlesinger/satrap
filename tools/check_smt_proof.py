@@ -40,6 +40,52 @@ MAX_QUADRATIC_LOWERING_WORK = 16_000_000
 MAX_INTEGER_PROOF_VARIABLES = 512
 MAX_INTEGER_PROOF_WORK = 1_000_000
 
+BASE_PROOF_LOGICS = frozenset(
+    {
+        "QF_BOOL",
+        "QF_BV",
+        "QF_UF",
+        "QF_UFBV",
+        "QF_ABV",
+        "QF_AUFBV",
+        "QF_IDL",
+        "QF_LIA",
+        "QF_RDL",
+        "QF_LRA",
+    }
+)
+COMBINATION_PROOF_LOGICS = frozenset(
+    {
+        "QF_UFIDL",
+        "QF_UFLIA",
+        "QF_UFLRA",
+        "QF_AUFLIA",
+    }
+)
+SESSION_PROOF_LOGICS = BASE_PROOF_LOGICS | COMBINATION_PROOF_LOGICS
+# Combination certificates are admitted only when the producer, independent
+# reconstruction, adversarial tests, and smoke corpus are enabled together.
+CERTIFIED_PROOF_LOGICS = BASE_PROOF_LOGICS
+UF_PROOF_LOGICS = frozenset(
+    {
+        "QF_UF",
+        "QF_UFBV",
+        "QF_AUFBV",
+        "QF_UFIDL",
+        "QF_UFLIA",
+        "QF_UFLRA",
+        "QF_AUFLIA",
+    }
+)
+BITVECTOR_PROOF_LOGICS = frozenset({"QF_BV", "QF_UFBV", "QF_ABV", "QF_AUFBV"})
+ARRAY_PROOF_LOGICS = frozenset({"QF_ABV", "QF_AUFBV", "QF_AUFLIA"})
+INTEGER_PROOF_LOGICS = frozenset({"QF_IDL", "QF_LIA", "QF_UFIDL", "QF_UFLIA", "QF_AUFLIA"})
+REAL_PROOF_LOGICS = frozenset({"QF_RDL", "QF_LRA", "QF_UFLRA"})
+ARITHMETIC_PROOF_LOGICS = INTEGER_PROOF_LOGICS | REAL_PROOF_LOGICS
+FINITE_THEORY_PROOF_LOGICS = UF_PROOF_LOGICS | ARRAY_PROOF_LOGICS
+LINEAR_INTEGER_PROOF_LOGICS = frozenset({"QF_LIA", "QF_UFIDL", "QF_UFLIA", "QF_AUFLIA"})
+LINEAR_REAL_PROOF_LOGICS = frozenset({"QF_LRA", "QF_UFLRA"})
+
 
 @dataclass(frozen=True, order=True)
 class BitVecExpr:
@@ -497,6 +543,15 @@ def arithmetic_variable(sort: SortExpr, variable: ArithmeticVariable) -> Arithme
     if not isinstance(sort, (IntSort, RealSort)):
         raise ProofCheckError("arithmetic variable has a non-arithmetic sort")
     return ArithmeticExpr(sort, linear_variable(variable))
+
+
+def arithmetic_application(
+    sort: SortExpr,
+    application: ApplicationExpr,
+) -> ArithmeticExpr:
+    if application.range != sort:
+        raise ProofCheckError("arithmetic application has an inconsistent result sort")
+    return arithmetic_variable(sort, (2, sort, application))
 
 
 def common_arithmetic_sort(terms: list[ArithmeticExpr]) -> SortExpr:
@@ -1076,18 +1131,7 @@ class ProofSession:
             logic = atom(arguments[0], "logic")
             if self.logic is not None:
                 raise ProofCheckError("logic has already been set")
-            if logic not in {
-                "QF_BOOL",
-                "QF_BV",
-                "QF_UF",
-                "QF_UFBV",
-                "QF_ABV",
-                "QF_AUFBV",
-                "QF_IDL",
-                "QF_LIA",
-                "QF_RDL",
-                "QF_LRA",
-            }:
+            if logic not in SESSION_PROOF_LOGICS:
                 raise ProofCheckError("proof script uses an unsupported logic")
             self.logic = logic
             self._invalidate_query()
@@ -1115,7 +1159,7 @@ class ProofSession:
             sort_name = atom(arguments[0], "sort name")
             if parse_numeral(arguments[1], "sort arity") != 0:
                 raise ProofCheckError("proof checker accepts only nullary sorts")
-            if self.logic not in {"QF_UF", "QF_UFBV", "QF_AUFBV"}:
+            if self.logic not in UF_PROOF_LOGICS:
                 raise ProofCheckError("uninterpreted sort used outside a UF proof logic")
             if sort_name in self.sorts:
                 raise ProofCheckError(f"duplicate sort `{sort_name}`")
@@ -1574,11 +1618,7 @@ class ProofSession:
 
     def _declare_function(self, name: str, function: FunctionBinding) -> None:
         self._require_logic()
-        if isinstance(function, DeclaredFunction) and self.logic not in {
-            "QF_UF",
-            "QF_UFBV",
-            "QF_AUFBV",
-        }:
+        if isinstance(function, DeclaredFunction) and self.logic not in UF_PROOF_LOGICS:
             raise ProofCheckError("uninterpreted function used outside a UF proof logic")
         if name in self.bindings or name in self.functions:
             raise ProofCheckError(f"duplicate term symbol `{name}`")
@@ -1591,15 +1631,15 @@ class ProofSession:
             raise ProofCheckError("declaration used before set-logic")
 
     def _require_bitvectors(self) -> None:
-        if self.logic not in {"QF_BV", "QF_UFBV", "QF_ABV", "QF_AUFBV"}:
+        if self.logic not in BITVECTOR_PROOF_LOGICS:
             raise ProofCheckError("bit-vector term used outside a bit-vector proof logic")
 
     def _require_arithmetic(self) -> None:
-        if self.logic not in {"QF_IDL", "QF_LIA", "QF_RDL", "QF_LRA"}:
+        if self.logic not in ARITHMETIC_PROOF_LOGICS:
             raise ProofCheckError("arithmetic term used outside an arithmetic proof logic")
 
     def _require_reals(self) -> None:
-        if self.logic not in {"QF_RDL", "QF_LRA"}:
+        if self.logic not in REAL_PROOF_LOGICS:
             raise ProofCheckError("real term used outside a real proof logic")
 
     @staticmethod
@@ -1624,11 +1664,11 @@ class ProofSession:
             if value == "Bool":
                 return BOOL_SORT
             if value == "Int":
-                if self.logic not in {"QF_IDL", "QF_LIA"}:
+                if self.logic not in INTEGER_PROOF_LOGICS:
                     raise ProofCheckError("Int sort used outside an integer proof logic")
                 return INT_SORT
             if value == "Real":
-                if self.logic not in {"QF_RDL", "QF_LRA"}:
+                if self.logic not in REAL_PROOF_LOGICS:
                     raise ProofCheckError("Real sort used outside a real proof logic")
                 return REAL_SORT
             if value in self.sorts:
@@ -1638,11 +1678,11 @@ class ProofSession:
         if len(values) == 3 and values[0] == "_" and values[1] == "BitVec":
             width = parse_numeral(values[2], "bit-vector width")
             check_bitvector_width(width)
-            if self.logic not in {"QF_BV", "QF_UFBV", "QF_ABV", "QF_AUFBV"}:
+            if self.logic not in BITVECTOR_PROOF_LOGICS:
                 raise ProofCheckError("bit-vector sort used outside a bit-vector proof logic")
             return BitVecSort(width)
         if len(values) == 3 and values[0] == "Array":
-            if self.logic not in {"QF_ABV", "QF_AUFBV"}:
+            if self.logic not in ARRAY_PROOF_LOGICS:
                 raise ProofCheckError("array sort used outside an array proof logic")
             index = self.parse_sort(values[1])
             element = self.parse_sort(values[2])
@@ -1710,6 +1750,8 @@ class ProofSession:
             return BitVecExpr(tuple((2, 2, application, bit) for bit in range(sort.element.width)))
         if isinstance(sort.element, UninterpretedSort):
             return UfExpr((1, application))
+        if isinstance(sort.element, (IntSort, RealSort)):
+            return arithmetic_application(sort.element, application)
         raise ProofCheckError("nested array elements are outside the proof boundary")
 
     def _equivalent(self, left: TermExpr, right: TermExpr) -> BoolExpr:
@@ -1758,6 +1800,8 @@ class ProofSession:
             )
         if isinstance(function.range, (UninterpretedSort, ArraySort)):
             return UfExpr((1, application))
+        if isinstance(function.range, (IntSort, RealSort)):
+            return arithmetic_application(function.range, application)
         raise ProofCheckError(f"function `{name}` has an unsupported result sort")
 
     def _require_declared_sort(self, term: TermExpr, declared: SortExpr, role: str) -> None:
@@ -1828,6 +1872,8 @@ class UfLowering:
         self.processed_array_selects: set[ApplicationExpr] = set()
         self.lowered: dict[BoolExpr, BoolExpr] = {}
         self.lowered_abstract: dict[UfExpr, tuple[BoolExpr, ...]] = {}
+        self.collected_arithmetic_variables: set[ArithmeticVariable] = set()
+        self.lowered_arithmetic_variables: dict[ArithmeticVariable, ArithmeticVariable] = {}
         for root in roots:
             self._collect_bool(root)
 
@@ -1846,6 +1892,11 @@ class UfLowering:
                 if not isinstance(application, ApplicationExpr):
                     raise ProofCheckError("malformed proof application atom")
                 self._collect_application(application)
+            elif len(expression) == 5 and expression[1] == 5:
+                linear = expression[3]
+                if not isinstance(linear, LinearExpr):
+                    raise ProofCheckError("malformed arithmetic proof atom")
+                self._collect_linear(linear)
             return
         if kind == 3:
             self._collect_bool(expression[1])
@@ -1871,15 +1922,60 @@ class UfLowering:
                 self._collect_bool(bit)
         elif isinstance(term, UfExpr):
             self._collect_abstract(term)
-        else:
+        elif isinstance(term, ArithmeticExpr):
+            self._collect_linear(term.linear)
+        elif isinstance(term, tuple):
             self._collect_bool(term)
+        else:
+            raise ProofCheckError("malformed proof term")
+
+    def _collect_linear(self, expression: LinearExpr) -> None:
+        for variable, _ in expression.coefficients:
+            if variable in self.collected_arithmetic_variables:
+                continue
+            self.collected_arithmetic_variables.add(variable)
+            if not variable:
+                raise ProofCheckError("malformed arithmetic proof variable")
+            kind = variable[0]
+            if kind == 0:
+                if len(variable) != 3:
+                    raise ProofCheckError("malformed declared arithmetic proof variable")
+                continue
+            if kind == 1:
+                if len(variable) != 5:
+                    raise ProofCheckError("malformed arithmetic ite proof variable")
+                _, _, condition, then_expression, else_expression = variable
+                if not isinstance(then_expression, LinearExpr) or not isinstance(
+                    else_expression, LinearExpr
+                ):
+                    raise ProofCheckError("malformed arithmetic ite proof variable")
+                self._collect_bool(condition)
+                self._collect_linear(then_expression)
+                self._collect_linear(else_expression)
+                continue
+            if kind == 2:
+                if len(variable) != 3 or not isinstance(variable[2], ApplicationExpr):
+                    raise ProofCheckError("malformed arithmetic application proof variable")
+                self._collect_application(variable[2])
+                continue
+            if kind == 3:
+                if (
+                    len(variable) != 5
+                    or not isinstance(variable[3], UfExpr)
+                    or not isinstance(variable[4], UfExpr)
+                ):
+                    raise ProofCheckError("malformed arithmetic array witness")
+                self._collect_abstract(variable[3])
+                self._collect_abstract(variable[4])
+                continue
+            raise ProofCheckError("unknown arithmetic proof variable")
 
     def _collect_application(self, application: ApplicationExpr) -> None:
         if application in self.applications:
             return
         self.applications.add(application)
         for argument in application.arguments:
-            if not isinstance(argument, (tuple, BitVecExpr, UfExpr)):
+            if not isinstance(argument, (tuple, BitVecExpr, UfExpr, ArithmeticExpr)):
                 raise ProofCheckError("malformed proof application argument")
             self._collect_term(argument)
         if isinstance(application.range, (UninterpretedSort, ArraySort)):
@@ -1923,8 +2019,24 @@ class UfLowering:
         if expression in self.lowered:
             return self.lowered[expression]
         kind = expression[0]
-        if kind in {0, 1, 2}:
+        if kind in {0, 1}:
             result = expression
+        elif kind == 2:
+            if len(expression) >= 2 and expression[1] == 5:
+                if (
+                    len(expression) != 5
+                    or not isinstance(expression[2], (IntSort, RealSort))
+                    or not isinstance(expression[3], LinearExpr)
+                    or not isinstance(expression[4], bool)
+                ):
+                    raise ProofCheckError("malformed arithmetic proof atom")
+                result = arithmetic_comparison(
+                    ArithmeticExpr(expression[2], self.lower_linear(expression[3])),
+                    arithmetic_constant(expression[2], Fraction(0)),
+                    expression[4],
+                )
+            else:
+                result = expression
         elif kind == 3:
             result = negate(self.lower_bool(expression[1]))
         elif kind in {4, 5}:
@@ -1954,6 +2066,45 @@ class UfLowering:
             raise ProofCheckError(f"unknown raw Boolean proof node {kind}")
         self.lowered[expression] = result
         return result
+
+    def lower_linear(self, expression: LinearExpr) -> LinearExpr:
+        coefficients: dict[ArithmeticVariable, Fraction] = {}
+        for variable, coefficient in expression.coefficients:
+            lowered = self.lower_arithmetic_variable(variable)
+            coefficients[lowered] = coefficients.get(lowered, Fraction(0)) + coefficient
+        return linear_expression(expression.constant, coefficients)
+
+    def lower_arithmetic_variable(
+        self,
+        variable: ArithmeticVariable,
+    ) -> ArithmeticVariable:
+        if variable in self.lowered_arithmetic_variables:
+            return self.lowered_arithmetic_variables[variable]
+        if not variable:
+            raise ProofCheckError("malformed arithmetic proof variable")
+        kind = variable[0]
+        if kind in {0, 2, 3}:
+            lowered = variable
+        elif kind == 1 and len(variable) == 5:
+            _, sort, condition, then_expression, else_expression = variable
+            if not isinstance(then_expression, LinearExpr) or not isinstance(
+                else_expression, LinearExpr
+            ):
+                raise ProofCheckError("malformed arithmetic ite proof variable")
+            lowered = (
+                1,
+                sort,
+                self.lower_bool(condition),
+                self.lower_linear(then_expression),
+                self.lower_linear(else_expression),
+            )
+        else:
+            raise ProofCheckError("unknown arithmetic proof variable")
+        self.lowered_arithmetic_variables[variable] = lowered
+        return lowered
+
+    def lower_arithmetic(self, expression: ArithmeticExpr) -> ArithmeticExpr:
+        return ArithmeticExpr(expression.sort, self.lower_linear(expression.linear))
 
     def abstract_bits(self, expression: UfExpr) -> tuple[BoolExpr, ...]:
         if expression in self.lowered_abstract:
@@ -2017,6 +2168,11 @@ class UfLowering:
             )
         if isinstance(left, UfExpr) and isinstance(right, UfExpr):
             return self.abstract_equal(left, right)
+        if isinstance(left, ArithmeticExpr) and isinstance(right, ArithmeticExpr):
+            return arithmetic_equal(
+                self.lower_arithmetic(left),
+                self.lower_arithmetic(right),
+            )
         if (
             isinstance(left, tuple)
             and isinstance(right, tuple)
@@ -2035,6 +2191,8 @@ class UfLowering:
             )
         if isinstance(application.range, (UninterpretedSort, ArraySort)):
             return UfExpr((1, application))
+        if isinstance(application.range, (IntSort, RealSort)):
+            return arithmetic_application(application.range, application)
         raise ProofCheckError("proof application has an unsupported result sort")
 
     def prepare_theory(self) -> None:
@@ -2099,6 +2257,11 @@ class UfLowering:
             witness = UfExpr((5, index_sort, array_sort, left, right))
             self._register_abstract(witness)
             return witness
+        if isinstance(index_sort, (IntSort, RealSort)):
+            return arithmetic_variable(
+                index_sort,
+                (3, index_sort, array_sort, left, right),
+            )
         raise ProofCheckError("nested array indices are outside the proof boundary")
 
     @staticmethod
@@ -2133,7 +2296,7 @@ class UfLowering:
             raise ProofCheckError("canonical array select has malformed arguments")
         array = application.arguments[0]
         index = application.arguments[1]
-        if not isinstance(index, (tuple, BitVecExpr, UfExpr)):
+        if not isinstance(index, (tuple, BitVecExpr, UfExpr, ArithmeticExpr)):
             raise ProofCheckError("canonical array select has a malformed index")
         node = array.node
         if node[0] == 4:
@@ -2176,6 +2339,12 @@ class UfLowering:
                     else_value,
                 )
             )
+        if isinstance(then_value, ArithmeticExpr) and isinstance(else_value, ArithmeticExpr):
+            return arithmetic_ite(
+                condition,
+                self.lower_arithmetic(then_value),
+                self.lower_arithmetic(else_value),
+            )
         if isinstance(then_value, tuple) and isinstance(else_value, tuple):
             return ite(
                 condition,
@@ -2196,7 +2365,7 @@ class UfLowering:
                 raise ProofCheckError("canonical array select has malformed arguments")
             array = application.arguments[0]
             index = application.arguments[1]
-            if not isinstance(index, (tuple, BitVecExpr, UfExpr)):
+            if not isinstance(index, (tuple, BitVecExpr, UfExpr, ArithmeticExpr)):
                 raise ProofCheckError("canonical array select has a malformed index")
             node = array.node
             semantic_value: TermExpr | None = None
@@ -2443,6 +2612,30 @@ class ArithmeticProblem:
             if kind == 0:
                 if len(variable) != 3 or variable[1] != self.sort:
                     raise ProofCheckError("arithmetic proof contains a variable of the wrong sort")
+                continue
+            if kind == 2:
+                if (
+                    len(variable) != 3
+                    or variable[1] != self.sort
+                    or not isinstance(variable[2], ApplicationExpr)
+                    or variable[2].range != self.sort
+                ):
+                    raise ProofCheckError(
+                        "arithmetic proof contains an application of the wrong sort"
+                    )
+                continue
+            if kind == 3:
+                if (
+                    len(variable) != 5
+                    or variable[1] != self.sort
+                    or not isinstance(variable[2], ArraySort)
+                    or variable[2].index != self.sort
+                    or not isinstance(variable[3], UfExpr)
+                    or not isinstance(variable[4], UfExpr)
+                ):
+                    raise ProofCheckError(
+                        "arithmetic proof contains an array witness of the wrong sort"
+                    )
                 continue
             if kind != 1 or len(variable) != 5:
                 raise ProofCheckError("malformed arithmetic proof variable")
@@ -3076,11 +3269,12 @@ def normalized_clause(literals: tuple[int, ...]) -> tuple[int, ...] | None:
 def validate_arithmetic_encoding(
     certificate: Certificate,
     roots: tuple[BoolExpr, ...],
+    theory_axioms: tuple[BoolExpr, ...] = (),
 ) -> None:
-    sort = INT_SORT if certificate.logic in {"QF_IDL", "QF_LIA"} else REAL_SORT
-    problem = ArithmeticProblem(sort, roots)
+    sort = INT_SORT if certificate.logic in INTEGER_PROOF_LOGICS else REAL_SORT
+    problem = ArithmeticProblem(sort, (*roots, *theory_axioms))
     encoder = CnfEncoder()
-    encoder.build(roots)
+    encoder.build(roots, theory_axioms)
     for expression in sorted(problem.required):
         encoder.encode(expression)
     expected_prefix = tuple(encoder.clauses)
@@ -3122,9 +3316,9 @@ def validate_arithmetic_encoding(
             for expression, literal in required_literals.items()
         }
         constraints = problem.constraints(assignment)
-        if certificate.logic == "QF_LIA":
+        if certificate.logic in LINEAR_INTEGER_PROOF_LOGICS:
             unsatisfiable = integer_linear_constraints_unsat(constraints)
-        elif certificate.logic == "QF_LRA":
+        elif certificate.logic in LINEAR_REAL_PROOF_LOGICS:
             unsatisfiable = real_linear_constraints_unsat(constraints)
         else:
             unsatisfiable = difference_constraints_unsat(constraints, sort)
@@ -3178,18 +3372,7 @@ def parse_certificate(text: str) -> Certificate:
     if atom(fields.get(":version", []), "proof version") != "1":
         raise ProofCheckError("unsupported satrap-edrat proof version")
     logic = atom(fields.get(":logic", []), "proof logic")
-    if logic not in {
-        "QF_BOOL",
-        "QF_BV",
-        "QF_UF",
-        "QF_UFBV",
-        "QF_ABV",
-        "QF_AUFBV",
-        "QF_IDL",
-        "QF_LIA",
-        "QF_RDL",
-        "QF_LRA",
-    }:
+    if logic not in CERTIFIED_PROOF_LOGICS:
         raise ProofCheckError(f"satrap-edrat checker does not accept logic `{logic}`")
     variable_count = parse_numeral(fields.get(":variables", []), "proof variable count")
     premises = []
@@ -3205,17 +3388,7 @@ def parse_certificate(text: str) -> Certificate:
         kind = atom(parts[0], "proof clause origin")
         allowed_kinds = (
             {"formula", "encoding", "theory"}
-            if logic
-            in {
-                "QF_UF",
-                "QF_UFBV",
-                "QF_ABV",
-                "QF_AUFBV",
-                "QF_IDL",
-                "QF_LIA",
-                "QF_RDL",
-                "QF_LRA",
-            }
+            if logic in FINITE_THEORY_PROOF_LOGICS | ARITHMETIC_PROOF_LOGICS
             else {"formula", "encoding"}
         )
         if kind not in allowed_kinds:
@@ -3249,13 +3422,13 @@ def validate_encoding(script: str, proof: str) -> Certificate:
     if len(expected_roots) != 1:
         raise ProofCheckError("matching source queries have different Boolean meanings")
     raw_roots = next(iter(expected_roots))
-    if certificate.logic in {"QF_UF", "QF_UFBV", "QF_ABV", "QF_AUFBV"}:
+    if certificate.logic in FINITE_THEORY_PROOF_LOGICS:
         roots, theory_axioms = UfLowering(raw_roots).lower_roots(raw_roots)
     else:
         roots = raw_roots
         theory_axioms = ()
-    if certificate.logic in {"QF_IDL", "QF_LIA", "QF_RDL", "QF_LRA"}:
-        validate_arithmetic_encoding(certificate, roots)
+    if certificate.logic in ARITHMETIC_PROOF_LOGICS:
+        validate_arithmetic_encoding(certificate, roots, theory_axioms)
         return certificate
     encoder = CnfEncoder()
     expected_clauses = tuple(encoder.build(roots, theory_axioms))

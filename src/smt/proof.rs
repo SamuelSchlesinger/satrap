@@ -1001,10 +1001,28 @@ impl Canonicalizer {
     }
 
     fn theory_axioms(&mut self) -> Result<Vec<BoolExpr>, ProofError> {
+        let application_count = self.applications.len();
+        let abstract_term_count = self
+            .abstract_terms
+            .values()
+            .map(BTreeSet::len)
+            .sum::<usize>();
         let mut axioms = BTreeSet::new();
         axioms.extend(self.array_semantics_axioms()?);
         axioms.extend(self.array_extensionality_axioms()?);
         axioms.extend(self.congruence_axioms()?);
+        if self.applications.len() != application_count
+            || self
+                .abstract_terms
+                .values()
+                .map(BTreeSet::len)
+                .sum::<usize>()
+                != abstract_term_count
+        {
+            return Err(ProofError::new(
+                "array proof theory closure changed after Boolean lowering",
+            ));
+        }
         Ok(axioms.into_iter().collect())
     }
 

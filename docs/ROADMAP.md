@@ -248,15 +248,16 @@ single-query and incremental validation before performance promotion.
 hash-consed terms, complete fixed-width operator lowering, models, values,
 scopes, assumptions, cores, and deterministic resource limits are implemented.
 Exhaustive small-width semantics and 544 deterministic incremental queries
-agree with Z3 4.16.0, cvc5 1.3.3, and Bitwuzla 0.9.1. QF_BOOL now has a
-query-specific eDRAT-style container: a separate checker reconstructs active
-scopes, definitions, resets, and assertions from the original script,
-regenerates its canonical CNF, and invokes pinned DRAT-trim. Standard
-`get-proof` requests after nonempty explicit assumption sets are rejected.
-Extending that boundary through bit-blasting and every theory lemma,
-fragment-complete independent model validation, full protocol conformance,
-sustained fuzzing, and representative performance evaluation are not complete,
-so this gate remains open.
+agree with Z3 4.16.0, cvc5 1.3.3, and Bitwuzla 0.9.1. QF_BOOL and QF_BV now
+have a query-specific eDRAT-style container: a separate checker reconstructs
+active scopes, definitions, resets, assertions, and the complete supported
+fixed-width bit-vector lowering from the original script, regenerates the
+canonical CNF, and invokes pinned DRAT-trim. Its small-width arithmetic
+semantics are exhaustively tested. Standard `get-proof` requests after
+nonempty explicit assumption sets are rejected. Fragment-complete independent
+model validation, full protocol conformance, sustained fuzzing, and
+representative performance evaluation are not complete, so this gate remains
+open.
 
 ## Gate 4: general CDCL(T) coverage
 

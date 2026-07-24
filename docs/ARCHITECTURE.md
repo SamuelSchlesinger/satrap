@@ -614,13 +614,15 @@ those two logical-work budgets.
 
 DRAT additions and deletions remain globally valid across assumption queries,
 but an assumption-only UNSAT deliberately does not append the empty clause.
-For QF_BOOL, `get-proof` instead starts a fresh replay of the active assertion
-context and returns a versioned `satrap-edrat` container. An independent
-checker reconstructs the scoped source query and canonical Tseitin clauses,
-then gives the DRAT suffix to pinned DRAT-trim. In accordance with SMT-LIB 2.7,
-`get-proof` is rejected after a nonempty `check-sat-assuming` call. Extending
-this proof boundary through bit-vector lowering and checkable theory
-explanations remains future work.
+For QF_BOOL and QF_BV, `get-proof` instead starts a fresh replay of the active
+assertion context and returns a versioned `satrap-edrat` container. Boolean
+declarations and named bit positions are canonical proof atoms, independent
+of internal term-allocation history. An independent checker reconstructs the
+scoped source query, repeats the fixed-width bit-vector lowering and canonical
+Tseitin encoding, then gives the DRAT suffix to pinned DRAT-trim. In accordance
+with SMT-LIB 2.7, `get-proof` is rejected after a nonempty
+`check-sat-assuming` call. Extending this proof boundary through checkable UF,
+array, and arithmetic explanations remains future work.
 
 ## Implemented SMT boundary
 
@@ -700,7 +702,7 @@ are permanent even when the assertion that first exposed them is scoped.
 Resource limits currently charge SAT conflicts/propagations, not parsing,
 lowering, theory preparation, or final checking. Trail-level propagation,
 fragment-complete independent SMT model validation, and independently
-checkable bit-vector and theory proofs remain future work.
+checkable UF, array, and arithmetic theory proofs remain future work.
 
 ## Performance policy
 

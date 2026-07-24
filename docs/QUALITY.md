@@ -25,7 +25,7 @@ claim.
 | Commit | `make check-fast` | Rust/Python formatting and lint, compilation, shell syntax, and repository hygiene |
 | Quality | `make quality` | Strict Clippy, rustdoc, Ruff, ShellCheck, Actionlint, lockfile, and structural checks |
 | Fuzz | `make check-fuzz` | Locked format/Clippy/sanitizer build plus bounded parser, incremental SMT, and SAT proof campaigns |
-| Proof | `make check-proofs` | Release SAT certificates plus a query-bound QF_BOOL SMT certificate checked by pinned DRAT-trim |
+| Proof | `make check-proofs` | Release SAT certificates plus query-bound QF_BOOL/QF_BV certificates reconstructed independently and checked by pinned DRAT-trim |
 | Integration | `make check` | Quality plus required three-oracle differential/model checks, Rust/Python tests, fuzz smoke, proof-checked benchmark smoke, and a release build |
 | Compatibility | `make check-msrv` | Full tests on the declared minimum Rust version |
 | Dependencies | `make audit` | RustSec advisory audit; requires `cargo-audit` and network access |
@@ -83,10 +83,12 @@ assumptions, SMT theory certificates, and the difference between a push smoke
 suite and a claim-bearing benchmark campaign are documented in
 [Proof checking](PROOF_CHECKING.md).
 
-The proof gate additionally runs the release SMT executable online, regenerates
-the active QF_BOOL query and its canonical CNF in an independent Python
-implementation, and then checks the embedded DRAT suffix. Theory logics remain
-outside that claim and are rejected when proof production is requested.
+The proof gate additionally runs the release SMT executable online,
+reconstructs active QF_BOOL and QF_BV queries in an independent Python
+implementation, independently repeats fixed-width bit-vector lowering and
+canonical CNF generation, and then checks the embedded DRAT suffix. UF, array,
+and arithmetic logics remain outside that claim and are rejected when proof
+production is requested.
 
 `tools/check_hygiene.py` enforces the small but easy-to-forget invariants:
 UTF-8/LF text, final newlines, no trailing whitespace, valid local Markdown
@@ -95,7 +97,8 @@ synchronized Ruff declarations. It verifies identical top-level CI/pre-push
 entrypoints and that the integration script still includes the quality and
 fuzz gates, all three oracle version checks, every fuzz target, the
 proof-checked benchmark smoke, and that the security workflow remains wired to
-RustSec.
+RustSec. It also requires every canonical QF_BOOL and QF_BV proof-corpus file
+to remain present and nonempty.
 
 The ordinary gate deliberately does not enable every `clippy::pedantic` or
 `clippy::nursery` lint. Solver code contains exact numeric conversions,

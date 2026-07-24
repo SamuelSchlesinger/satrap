@@ -44,12 +44,13 @@ Each case is solved by `target/release/sat`, must report UNSAT with exit code
 20, and must end in a certificate that DRAT-trim reports as verified against
 the original DIMACS input.
 
-The same gate also exercises online QF_BOOL queries with named assertions,
-active scopes, definitions, resets, and the supported Boolean connectives.
-With `:produce-proofs true`, `get-proof` returns a versioned `satrap-edrat`
-S-expression. The proof producer rebuilds the active assertion context as a
-fresh permanent formula, so internal activation selectors cannot masquerade as
-part of a global empty-clause proof.
+The same gate also exercises online QF_BOOL and QF_BV queries with named
+assertions, active scopes, definitions, resets, Boolean conditions, and the
+supported Boolean and fixed-width bit-vector operations. With
+`:produce-proofs true`, `get-proof` returns a versioned `satrap-edrat`
+S-expression. The proof producer rebuilds the active assertion context and
+bit-blast as a fresh permanent formula, so internal activation selectors
+cannot masquerade as part of a global empty-clause proof.
 
 SMT-LIB 2.7 permits `get-proof` only when the most recent check had an empty
 set of explicit assumptions. Satrap therefore rejects `get-proof` after a
@@ -57,19 +58,31 @@ nonempty `check-sat-assuming` call. A plain `check-sat`, or
 `check-sat-assuming ()`, remains proof-eligible; assertions in active
 `push`/`pop` scopes and `:named` assertions are part of that context.
 
-`tools/check_smt_proof.py` is a separate implementation of the QF_BOOL front
-end and canonical encoder. Given the original script, it:
+`tools/check_smt_proof.py` is a separate implementation of the proof-bearing
+QF_BOOL and QF_BV front ends, bit-vector lowering, and canonical encoder.
+Given the original script, it:
 
 1. reconstructs declarations, definitions, `let` bindings, scopes, resets,
    assertions, and checked queries;
 2. requires the certificate's premise list to match an actual
    standards-eligible `get-proof` site, including intervening mutation and
    reset state;
-3. independently normalizes the Boolean DAG and regenerates every formula and
+3. independently lowers every supported fixed-width bit-vector operation,
+   normalizes the resulting Boolean DAG, and regenerates every formula and
    Tseitin clause;
 4. rejects solver errors plus a changed variable count, premise, clause,
    origin, duplicate field, or unsupported theory clause; and
 5. submits the DRAT suffix and reconstructed CNF to pinned DRAT-trim.
+
+The required QF_BV corpus includes a compact arithmetic contradiction, a
+scoped/reset script, and an operator-surface script covering binary, hex, and
+indexed literals; arithmetic and bitwise operators; signed and unsigned
+division; shifts and comparisons; overflow predicates; concatenation,
+extraction, extension, repetition, and rotation; n-ary equality/distinct; and
+bit-vector `ite`. Separate unit tests exhaustively compare the checker
+lowering with integer semantics for every pair of width-one through width-four
+values. Repository hygiene rejects a missing or empty canonical proof-corpus
+file, so deleting one case cannot silently weaken the push gate.
 
 Run that path directly with:
 
@@ -105,9 +118,9 @@ the advertised SMT theories.
 
 In particular, the live incremental SAT stream deliberately does not append a
 global empty DRAT clause for assumption-only UNSAT, and the SMT-LIB layer
-rejects `get-proof` after a nonempty explicit assumption set. QF_BOOL uses the
-query-specific replay above for the active assertion context. QF_BV still
-needs an independently reconstructed bit-blast boundary, while UF, arrays, and
-arithmetic need checkable theory-lemma certificates. Proof mode therefore
-rejects every logic other than QF_BOOL rather than emitting a certificate that
-silently trusts such lemmas. The general SMT proof gate remains open.
+rejects `get-proof` after a nonempty explicit assumption set. QF_BOOL and QF_BV
+use the query-specific replay above for the active assertion context. UF,
+arrays, and arithmetic still need checkable theory-lemma certificates. Proof
+mode therefore rejects every logic outside QF_BOOL and QF_BV rather than
+emitting a certificate that silently trusts such lemmas. The general SMT proof
+gate remains open.

@@ -1920,6 +1920,13 @@ impl Session {
             expect_arity(items, 3, "array sort")?;
             let index = self.parse_sort(&items[1])?;
             let element = self.parse_sort(&items[2])?;
+            if self.options.produce_proofs
+                && (matches!(index, Sort::Array(_)) || matches!(element, Sort::Array(_)))
+            {
+                return Err(CommandError::message(
+                    "nested arrays are outside the proof boundary",
+                ));
+            }
             let sort = self
                 .terms
                 .array_sort(index, element)
@@ -2565,7 +2572,7 @@ mod tests {
     fn proof_mode_rejects_uncertified_theory_logics() {
         let output = execute(
             "(set-option :produce-proofs true)
-             (set-logic QF_ABV)
+             (set-logic QF_LIA)
              (set-logic QF_BOOL)
              (check-sat)
              (get-proof)",
@@ -2574,6 +2581,20 @@ mod tests {
             output,
             "unsupported\nsat\n\
              (error \"get-proof requires a preceding unsat result\")\n"
+        );
+    }
+
+    #[test]
+    fn proof_mode_rejects_nested_array_sorts_at_the_declaration_boundary() {
+        let output = execute(
+            "(set-option :produce-proofs true)
+             (set-logic QF_ABV)
+             (declare-const nested
+               (Array (_ BitVec 1) (Array (_ BitVec 1) (_ BitVec 1))))",
+        );
+        assert_eq!(
+            output,
+            "(error \"nested arrays are outside the proof boundary\")\n"
         );
     }
 
@@ -2918,6 +2939,48 @@ mod tests {
     }
 
     #[test]
+    fn qf_abv_proofs_cover_store_select_and_extensionality() {
+        let output = execute(
+            "(set-option :produce-proofs true)
+             (set-logic QF_ABV)
+             (declare-const a (Array (_ BitVec 1) (_ BitVec 2)))
+             (declare-const b (Array (_ BitVec 1) (_ BitVec 2)))
+             (assert (= (select a #b0) (select b #b0)))
+             (assert (= (select a #b1) (select b #b1)))
+             (assert (distinct a b))
+             (assert (distinct (select (store a #b0 #b11) #b0) #b11))
+             (check-sat)
+             (get-proof)",
+        );
+        assert!(output.starts_with("unsat\n(satrap-edrat :version 1 :logic QF_ABV"));
+        assert!(output.contains("(theory "));
+        assert!(output.ends_with("0\n\")\n"));
+    }
+
+    #[test]
+    fn qf_abv_proofs_ignore_unrelated_internal_allocation_history() {
+        let query = "
+             (declare-const a (Array (_ BitVec 1) (_ BitVec 1)))
+             (assert (distinct (select (store a #b0 #b1) #b0) #b1))
+             (check-sat)
+             (get-proof)";
+        let baseline = execute(&format!(
+            "(set-option :produce-proofs true)
+             (set-logic QF_ABV)
+             {query}"
+        ));
+        let shifted = execute(&format!(
+            "(set-option :produce-proofs true)
+             (set-logic QF_ABV)
+             (declare-const unused (Array (_ BitVec 1) (_ BitVec 1)))
+             (define-const unused-store (Array (_ BitVec 1) (_ BitVec 1))
+               (store unused #b1 #b0))
+             {query}"
+        ));
+        assert_eq!(baseline, shifted);
+    }
+
+    #[test]
     fn qf_abv_constant_arrays_have_standard_model_values() {
         let output = execute(
             "(set-option :produce-models true)
@@ -2951,6 +3014,27 @@ mod tests {
              (check-sat)",
         );
         assert_eq!(output, "unsat\n");
+    }
+
+    #[test]
+    fn qf_aufbv_proofs_combine_arrays_uf_and_bitvectors() {
+        let output = execute(
+            "(set-option :produce-proofs true)
+             (set-logic QF_AUFBV)
+             (declare-sort U 0)
+             (declare-const value U)
+             (declare-const a (Array (_ BitVec 1) U))
+             (declare-const b (Array (_ BitVec 1) U))
+             (declare-fun observe ((Array (_ BitVec 1) U)) (_ BitVec 2))
+             (assert (= a b))
+             (assert (distinct (observe a) (observe b)))
+             (assert (distinct (select (store a #b0 value) #b0) value))
+             (check-sat)
+             (get-proof)",
+        );
+        assert!(output.starts_with("unsat\n(satrap-edrat :version 1 :logic QF_AUFBV"));
+        assert!(output.contains("(theory "));
+        assert!(output.ends_with("0\n\")\n"));
     }
 
     #[test]

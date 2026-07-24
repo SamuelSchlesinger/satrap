@@ -77,6 +77,28 @@ class HygieneChecksTests(unittest.TestCase):
                 ],
             )
 
+    def test_required_quality_assets_reject_missing_and_empty_corpora(self) -> None:
+        directory, root = self.temporary_root()
+        with directory, patch.object(check_hygiene, "ROOT", root):
+            for relative in check_hygiene.REQUIRED_QUALITY_ASSETS:
+                path = root / relative
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text("(check-sat)\n", encoding="utf-8")
+            missing = check_hygiene.REQUIRED_QUALITY_ASSETS[0]
+            empty = check_hygiene.REQUIRED_QUALITY_ASSETS[-1]
+            (root / missing).unlink()
+            (root / empty).write_text("", encoding="utf-8")
+
+            errors: list[str] = []
+            check_hygiene.check_required_quality_assets(errors)
+            self.assertEqual(
+                errors,
+                [
+                    f"{missing}: required quality asset is missing",
+                    f"{empty}: required quality asset is empty",
+                ],
+            )
+
     def test_gate_wiring_detects_a_disconnected_quality_gate(self) -> None:
         directory, root = self.temporary_root()
         files = {

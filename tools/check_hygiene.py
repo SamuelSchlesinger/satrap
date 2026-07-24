@@ -26,6 +26,15 @@ TEXT_SUFFIXES = {
 TEXT_FILENAMES = {".editorconfig", ".gitignore", "Makefile"}
 MARKDOWN_LINK = re.compile(r"!?\[[^\]]*]\(([^)]+)\)")
 VERSION = re.compile(r"\d+(?:[.-]\d+){1,2}")
+REQUIRED_QUALITY_ASSETS = (
+    Path("benchmarks/smt-proof-smoke/qf-bool-connectives.smt2"),
+    Path("benchmarks/smt-proof-smoke/qf-bool-incremental.smt2"),
+    Path("benchmarks/smt-proof-smoke/qf-bool-reset.smt2"),
+    Path("benchmarks/smt-proof-smoke/qf-bool-scoped.smt2"),
+    Path("benchmarks/smt-proof-smoke/qf-bv-arithmetic.smt2"),
+    Path("benchmarks/smt-proof-smoke/qf-bv-operators.smt2"),
+    Path("benchmarks/smt-proof-smoke/qf-bv-scoped.smt2"),
+)
 
 
 def repository_files() -> list[Path]:
@@ -311,6 +320,15 @@ def require_commands(path: Path, commands: tuple[str, ...], errors: list[str]) -
             errors.append(f"{path.relative_to(ROOT)}: must invoke {command}")
 
 
+def check_required_quality_assets(errors: list[str]) -> None:
+    for relative in REQUIRED_QUALITY_ASSETS:
+        path = ROOT / relative
+        if not path.is_file():
+            errors.append(f"{relative}: required quality asset is missing")
+        elif path.stat().st_size == 0:
+            errors.append(f"{relative}: required quality asset is empty")
+
+
 def check_gate_wiring(errors: list[str]) -> None:
     require_commands(
         ROOT / ".githooks/pre-commit",
@@ -452,6 +470,7 @@ def main() -> int:
     check_fuzz_tool_versions(errors)
     check_python_tool_versions(errors)
     check_proof_checker_revision(errors)
+    check_required_quality_assets(errors)
     check_gate_wiring(errors)
     check_executable_scripts(errors)
 

@@ -112,6 +112,33 @@ class SmtProofCheckerTests(unittest.TestCase):
         certificate = validate_encoding(script, proof)
         self.assertEqual(certificate.clauses[-1], ("formula", (-1,)))
 
+    def test_reconstructs_a_qf_bv_bit_blast(self):
+        script = """
+        (set-option :produce-proofs true)
+        (set-logic QF_BV)
+        (declare-const x (_ BitVec 1))
+        (assert (= x #b0))
+        (assert (= x #b1))
+        (check-sat)
+        (get-proof)
+        """
+        proof = """(satrap-edrat :version 1 :logic QF_BV :variables 1
+        :premises ("(= x #b0)" "(= x #b1)")
+        :clauses ((formula -1) (formula 1))
+        :drat "0
+        ")"""
+        certificate = validate_encoding(script, proof)
+        self.assertEqual(certificate.logic, "QF_BV")
+        self.assertEqual(certificate.clauses, (("formula", (-1,)), ("formula", (1,))))
+
+    def test_rejects_a_certificate_with_the_wrong_logic(self):
+        qf_bv_script = SCRIPT.replace("QF_BOOL", "QF_BV")
+        with self.assertRaisesRegex(
+            ProofCheckError,
+            "premises do not match",
+        ):
+            validate_encoding(qf_bv_script, PROOF)
+
 
 if __name__ == "__main__":
     unittest.main()

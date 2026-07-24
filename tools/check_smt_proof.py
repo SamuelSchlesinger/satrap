@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Independently validate a satrap QF_BOOL eDRAT certificate."""
+"""Independently validate a satrap QF_BOOL or QF_BV eDRAT certificate."""
 
 from __future__ import annotations
 
@@ -34,6 +34,25 @@ Clause: TypeAlias = tuple[str, tuple[int, ...]]
 
 FALSE: BoolExpr = (0,)
 TRUE: BoolExpr = (1,)
+MAX_BITVECTOR_WIDTH = 1_048_576
+MAX_QUADRATIC_LOWERING_WORK = 16_000_000
+
+
+@dataclass(frozen=True)
+class BitVecExpr:
+    """A bit-vector expression whose bits are stored least-significant first."""
+
+    bits: tuple[BoolExpr, ...]
+
+
+@dataclass(frozen=True)
+class BitVecSort:
+    width: int
+
+
+TermExpr: TypeAlias = BoolExpr | BitVecExpr
+SortExpr: TypeAlias = str | BitVecSort
+BOOL_SORT = "Bool"
 
 
 class SExprReader:
@@ -237,6 +256,368 @@ def ite(condition: BoolExpr, then_term: BoolExpr, else_term: BoolExpr) -> BoolEx
     return (8, condition, then_term, else_term)
 
 
+def expect_bool_term(value: TermExpr, role: str) -> BoolExpr:
+    if isinstance(value, BitVecExpr):
+        raise ProofCheckError(f"{role} must have sort Bool")
+    return value
+
+
+def expect_bitvec_term(value: TermExpr, role: str) -> BitVecExpr:
+    if not isinstance(value, BitVecExpr):
+        raise ProofCheckError(f"{role} must have bit-vector sort")
+    return value
+
+
+def term_sort(value: TermExpr) -> SortExpr:
+    return BitVecSort(len(value.bits)) if isinstance(value, BitVecExpr) else BOOL_SORT
+
+
+def check_bitvector_width(width: int) -> None:
+    if width <= 0:
+        raise ProofCheckError("bit-vector width must be greater than zero")
+    if width > MAX_BITVECTOR_WIDTH:
+        raise ProofCheckError(
+            f"bit-vector width {width} exceeds the current limit of {MAX_BITVECTOR_WIDTH}"
+        )
+
+
+def check_quadratic_work(width: int, operation: str) -> None:
+    if width * width > MAX_QUADRATIC_LOWERING_WORK:
+        raise ProofCheckError(
+            f"`{operation}` at width {width} exceeds the Boolean-lowering work limit"
+        )
+
+
+def bitvector_constant(value: int, width: int) -> BitVecExpr:
+    check_bitvector_width(width)
+    if value < 0 or value.bit_length() > width:
+        raise ProofCheckError(f"decimal value does not fit in a {width}-bit vector")
+    return BitVecExpr(tuple(bool_constant(bool(value & (1 << index))) for index in range(width)))
+
+
+def same_width(left: BitVecExpr, right: BitVecExpr, operation: str) -> int:
+    if len(left.bits) != len(right.bits):
+        raise ProofCheckError(
+            f"`{operation}` operands have widths {len(left.bits)} and {len(right.bits)}"
+        )
+    return len(left.bits)
+
+
+def add_bits(
+    left: tuple[BoolExpr, ...], right: tuple[BoolExpr, ...]
+) -> tuple[tuple[BoolExpr, ...], BoolExpr]:
+    if len(left) != len(right):
+        raise ProofCheckError("bit-vector addition operands have different widths")
+    carry = FALSE
+    result = []
+    for left_bit, right_bit in zip(left, right, strict=True):
+        pair_sum = xor(left_bit, right_bit)
+        result.append(xor(pair_sum, carry))
+        pair_carry = junction([left_bit, right_bit], True)
+        propagated = junction([pair_sum, carry], True)
+        carry = junction([pair_carry, propagated], False)
+    return tuple(result), carry
+
+
+def negate_bits(bits: tuple[BoolExpr, ...]) -> tuple[BoolExpr, ...]:
+    inverted = tuple(negate(bit) for bit in bits)
+    one = (TRUE, *(FALSE for _ in bits[1:]))
+    return add_bits(inverted, one)[0]
+
+
+def subtract_bits(left: tuple[BoolExpr, ...], right: tuple[BoolExpr, ...]) -> tuple[BoolExpr, ...]:
+    return add_bits(left, negate_bits(right))[0]
+
+
+def multiply_bits(
+    left: tuple[BoolExpr, ...],
+    right: tuple[BoolExpr, ...],
+    output_width: int,
+) -> tuple[BoolExpr, ...]:
+    result = (FALSE,) * output_width
+    for right_index, right_bit in enumerate(right[:output_width]):
+        partial = [FALSE] * output_width
+        for left_index, left_bit in enumerate(left):
+            output = left_index + right_index
+            if output >= output_width:
+                break
+            partial[output] = junction([left_bit, right_bit], True)
+        result = add_bits(result, tuple(partial))[0]
+    return result
+
+
+def unsigned_less_than_bits(left: tuple[BoolExpr, ...], right: tuple[BoolExpr, ...]) -> BoolExpr:
+    if len(left) != len(right):
+        raise ProofCheckError("bit-vector comparison operands have different widths")
+    less = FALSE
+    equal = TRUE
+    for left_bit, right_bit in reversed(tuple(zip(left, right, strict=True))):
+        left_less = junction([negate(left_bit), right_bit], True)
+        decisive = junction([equal, left_less], True)
+        less = junction([less, decisive], False)
+        equal = junction([equal, iff(left_bit, right_bit)], True)
+    return less
+
+
+def select_bits(
+    condition: BoolExpr,
+    then_bits: tuple[BoolExpr, ...],
+    else_bits: tuple[BoolExpr, ...],
+) -> tuple[BoolExpr, ...]:
+    if len(then_bits) != len(else_bits):
+        raise ProofCheckError("bit-vector ite branches have different widths")
+    return tuple(
+        ite(condition, then_bit, else_bit)
+        for then_bit, else_bit in zip(then_bits, else_bits, strict=True)
+    )
+
+
+def is_zero_bits(bits: tuple[BoolExpr, ...]) -> BoolExpr:
+    return junction([negate(bit) for bit in bits], True)
+
+
+def unsigned_divide_bits(
+    dividend: tuple[BoolExpr, ...], divisor: tuple[BoolExpr, ...]
+) -> tuple[tuple[BoolExpr, ...], tuple[BoolExpr, ...]]:
+    if len(dividend) != len(divisor):
+        raise ProofCheckError("bit-vector division operands have different widths")
+    check_quadratic_work(len(dividend), "bit-vector division")
+    extended_divisor = (*divisor, FALSE)
+    remainder = [FALSE] * (len(dividend) + 1)
+    quotient = [FALSE] * len(dividend)
+    for index in reversed(range(len(dividend))):
+        for bit in reversed(range(1, len(remainder))):
+            remainder[bit] = remainder[bit - 1]
+        remainder[0] = dividend[index]
+        less = unsigned_less_than_bits(tuple(remainder), extended_divisor)
+        greater_or_equal = negate(less)
+        subtracted = subtract_bits(tuple(remainder), extended_divisor)
+        remainder = list(select_bits(greater_or_equal, subtracted, tuple(remainder)))
+        quotient[index] = greater_or_equal
+    return tuple(quotient), tuple(remainder[:-1])
+
+
+def bitvector_not(term: BitVecExpr) -> BitVecExpr:
+    return BitVecExpr(tuple(negate(bit) for bit in term.bits))
+
+
+def bitvector_fold(terms: list[BitVecExpr], operation: str) -> BitVecExpr:
+    minimum_arity(terms, 2, operation)
+    result = terms[0].bits
+    for right_term in terms[1:]:
+        if len(right_term.bits) != len(result):
+            raise ProofCheckError(f"all arguments to `{operation}` must have the same width")
+        if operation == "bvand":
+            result = tuple(
+                junction([left, right], True)
+                for left, right in zip(result, right_term.bits, strict=True)
+            )
+        elif operation == "bvor":
+            result = tuple(
+                junction([left, right], False)
+                for left, right in zip(result, right_term.bits, strict=True)
+            )
+        elif operation == "bvxor":
+            result = tuple(
+                xor(left, right) for left, right in zip(result, right_term.bits, strict=True)
+            )
+        elif operation == "bvadd":
+            result = add_bits(result, right_term.bits)[0]
+        elif operation == "bvmul":
+            check_quadratic_work(len(result), operation)
+            result = multiply_bits(result, right_term.bits, len(result))
+        else:
+            raise ProofCheckError(f"unknown bit-vector fold `{operation}`")
+    return BitVecExpr(result)
+
+
+def bitvector_equal(left: BitVecExpr, right: BitVecExpr) -> BoolExpr:
+    same_width(left, right, "=")
+    return junction(
+        [
+            iff(left_bit, right_bit)
+            for left_bit, right_bit in zip(left.bits, right.bits, strict=True)
+        ],
+        True,
+    )
+
+
+def bitvector_concat(left: BitVecExpr, right: BitVecExpr) -> BitVecExpr:
+    width = len(left.bits) + len(right.bits)
+    check_bitvector_width(width)
+    return BitVecExpr((*right.bits, *left.bits))
+
+
+def bitvector_extract(term: BitVecExpr, high: int, low: int) -> BitVecExpr:
+    if low > high or high >= len(term.bits):
+        raise ProofCheckError(f"invalid extraction range [{high}:{low}] for width {len(term.bits)}")
+    return BitVecExpr(term.bits[low : high + 1])
+
+
+def bitvector_repeat(term: BitVecExpr, count: int) -> BitVecExpr:
+    if count <= 0:
+        raise ProofCheckError("bit-vector repeat count must be positive")
+    check_bitvector_width(len(term.bits) * count)
+    return BitVecExpr(term.bits * count)
+
+
+def bitvector_extend(term: BitVecExpr, amount: int, signed: bool) -> BitVecExpr:
+    check_bitvector_width(len(term.bits) + amount)
+    extension = term.bits[-1] if signed else FALSE
+    return BitVecExpr((*term.bits, *(extension for _ in range(amount))))
+
+
+def bitvector_rotate(term: BitVecExpr, amount: int, left: bool) -> BitVecExpr:
+    width = len(term.bits)
+    amount %= width
+    result = [FALSE] * width
+    for index, bit in enumerate(term.bits):
+        target = (index + amount) % width if left else (index + width - amount) % width
+        result[target] = bit
+    return BitVecExpr(tuple(result))
+
+
+def bitvector_negate(term: BitVecExpr) -> BitVecExpr:
+    return BitVecExpr(negate_bits(term.bits))
+
+
+def bitvector_subtract(left: BitVecExpr, right: BitVecExpr) -> BitVecExpr:
+    same_width(left, right, "bvsub")
+    return BitVecExpr(subtract_bits(left.bits, right.bits))
+
+
+def bitvector_division(left: BitVecExpr, right: BitVecExpr, operation: str) -> BitVecExpr:
+    same_width(left, right, operation)
+    if operation in {"bvudiv", "bvurem"}:
+        quotient, remainder = unsigned_divide_bits(left.bits, right.bits)
+        return BitVecExpr(quotient if operation == "bvudiv" else remainder)
+
+    left_sign = left.bits[-1]
+    right_sign = right.bits[-1]
+    absolute_left = select_bits(left_sign, negate_bits(left.bits), left.bits)
+    absolute_right = select_bits(right_sign, negate_bits(right.bits), right.bits)
+    quotient, unsigned_remainder = unsigned_divide_bits(absolute_left, absolute_right)
+    if operation == "bvsdiv":
+        negative = xor(left_sign, right_sign)
+        return BitVecExpr(select_bits(negative, negate_bits(quotient), quotient))
+    if operation == "bvsrem":
+        return BitVecExpr(
+            select_bits(left_sign, negate_bits(unsigned_remainder), unsigned_remainder)
+        )
+    if operation != "bvsmod":
+        raise ProofCheckError(f"unknown bit-vector division `{operation}`")
+
+    remainder_is_zero = is_zero_bits(unsigned_remainder)
+    negated_remainder = negate_bits(unsigned_remainder)
+    negative_positive = add_bits(negated_remainder, right.bits)[0]
+    positive_negative = add_bits(unsigned_remainder, right.bits)[0]
+    not_left_sign = negate(left_sign)
+    not_right_sign = negate(right_sign)
+    both_positive = junction([not_left_sign, not_right_sign], True)
+    left_negative = junction([left_sign, not_right_sign], True)
+    left_positive = junction([not_left_sign, right_sign], True)
+    result = negated_remainder
+    result = select_bits(left_positive, positive_negative, result)
+    result = select_bits(left_negative, negative_positive, result)
+    result = select_bits(both_positive, unsigned_remainder, result)
+    return BitVecExpr(select_bits(remainder_is_zero, unsigned_remainder, result))
+
+
+def bitvector_shift(value: BitVecExpr, amount: BitVecExpr, operation: str) -> BitVecExpr:
+    width = same_width(value, amount, operation)
+    result = value.bits
+    sign = result[-1]
+    for index, selector in enumerate(amount.bits):
+        shift = 1 << index
+        fill = sign if operation == "bvashr" else FALSE
+        if shift < width:
+            if operation == "bvshl":
+                candidate = tuple(
+                    result[output - shift] if output >= shift else FALSE for output in range(width)
+                )
+            else:
+                candidate = tuple(
+                    result[output + shift] if output + shift < width else fill
+                    for output in range(width)
+                )
+        else:
+            candidate = (fill,) * width
+        result = select_bits(selector, candidate, result)
+    return BitVecExpr(result)
+
+
+def bitvector_compare(left: BitVecExpr, right: BitVecExpr, operation: str) -> BoolExpr:
+    same_width(left, right, operation)
+    if operation == "bvult":
+        return unsigned_less_than_bits(left.bits, right.bits)
+    if operation == "bvule":
+        return negate(unsigned_less_than_bits(right.bits, left.bits))
+    if operation == "bvugt":
+        return unsigned_less_than_bits(right.bits, left.bits)
+    if operation == "bvuge":
+        return negate(unsigned_less_than_bits(left.bits, right.bits))
+
+    def signed_less(first: BitVecExpr, second: BitVecExpr) -> BoolExpr:
+        signs_differ = xor(first.bits[-1], second.bits[-1])
+        unsigned = unsigned_less_than_bits(first.bits, second.bits)
+        return ite(signs_differ, first.bits[-1], unsigned)
+
+    if operation == "bvslt":
+        return signed_less(left, right)
+    if operation == "bvsle":
+        return negate(signed_less(right, left))
+    if operation == "bvsgt":
+        return signed_less(right, left)
+    if operation == "bvsge":
+        return negate(signed_less(left, right))
+    raise ProofCheckError(f"unknown bit-vector comparison `{operation}`")
+
+
+def bitvector_overflow(left: BitVecExpr, right: BitVecExpr | None, operation: str) -> BoolExpr:
+    if operation == "bvnego":
+        return junction([left.bits[-1], is_zero_bits(left.bits[:-1])], True)
+    if right is None:
+        raise ProofCheckError(f"`{operation}` expects two bit-vector arguments")
+    width = same_width(left, right, operation)
+    if operation == "bvuaddo":
+        return add_bits(left.bits, right.bits)[1]
+    if operation == "bvsaddo":
+        result = add_bits(left.bits, right.bits)[0]
+        same_inputs = iff(left.bits[-1], right.bits[-1])
+        changed_sign = xor(left.bits[-1], result[-1])
+        return junction([same_inputs, changed_sign], True)
+    if operation == "bvusubo":
+        return unsigned_less_than_bits(left.bits, right.bits)
+    if operation == "bvssubo":
+        result = subtract_bits(left.bits, right.bits)
+        different_inputs = xor(left.bits[-1], right.bits[-1])
+        changed_sign = xor(left.bits[-1], result[-1])
+        return junction([different_inputs, changed_sign], True)
+    if operation == "bvumulo":
+        check_quadratic_work(width, operation)
+        full_width = width * 2
+        check_bitvector_width(full_width)
+        extended_left = (*left.bits, *(FALSE for _ in range(width)))
+        extended_right = (*right.bits, *(FALSE for _ in range(width)))
+        product = multiply_bits(extended_left, extended_right, full_width)
+        return negate(is_zero_bits(product[width:]))
+    if operation == "bvsmulo":
+        check_quadratic_work(width, operation)
+        full_width = width * 2
+        check_bitvector_width(full_width)
+        extended_left = (*left.bits, *(left.bits[-1] for _ in range(width)))
+        extended_right = (*right.bits, *(right.bits[-1] for _ in range(width)))
+        product = multiply_bits(extended_left, extended_right, full_width)
+        result_sign = product[width - 1]
+        fits = junction([iff(bit, result_sign) for bit in product[width:]], True)
+        return negate(fits)
+    if operation == "bvsdivo":
+        minimum = bitvector_overflow(left, None, "bvnego")
+        negative_one = junction([iff(bit, TRUE) for bit in right.bits], True)
+        return junction([minimum, negative_one], True)
+    raise ProofCheckError(f"unknown bit-vector overflow operator `{operation}`")
+
+
 def quote_string(value: str) -> str:
     return f'"{value.replace(chr(34), chr(34) * 2)}"'
 
@@ -275,6 +656,7 @@ def render(expression: SExpr) -> str:
     if isinstance(expression, str):
         if (
             expression.startswith(":")
+            or expression.startswith(("#b", "#x"))
             or expression.isdigit()
             or expression in {"_", "!", "as", "lambda", "let", "exists", "forall", "match", "par"}
         ):
@@ -292,15 +674,16 @@ class Frame:
 
 @dataclass(frozen=True)
 class Query:
+    logic: str
     premises: tuple[str, ...]
     roots: tuple[BoolExpr, ...]
     has_assumptions: bool
 
 
-class BoolSession:
+class ProofSession:
     def __init__(self) -> None:
-        self.bindings: dict[str, BoolExpr] = {}
-        self.sorts: set[str] = set()
+        self.bindings: dict[str, TermExpr] = {}
+        self.sorts: dict[str, SortExpr] = {}
         self.frames = [Frame()]
         self.global_declarations = False
         self.produce_proofs = False
@@ -321,8 +704,10 @@ class BoolSession:
         if name == "set-logic":
             exact_arity(arguments, 1, name)
             logic = atom(arguments[0], "logic")
-            if logic != "QF_BOOL":
-                raise ProofCheckError("QF_BOOL proof contains a non-QF_BOOL script")
+            if self.logic is not None:
+                raise ProofCheckError("logic has already been set")
+            if logic not in {"QF_BOOL", "QF_BV"}:
+                raise ProofCheckError("proof script uses an unsupported logic")
             self.logic = logic
             self._invalidate_query()
         elif name == "set-option":
@@ -348,35 +733,39 @@ class BoolSession:
             exact_arity(arguments, 3, name)
             parameters = items(arguments[1], "sort parameters")
             if parameters:
-                raise ProofCheckError("QF_BOOL proof checker rejects parameterized sorts")
-            self._require_bool_sort(arguments[2])
+                raise ProofCheckError("proof checker rejects parameterized sorts")
+            sort = self.parse_sort(arguments[2])
             sort_name = atom(arguments[0], "sort name")
             if sort_name in self.sorts:
                 raise ProofCheckError(f"duplicate sort `{sort_name}`")
-            self.sorts.add(sort_name)
+            self.sorts[sort_name] = sort
             self._declaration_frame().bound_sorts.append(sort_name)
             self._invalidate_query()
         elif name == "declare-fun":
             exact_arity(arguments, 3, name)
             domain = items(arguments[1], "function domain")
             if domain:
-                raise ProofCheckError("QF_BOOL proof checker rejects nonconstant functions")
+                raise ProofCheckError("proof checker rejects nonconstant functions")
             self._declare(atom(arguments[0], "function name"), arguments[2])
         elif name == "define-const":
             exact_arity(arguments, 3, name)
-            self._require_bool_sort(arguments[1])
-            self._bind(atom(arguments[0], "constant name"), self.parse_term(arguments[2], []))
+            sort = self.parse_sort(arguments[1])
+            term = self.parse_term(arguments[2], [])
+            self._require_declared_sort(term, sort, "constant definition")
+            self._bind(atom(arguments[0], "constant name"), term)
         elif name == "define-fun":
             exact_arity(arguments, 4, name)
             parameters = items(arguments[1], "function parameters")
             if parameters:
-                raise ProofCheckError("QF_BOOL proof checker rejects nonconstant functions")
-            self._require_bool_sort(arguments[2])
-            self._bind(atom(arguments[0], "function name"), self.parse_term(arguments[3], []))
+                raise ProofCheckError("proof checker rejects nonconstant functions")
+            sort = self.parse_sort(arguments[2])
+            term = self.parse_term(arguments[3], [])
+            self._require_declared_sort(term, sort, "function definition")
+            self._bind(atom(arguments[0], "function name"), term)
         elif name == "assert":
             exact_arity(arguments, 1, name)
             source = render(arguments[0])
-            term = self.parse_term(peel_annotation(arguments[0]), [])
+            term = expect_bool_term(self.parse_term(peel_annotation(arguments[0]), []), "assertion")
             self.frames[-1].assertions.append((source, term))
             self._invalidate_query()
         elif name == "push":
@@ -394,7 +783,7 @@ class BoolSession:
                 for bound_name in frame.bound_names:
                     self.bindings.pop(bound_name, None)
                 for bound_sort in frame.bound_sorts:
-                    self.sorts.discard(bound_sort)
+                    self.sorts.pop(bound_sort, None)
             self._invalidate_query()
         elif name == "check-sat":
             exact_arity(arguments, 0, name)
@@ -402,7 +791,13 @@ class BoolSession:
         elif name == "check-sat-assuming":
             exact_arity(arguments, 1, name)
             assumptions = items(arguments[0], "assumptions")
-            parsed = [(render(value), self.parse_term(value, [])) for value in assumptions]
+            parsed = [
+                (
+                    render(value),
+                    expect_bool_term(self.parse_term(value, []), "check assumption"),
+                )
+                for value in assumptions
+            ]
             self._record_query(parsed)
         elif name == "reset-assertions":
             exact_arity(arguments, 0, name)
@@ -445,28 +840,53 @@ class BoolSession:
         }:
             return
         else:
-            raise ProofCheckError(f"unsupported QF_BOOL command `{name}`")
+            raise ProofCheckError(f"unsupported proof-script command `{name}`")
 
-    def parse_term(self, expression: SExpr, locals_: list[dict[str, BoolExpr]]) -> BoolExpr:
+    def parse_term(self, expression: SExpr, locals_: list[dict[str, TermExpr]]) -> TermExpr:
         if isinstance(expression, str):
             if expression == "true":
                 return TRUE
             if expression == "false":
                 return FALSE
+            if expression.startswith("#b"):
+                digits = expression[2:]
+                if not digits or any(digit not in "01" for digit in digits):
+                    raise ProofCheckError("invalid binary bit-vector literal")
+                return BitVecExpr(tuple(bool_constant(digit == "1") for digit in reversed(digits)))
+            if expression.startswith("#x"):
+                digits = expression[2:]
+                if not digits:
+                    raise ProofCheckError("invalid hexadecimal bit-vector literal")
+                try:
+                    value = int(digits, 16)
+                except ValueError as error:
+                    raise ProofCheckError("invalid hexadecimal bit-vector literal") from error
+                return bitvector_constant(value, len(digits) * 4)
             for scope in reversed(locals_):
                 if expression in scope:
                     return scope[expression]
             if expression not in self.bindings:
-                raise ProofCheckError(f"unknown Boolean symbol `{expression}`")
+                raise ProofCheckError(f"unknown term symbol `{expression}`")
             return self.bindings[expression]
-        values = items(expression, "Boolean term")
+        values = items(expression, "term")
         if not values:
-            raise ProofCheckError("empty Boolean term")
-        operator = atom(values[0], "Boolean operator")
+            raise ProofCheckError("empty term")
+        if isinstance(values[0], list):
+            identifier = items(values[0], "indexed identifier")
+            terms = [self.parse_term(argument, locals_) for argument in values[1:]]
+            return self._apply_indexed(identifier, terms)
+        operator = atom(values[0], "term operator")
         arguments = values[1:]
+        if operator == "_":
+            exact_arity(arguments, 2, "indexed bit-vector literal")
+            value = atom(arguments[0], "bit-vector value")
+            if not value.startswith("bv") or not value[2:].isdigit():
+                raise ProofCheckError("invalid indexed bit-vector literal")
+            width = parse_numeral(arguments[1], "bit-vector width")
+            return bitvector_constant(int(value[2:]), width)
         if operator == "let":
             exact_arity(arguments, 2, operator)
-            scope = {}
+            scope: dict[str, TermExpr] = {}
             for binding in items(arguments[0], "let bindings"):
                 pair = items(binding, "let binding")
                 exact_arity(pair, 2, "let binding")
@@ -482,33 +902,35 @@ class BoolSession:
         terms = [self.parse_term(argument, locals_) for argument in arguments]
         if operator == "not":
             exact_arity(terms, 1, operator)
-            return negate(terms[0])
+            return negate(expect_bool_term(terms[0], operator))
         if operator == "and":
             minimum_arity(terms, 2, operator)
-            return junction(terms, True)
+            return junction([expect_bool_term(term, operator) for term in terms], True)
         if operator == "or":
             minimum_arity(terms, 2, operator)
-            return junction(terms, False)
+            return junction([expect_bool_term(term, operator) for term in terms], False)
         if operator == "xor":
             minimum_arity(terms, 2, operator)
-            result = terms[0]
-            for term in terms[1:]:
+            boolean_terms = [expect_bool_term(term, operator) for term in terms]
+            result = boolean_terms[0]
+            for term in boolean_terms[1:]:
                 result = xor(result, term)
             return result
         if operator == "=>":
             minimum_arity(terms, 2, operator)
-            result = terms[-1]
-            for antecedent in reversed(terms[:-1]):
+            boolean_terms = [expect_bool_term(term, operator) for term in terms]
+            result = boolean_terms[-1]
+            for antecedent in reversed(boolean_terms[:-1]):
                 result = junction([negate(antecedent), result], False)
             return result
         if operator == "=":
             minimum_arity(terms, 2, operator)
-            return junction([iff(terms[0], term) for term in terms[1:]], True)
+            return junction([self._equivalent(terms[0], term) for term in terms[1:]], True)
         if operator == "distinct":
             minimum_arity(terms, 2, operator)
             return junction(
                 [
-                    negate(iff(terms[left], terms[right]))
+                    negate(self._equivalent(terms[left], terms[right]))
                     for left in range(len(terms))
                     for right in range(left + 1, len(terms))
                 ],
@@ -516,29 +938,172 @@ class BoolSession:
             )
         if operator == "ite":
             exact_arity(terms, 3, operator)
-            return ite(*terms)
-        raise ProofCheckError(f"unsupported QF_BOOL operator `{operator}`")
+            condition = expect_bool_term(terms[0], "ite condition")
+            if term_sort(terms[1]) != term_sort(terms[2]):
+                raise ProofCheckError("ite branches have different sorts")
+            if isinstance(terms[1], BitVecExpr):
+                else_term = expect_bitvec_term(terms[2], "ite branch")
+                return BitVecExpr(select_bits(condition, terms[1].bits, else_term.bits))
+            return ite(condition, terms[1], expect_bool_term(terms[2], "ite branch"))
+        if operator == "concat":
+            exact_arity(terms, 2, operator)
+            return bitvector_concat(
+                expect_bitvec_term(terms[0], operator),
+                expect_bitvec_term(terms[1], operator),
+            )
+        if operator == "bvnot":
+            exact_arity(terms, 1, operator)
+            return bitvector_not(expect_bitvec_term(terms[0], operator))
+        if operator == "bvneg":
+            exact_arity(terms, 1, operator)
+            return bitvector_negate(expect_bitvec_term(terms[0], operator))
+        if operator in {"bvand", "bvor", "bvxor", "bvadd", "bvmul"}:
+            return bitvector_fold([expect_bitvec_term(term, operator) for term in terms], operator)
+        if operator in {"bvnand", "bvnor", "bvxnor", "bvcomp"}:
+            exact_arity(terms, 2, operator)
+            left = expect_bitvec_term(terms[0], operator)
+            right = expect_bitvec_term(terms[1], operator)
+            same_width(left, right, operator)
+            if operator == "bvcomp":
+                return BitVecExpr((bitvector_equal(left, right),))
+            base = {
+                "bvnand": "bvand",
+                "bvnor": "bvor",
+                "bvxnor": "bvxor",
+            }[operator]
+            return bitvector_not(bitvector_fold([left, right], base))
+        if operator == "bvsub":
+            exact_arity(terms, 2, operator)
+            return bitvector_subtract(
+                expect_bitvec_term(terms[0], operator),
+                expect_bitvec_term(terms[1], operator),
+            )
+        if operator in {"bvudiv", "bvurem", "bvsdiv", "bvsrem", "bvsmod"}:
+            exact_arity(terms, 2, operator)
+            return bitvector_division(
+                expect_bitvec_term(terms[0], operator),
+                expect_bitvec_term(terms[1], operator),
+                operator,
+            )
+        if operator in {"bvshl", "bvlshr", "bvashr"}:
+            exact_arity(terms, 2, operator)
+            return bitvector_shift(
+                expect_bitvec_term(terms[0], operator),
+                expect_bitvec_term(terms[1], operator),
+                operator,
+            )
+        if operator in {
+            "bvult",
+            "bvule",
+            "bvugt",
+            "bvuge",
+            "bvslt",
+            "bvsle",
+            "bvsgt",
+            "bvsge",
+        }:
+            exact_arity(terms, 2, operator)
+            return bitvector_compare(
+                expect_bitvec_term(terms[0], operator),
+                expect_bitvec_term(terms[1], operator),
+                operator,
+            )
+        if operator == "bvnego":
+            exact_arity(terms, 1, operator)
+            return bitvector_overflow(expect_bitvec_term(terms[0], operator), None, operator)
+        if operator in {
+            "bvuaddo",
+            "bvsaddo",
+            "bvumulo",
+            "bvsmulo",
+            "bvusubo",
+            "bvssubo",
+            "bvsdivo",
+        }:
+            exact_arity(terms, 2, operator)
+            return bitvector_overflow(
+                expect_bitvec_term(terms[0], operator),
+                expect_bitvec_term(terms[1], operator),
+                operator,
+            )
+        raise ProofCheckError(f"unsupported proof term operator `{operator}`")
 
     def _declare(self, name: str, sort: SExpr) -> None:
-        self._require_bool_sort(sort)
-        self._bind(name, (2, name))
+        parsed_sort = self.parse_sort(sort)
+        if self.logic == "QF_BOOL" and parsed_sort != BOOL_SORT:
+            raise ProofCheckError("QF_BOOL proof contains a bit-vector declaration")
+        if parsed_sort == BOOL_SORT:
+            term: TermExpr = (2, 0, name)
+        else:
+            term = BitVecExpr(tuple((2, 1, name, index) for index in range(parsed_sort.width)))
+        self._bind(name, term)
 
-    def _bind(self, name: str, expression: BoolExpr) -> None:
+    def _bind(self, name: str, expression: TermExpr) -> None:
         if name in self.bindings:
-            raise ProofCheckError(f"duplicate Boolean symbol `{name}`")
+            raise ProofCheckError(f"duplicate term symbol `{name}`")
         self.bindings[name] = expression
         self._declaration_frame().bound_names.append(name)
         self._invalidate_query()
 
-    def _require_bool_sort(self, value: SExpr) -> None:
-        sort = atom(value, "sort")
-        if sort != "Bool" and sort not in self.sorts:
-            raise ProofCheckError("QF_BOOL proof contains a non-Boolean declaration")
+    def parse_sort(self, value: SExpr) -> SortExpr:
+        if isinstance(value, str):
+            if value == "Bool":
+                return BOOL_SORT
+            if value in self.sorts:
+                return self.sorts[value]
+            raise ProofCheckError(f"unsupported proof sort `{value}`")
+        values = items(value, "sort")
+        if len(values) == 3 and values[0] == "_" and values[1] == "BitVec":
+            width = parse_numeral(values[2], "bit-vector width")
+            check_bitvector_width(width)
+            if self.logic == "QF_BOOL":
+                raise ProofCheckError("QF_BOOL proof contains a bit-vector sort")
+            return BitVecSort(width)
+        raise ProofCheckError("proof checker accepts only Bool and BitVec sorts")
+
+    def _apply_indexed(self, identifier: list[SExpr], terms: list[TermExpr]) -> TermExpr:
+        if len(identifier) < 3 or identifier[0] != "_":
+            raise ProofCheckError("invalid indexed bit-vector operator")
+        operator = atom(identifier[1], "indexed operator")
+        exact_arity(terms, 1, operator)
+        term = expect_bitvec_term(terms[0], operator)
+        if operator == "extract":
+            exact_arity(identifier, 4, "extract identifier")
+            high = parse_numeral(identifier[2], "extract high index")
+            low = parse_numeral(identifier[3], "extract low index")
+            return bitvector_extract(term, high, low)
+        exact_arity(identifier, 3, f"{operator} identifier")
+        index = parse_numeral(identifier[2], f"{operator} index")
+        if operator == "repeat":
+            return bitvector_repeat(term, index)
+        if operator == "zero_extend":
+            return bitvector_extend(term, index, False)
+        if operator == "sign_extend":
+            return bitvector_extend(term, index, True)
+        if operator == "rotate_left":
+            return bitvector_rotate(term, index, True)
+        if operator == "rotate_right":
+            return bitvector_rotate(term, index, False)
+        raise ProofCheckError(f"unsupported indexed bit-vector operator `{operator}`")
+
+    def _equivalent(self, left: TermExpr, right: TermExpr) -> BoolExpr:
+        if term_sort(left) != term_sort(right):
+            raise ProofCheckError("equality operands have different sorts")
+        if isinstance(left, BitVecExpr):
+            return bitvector_equal(left, expect_bitvec_term(right, "equality operand"))
+        return iff(left, expect_bool_term(right, "equality operand"))
+
+    def _require_declared_sort(self, term: TermExpr, declared: SortExpr, role: str) -> None:
+        if term_sort(term) != declared:
+            raise ProofCheckError(f"{role} does not have its declared sort")
 
     def _record_query(self, assumptions: list[tuple[str, BoolExpr]]) -> None:
+        if self.logic is None:
+            raise ProofCheckError("check command used before set-logic")
         assertions = [assertion for frame in self.frames for assertion in frame.assertions]
         assertions.extend(assumptions)
         self.last_query = Query(
+            self.logic,
             tuple(source for source, _ in assertions),
             tuple(term for _, term in assertions),
             bool(assumptions),
@@ -669,6 +1234,7 @@ def literal_index(literal: int) -> int:
 
 @dataclass(frozen=True)
 class Certificate:
+    logic: str
     variable_count: int
     premises: tuple[str, ...]
     clauses: tuple[Clause, ...]
@@ -711,8 +1277,9 @@ def parse_certificate(text: str) -> Certificate:
         raise ProofCheckError(f"invalid satrap-edrat fields: {'; '.join(detail)}")
     if atom(fields.get(":version", []), "proof version") != "1":
         raise ProofCheckError("unsupported satrap-edrat proof version")
-    if atom(fields.get(":logic", []), "proof logic") != "QF_BOOL":
-        raise ProofCheckError("satrap-edrat checker currently accepts only QF_BOOL")
+    logic = atom(fields.get(":logic", []), "proof logic")
+    if logic not in {"QF_BOOL", "QF_BV"}:
+        raise ProofCheckError(f"satrap-edrat checker does not accept logic `{logic}`")
     variable_count = parse_numeral(fields.get(":variables", []), "proof variable count")
     premises = []
     for value in items(fields.get(":premises", ""), "proof premises"):
@@ -726,7 +1293,7 @@ def parse_certificate(text: str) -> Certificate:
             raise ProofCheckError("proof clause must name its origin")
         kind = atom(parts[0], "proof clause origin")
         if kind not in {"formula", "encoding"}:
-            raise ProofCheckError(f"QF_BOOL proof contains forbidden `{kind}` clause")
+            raise ProofCheckError(f"{logic} proof contains forbidden `{kind}` clause")
         try:
             literals = tuple(int(atom(value, "proof literal")) for value in parts[1:])
         except ValueError as error:
@@ -737,13 +1304,17 @@ def parse_certificate(text: str) -> Certificate:
     drat_value = fields.get(":drat")
     if not isinstance(drat_value, StringAtom):
         raise ProofCheckError("DRAT suffix must be a string")
-    return Certificate(variable_count, tuple(premises), tuple(clauses), drat_value.value)
+    return Certificate(logic, variable_count, tuple(premises), tuple(clauses), drat_value.value)
 
 
 def validate_encoding(script: str, proof: str) -> Certificate:
     certificate = parse_certificate(proof)
-    queries = BoolSession().execute_all(SExprReader(script).read_all())
-    matches = [query for query in queries if query.premises == certificate.premises]
+    queries = ProofSession().execute_all(SExprReader(script).read_all())
+    matches = [
+        query
+        for query in queries
+        if query.logic == certificate.logic and query.premises == certificate.premises
+    ]
     if not matches:
         raise ProofCheckError(
             "certificate premises do not match any active query in the original script"
@@ -759,7 +1330,8 @@ def validate_encoding(script: str, proof: str) -> Certificate:
         )
     if expected_clauses != certificate.clauses:
         raise ProofCheckError(
-            "proof clauses do not match the independently reconstructed QF_BOOL encoding"
+            f"proof clauses do not match the independently reconstructed {certificate.logic} "
+            "encoding"
         )
     return certificate
 

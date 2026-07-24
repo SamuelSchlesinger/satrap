@@ -40,8 +40,10 @@ Passing this gate means “worth iterating on,” not “competitive.”
   and representative malformed sessions remains;
 - a reusable `Unknown` path, deterministic CDCL conflict/propagation limits,
   and a thread-safe interruption handle are implemented; charging one-time
-  preprocessing, OS signal wiring, and end-to-end malformed interactive input
-  behavior remain; and
+  preprocessing and OS signal wiring remain. Balanced malformed interactive
+  commands now produce an immediate recoverable error and resynchronize at the
+  next top-level boundary; stream-failure injection and sustained adversarial
+  recovery campaigns remain; and
 - reproducible bug corpus with minimized instances.
 
 No claim about a previously unsolved UNSAT instance passes this gate without a
@@ -251,6 +253,9 @@ and diagnostic output channels, and the standard `ALL` selector are
 implemented. The command state machine preserves model inspection after
 `unknown`, resets declaration and theory state according to
 `:global-declarations`, and continues after tested recoverable command errors.
+The streaming reader now also reports lexical and top-level S-expression
+errors on the regular channel, flushes before reading ahead, skips exactly the
+remaining balanced malformed command, and preserves the prior solver state.
 Closed inline `:named` terms now follow the standard postorder visibility
 rules, declaration scopes, command-error rollback, and distinct assignment
 label versus outer-assertion core semantics. The independent proof checker
@@ -263,10 +268,10 @@ fixed-width bit-vector lowering from the original script, regenerates the
 canonical CNF, and invokes pinned DRAT-trim. Its small-width arithmetic
 semantics are exhaustively tested. Standard `get-proof` requests after
 nonempty explicit assumption sets are rejected. Fragment-complete independent
-model validation, lexical parser recovery, complete execution-mode
-conformance, sustained fuzzing, and representative performance evaluation are
-not complete, so this gate remains open. The checked and open protocol boundary
-is catalogued in [SMT-LIB support](SMT_LIB.md).
+model validation, complete execution-mode conformance, sustained fuzzing, and
+representative performance evaluation are not complete, so this gate remains
+open. The checked and open protocol boundary is catalogued in
+[SMT-LIB support](SMT_LIB.md).
 
 ## Gate 4: general CDCL(T) coverage
 

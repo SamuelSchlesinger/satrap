@@ -100,9 +100,9 @@ Or talk to the solver interactively:
 ```
 
 The process responds after each complete command and keeps reading after
-recoverable command errors, so it can be used as a long-lived subprocess. See
-[SMT-LIB support](docs/SMT_LIB.md) for the implemented commands, execution
-modes, output channels, and explicit conformance gaps.
+recoverable command and syntax errors, so it can be used as a long-lived
+subprocess. See [SMT-LIB support](docs/SMT_LIB.md) for the implemented
+commands, execution modes, output channels, and explicit conformance gaps.
 
 Current SMT coverage includes Core, QF_BV, QF_UF, QF_UFBV, QF_ABV, and
 QF_AUFBV, plus experimental exact QF_IDL, QF_LIA, QF_RDL, and QF_LRA.

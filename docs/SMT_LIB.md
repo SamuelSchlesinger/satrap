@@ -9,9 +9,22 @@ not yet claim full language or protocol conformance.
 
 The process reads one complete command at a time, writes and flushes its
 response immediately, and retains the context for the next command. Tested
-command-level errors produce `(error "...")` and continue without poisoning
-the session. Lexical or malformed top-level S-expression recovery remains
-open: those errors currently terminate the reader.
+command and syntax errors produce `(error "...")` and continue without
+poisoning the session. When a lexical error is detected inside a command, the
+response is flushed immediately; before parsing another command, the reader
+discards the rest of that malformed top-level expression. Resynchronization
+tracks nested lists and respects comments, strings, doubled string quotes, and
+quoted symbols, so a balanced bad command cannot consume a following command.
+An unexpected top-level `)` is consumed as one bad expression.
+
+An actually unterminated list, string, or quoted symbol has no unambiguous
+following command boundary and cannot be diagnosed as unterminated while the
+stream remains open. At end of input it produces one error response and the
+process then exits normally. If another lexical defect was detected earlier
+inside such a construct, its response is immediate but resynchronization waits
+for the closing delimiter or end of input. A failure of the underlying input
+or output stream remains a fatal I/O error rather than a recoverable SMT-LIB
+command error.
 
 The implemented command families are:
 
@@ -103,16 +116,16 @@ described in [Proof checking](PROOF_CHECKING.md).
 
 Rust unit and integration tests cover online response flushing, mode
 transitions, immediate output redirection and rollback, scoped declarations,
-errors and context reuse, model inspection after `unknown`, and
-`reset-assertions` with both local and global declarations. The shared push/CI
-gate also runs raw and structured session fuzz targets, 3,872 deterministic
-queries against pinned independent solvers, model replays, core replays, and
-the query-specific proof corpus.
+command and syntax errors with context reuse, balanced parser
+resynchronization, model inspection after `unknown`, and `reset-assertions`
+with both local and global declarations. The shared push/CI gate also runs raw
+and structured session fuzz targets, 3,872 deterministic queries against
+pinned independent solvers, model replays, core replays, and the query-specific
+proof corpus.
 
 Those checks are strong regression evidence, not a complete conformance suite.
 The remaining protocol work includes:
 
-- recovery after malformed lexical or top-level S-expression input;
 - parameterized sort aliases and polymorphic definitions;
 - datatypes, recursion, maps, and quantifiers;
 - preserving user sort-alias spelling in every printed response; and

@@ -15,7 +15,9 @@ seeds so every ordinary push exercises the same bounded campaigns as hosted CI.
 The structured target rotates through QF_BV, QF_UF, finite QF_AUFBV, QF_LIA,
 QF_LRA, QF_UFLIA, QF_AUFLIA, and QF_UFIDL fragments. Seed corpora preserve
 representative raw, incremental, malformed, theory-combination, and
-nontrivial-UNSAT cases.
+nontrivial-UNSAT cases. The raw corpus includes both unterminated input and
+balanced lexical/top-level errors followed by valid commands, guarding
+continued-execution resynchronization as well as rejection.
 
 ## Install and run the push gate
 

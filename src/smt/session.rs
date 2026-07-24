@@ -51,8 +51,13 @@ struct FunctionDeclaration {
 #[derive(Clone, Debug)]
 struct NamedAssertion {
     name: String,
-    term: TermId,
     selector: Lit,
+}
+
+#[derive(Clone, Debug)]
+struct AssignmentLabel {
+    name: String,
+    term: TermId,
 }
 
 #[derive(Debug, Default)]
@@ -63,6 +68,7 @@ struct Frame {
     declarations: Vec<Declaration>,
     function_declarations: Vec<FunctionDeclaration>,
     named_assertions: Vec<NamedAssertion>,
+    assignment_labels: Vec<AssignmentLabel>,
     assertions: Vec<String>,
     assertion_terms: Vec<TermId>,
 }
@@ -129,7 +135,6 @@ pub struct Session {
     functions: HashMap<String, FunctionBinding>,
     sorts: HashMap<String, Sort>,
     sort_names: HashMap<UninterpretedSortId, String>,
-    active_labels: HashSet<String>,
     frames: Vec<Frame>,
     logic: Option<String>,
     options: Options,
@@ -155,7 +160,6 @@ impl Session {
             functions: HashMap::new(),
             sorts: HashMap::new(),
             sort_names: HashMap::new(),
-            active_labels: HashSet::new(),
             frames: vec![Frame::default()],
             logic: None,
             options: Options::default(),
@@ -602,16 +606,15 @@ impl Session {
             self.bindings.insert(name.clone(), Binding { term });
             let target = self.declaration_frame();
             self.frames[target].bound_names.push(name.clone());
-            self.active_labels.insert(name.clone());
+            self.frames[target].assignment_labels.push(AssignmentLabel {
+                name: name.clone(),
+                term,
+            });
             self.frames
                 .last_mut()
                 .expect("base frame exists")
                 .named_assertions
-                .push(NamedAssertion {
-                    name,
-                    term,
-                    selector,
-                });
+                .push(NamedAssertion { name, selector });
         } else {
             self.solver
                 .try_add_clause(&[literal])
@@ -654,9 +657,6 @@ impl Session {
             }
             for name in frame.bound_sorts {
                 self.sorts.remove(&name);
-            }
-            for assertion in frame.named_assertions {
-                self.active_labels.remove(&assertion.name);
             }
         }
         self.invalidate_check();
@@ -854,12 +854,12 @@ impl Session {
         let assignments = self
             .frames
             .iter()
-            .flat_map(|frame| frame.named_assertions.iter())
-            .map(|assertion| {
+            .flat_map(|frame| frame.assignment_labels.iter())
+            .map(|label| {
                 format!(
                     "({} {})",
-                    quote_symbol(&assertion.name),
-                    bool_text(self.bool_term_value(model, assertion.term))
+                    quote_symbol(&label.name),
+                    bool_text(self.bool_term_value(model, label.term))
                 )
             })
             .collect::<Vec<_>>();
@@ -945,6 +945,11 @@ impl Session {
                 .active_function_declarations()
                 .cloned()
                 .collect::<Vec<_>>();
+            let assignment_labels = self
+                .frames
+                .iter()
+                .flat_map(|frame| frame.assignment_labels.iter().cloned())
+                .collect();
             let names = self.bindings.clone();
             let functions = self.functions.clone();
             let sorts = self.sorts.clone();
@@ -955,6 +960,7 @@ impl Session {
                 bound_sorts: sorts.keys().cloned().collect(),
                 declarations,
                 function_declarations,
+                assignment_labels,
                 ..Frame::default()
             });
         } else {
@@ -966,7 +972,6 @@ impl Session {
             self.frames.clear();
             self.frames.push(Frame::default());
         }
-        self.active_labels.clear();
         self.solver = Solver::new();
         self.encoder = BoolEncoder::default();
         self.theories = TheoryManager::default();
@@ -2950,6 +2955,54 @@ mod tests {
              (define-fun q () Bool false)\n)\n\
              unsat\n"
         );
+    }
+
+    #[test]
+    fn assignment_labels_follow_their_definition_scope() {
+        let scoped = execute(
+            "(set-option :produce-assignments true)
+             (set-logic QF_BOOL)
+             (declare-const p Bool)
+             (push 1)
+             (assert (! p :named scoped))
+             (check-sat)
+             (get-assignment)
+             (pop 1)
+             (check-sat)
+             (get-assignment)
+             (assert scoped)
+             (check-sat)",
+        );
+        assert_eq!(
+            scoped,
+            "sat\n((scoped true))\nsat\n()\n\
+             (error \"unknown symbol `scoped`\")\nsat\n"
+        );
+
+        let global = execute(
+            "(set-option :produce-assignments true)
+             (set-option :global-declarations true)
+             (set-logic QF_BOOL)
+             (declare-const p Bool)
+             (push 1)
+             (assert (! p :named global_label))
+             (check-sat)
+             (get-assignment)
+             (pop 1)
+             (check-sat)
+             (get-assignment)
+             (assert (= global_label p))
+             (check-sat)",
+        );
+        let lines = global.lines().collect::<Vec<_>>();
+        assert_eq!(lines[0], "sat");
+        assert_eq!(lines[1], "((global_label true))");
+        assert_eq!(lines[2], "sat");
+        assert!(
+            matches!(lines[3], "((global_label true))" | "((global_label false))"),
+            "unexpected global label assignment:\n{global}"
+        );
+        assert_eq!(lines[4], "sat");
     }
 
     #[test]

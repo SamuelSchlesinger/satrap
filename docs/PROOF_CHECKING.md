@@ -44,6 +44,39 @@ Each case is solved by `target/release/sat`, must report UNSAT with exit code
 20, and must end in a certificate that DRAT-trim reports as verified against
 the original DIMACS input.
 
+The same gate also exercises online QF_BOOL queries with named assertions,
+active scopes, definitions, resets, and the supported Boolean connectives.
+With `:produce-proofs true`, `get-proof` returns a versioned `satrap-edrat`
+S-expression. The proof producer rebuilds the active assertion context as a
+fresh permanent formula, so internal activation selectors cannot masquerade as
+part of a global empty-clause proof.
+
+SMT-LIB 2.7 permits `get-proof` only when the most recent check had an empty
+set of explicit assumptions. Satrap therefore rejects `get-proof` after a
+nonempty `check-sat-assuming` call. A plain `check-sat`, or
+`check-sat-assuming ()`, remains proof-eligible; assertions in active
+`push`/`pop` scopes and `:named` assertions are part of that context.
+
+`tools/check_smt_proof.py` is a separate implementation of the QF_BOOL front
+end and canonical encoder. Given the original script, it:
+
+1. reconstructs declarations, definitions, `let` bindings, scopes, resets,
+   assertions, and checked queries;
+2. requires the certificate's premise list to match an actual
+   standards-eligible `get-proof` site, including intervening mutation and
+   reset state;
+3. independently normalizes the Boolean DAG and regenerates every formula and
+   Tseitin clause;
+4. rejects solver errors plus a changed variable count, premise, clause,
+   origin, duplicate field, or unsupported theory clause; and
+5. submits the DRAT suffix and reconstructed CNF to pinned DRAT-trim.
+
+Run that path directly with:
+
+```sh
+make smt-proof-smoke
+```
+
 Run the suite directly with:
 
 ```sh
@@ -67,13 +100,14 @@ an independent checker on every normal push. `tools/benchmark.py` can retain
 one proof per run, check it independently, and reject every unchecked UNSAT
 result with `--require-unsat-proofs`. Claim-bearing benchmark configurations
 must enable that flag and configure a checker for every participating solver.
-This does not replace longer proof campaigns or establish SMT proof
-production.
+This does not replace longer proof campaigns or establish proof production for
+the advertised SMT theories.
 
-In particular, an assumption-only UNSAT query deliberately does not append a
-global empty DRAT clause because the permanent formula may still be
-satisfiable. The interactive proof container must record query assumptions and
-active scopes explicitly. UF, array, and arithmetic lemmas also need
-independently checkable theory certificates. Until that container and those
-certificates exist, `get-proof` remains unsupported and the SMT proof gate is
-open.
+In particular, the live incremental SAT stream deliberately does not append a
+global empty DRAT clause for assumption-only UNSAT, and the SMT-LIB layer
+rejects `get-proof` after a nonempty explicit assumption set. QF_BOOL uses the
+query-specific replay above for the active assertion context. QF_BV still
+needs an independently reconstructed bit-blast boundary, while UF, arrays, and
+arithmetic need checkable theory-lemma certificates. Proof mode therefore
+rejects every logic other than QF_BOOL rather than emitting a certificate that
+silently trusts such lemmas. The general SMT proof gate remains open.

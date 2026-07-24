@@ -25,6 +25,9 @@ is not yet a general or state-of-the-art SMT solver. The
   storage, and a contiguous long-clause arena.
 - SAT models and streaming DRAT proofs, checked by pinned DRAT-trim in the
   local and hosted integration gates.
+- Query-specific QF_BOOL `get-proof` certificates whose active premises and
+  canonical encoding are reconstructed independently before DRAT checking;
+  SMT-LIB's empty-explicit-assumption rule is enforced.
 - Interactive SMT-LIB with `push`/`pop`, `check-sat-assuming`, models, values,
   assignments, named unsat cores, resource limits, and interruption.
 - Complete fixed-width QF_BV lowering, congruence closure for QF_UF, and
@@ -102,7 +105,9 @@ QF_AUFBV, plus experimental exact QF_IDL, QF_LIA, QF_RDL, and QF_LRA.
 The corresponding QF_UFIDL, QF_UFLIA, QF_UFLRA, and QF_AUFLIA combinations
 are also implemented. Protocol edge cases, proof production,
 fragment-complete independent validation, sustained fuzz campaigns, and
-competition-scale performance remain open.
+competition-scale performance remain open. Proof production is currently
+available only for QF_BOOL; requesting `:produce-proofs` with a theory logic is
+rejected until that theory has an independently checked certificate.
 
 ## Rust API
 
@@ -143,7 +148,9 @@ and `make install-proof-checkers` once per clone before `make check`; the
 shared integration gate requires exact versions of Ruff, all three solvers,
 and the proof checker, runs bounded coverage-guided parser, session, and proof
 fuzzing, and independently checks the SAT proof-mode matrix. It never silently
-skips a linter, oracle, fuzz target, or proof check. These generated checks are
+skips a linter, oracle, fuzz target, or proof check. The proof gate also
+reconstructs a scoped QF_BOOL query from its original SMT-LIB input and checks
+its query-specific DRAT refutation. These generated checks are
 correctness evidence, not representative performance benchmarks. See the
 [fuzzing guide](docs/FUZZING.md) and [proof-checking guide](docs/PROOF_CHECKING.md)
 for the exact boundaries and longer-running work.

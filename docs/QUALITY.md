@@ -25,7 +25,7 @@ claim.
 | Commit | `make check-fast` | Rust/Python formatting and lint, compilation, shell syntax, and repository hygiene |
 | Quality | `make quality` | Strict Clippy, rustdoc, Ruff, ShellCheck, Actionlint, lockfile, and structural checks |
 | Fuzz | `make check-fuzz` | Locked format/Clippy/sanitizer build plus bounded parser, incremental SMT, and SAT proof campaigns |
-| Proof | `make check-proofs` | Release SAT certificates checked by pinned DRAT-trim across every proof-sensitive mode |
+| Proof | `make check-proofs` | Release SAT certificates plus a query-bound QF_BOOL SMT certificate checked by pinned DRAT-trim |
 | Integration | `make check` | Quality plus required three-oracle differential/model checks, Rust/Python tests, fuzz smoke, proof-checked benchmark smoke, and a release build |
 | Compatibility | `make check-msrv` | Full tests on the declared minimum Rust version |
 | Dependencies | `make audit` | RustSec advisory audit; requires `cargo-audit` and network access |
@@ -82,6 +82,11 @@ independent checking, while the SAT row must pass model validation. Scope,
 assumptions, SMT theory certificates, and the difference between a push smoke
 suite and a claim-bearing benchmark campaign are documented in
 [Proof checking](PROOF_CHECKING.md).
+
+The proof gate additionally runs the release SMT executable online, regenerates
+the active QF_BOOL query and its canonical CNF in an independent Python
+implementation, and then checks the embedded DRAT suffix. Theory logics remain
+outside that claim and are rejected when proof production is requested.
 
 `tools/check_hygiene.py` enforces the small but easy-to-forget invariants:
 UTF-8/LF text, final newlines, no trailing whitespace, valid local Markdown

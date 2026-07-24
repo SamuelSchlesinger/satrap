@@ -614,18 +614,18 @@ those two logical-work budgets.
 
 DRAT additions and deletions remain globally valid across assumption queries,
 but an assumption-only UNSAT deliberately does not append the empty clause.
-For QF_BOOL, QF_BV, QF_UF, QF_UFBV, QF_ABV, QF_AUFBV, QF_IDL, QF_RDL, and
-QF_LRA, `get-proof` instead starts a fresh replay of the active assertion
-context and returns a versioned `satrap-edrat` container. Boolean declarations,
-named bit positions, sorts, constants, applications, array operations,
-extensional witnesses, and affine predicates are canonical proof terms,
-independent of internal allocation history. An independent checker reconstructs
-the scoped source query, repeats the appropriate finite reduction,
-negative-cycle check, or exact Fourier-Motzkin elimination and canonical
-Tseitin encoding, then gives the DRAT suffix to pinned DRAT-trim. In accordance
-with SMT-LIB 2.7, `get-proof` is rejected after a nonempty
-`check-sat-assuming` call. Nested arrays, linear integer arithmetic, and
-arithmetic theory combinations remain outside this proof boundary.
+For QF_BOOL, QF_BV, QF_UF, QF_UFBV, QF_ABV, QF_AUFBV, QF_IDL, QF_LIA,
+QF_RDL, and QF_LRA, `get-proof` instead starts a fresh replay of the active
+assertion context and returns a versioned `satrap-edrat` container. Boolean
+declarations, named bit positions, sorts, constants, applications, array
+operations, extensional witnesses, and affine predicates are canonical proof
+terms, independent of internal allocation history. An independent checker
+reconstructs the scoped source query, repeats the appropriate finite reduction,
+negative-cycle check, exact Cooper elimination, or exact Fourier-Motzkin
+elimination and canonical Tseitin encoding, then gives the DRAT suffix to
+pinned DRAT-trim. In accordance with SMT-LIB 2.7, `get-proof` is rejected after
+a nonempty `check-sat-assuming` call. Nested arrays and arithmetic theory
+combinations remain outside this proof boundary.
 
 ## Implemented SMT boundary
 

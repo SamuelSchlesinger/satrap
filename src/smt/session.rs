@@ -12,7 +12,7 @@ use crate::{Lit, Model, SolveLimits, Solver, UnknownReason};
 use super::arithmetic::rational_from_decimal;
 use super::encode::BoolEncoder;
 use super::engine::{SmtSolveResult, solve as solve_smt};
-use super::proof::{BooleanRefutation, prove_boolean_unsat};
+use super::proof::{BooleanRefutation, ProofAtom, ProofLogic, prove_boolean_unsat};
 use super::sexpr::{Reader, SExpr};
 use super::term::{
     ArraySortId, FunctionId, Sort, SymbolId, TermId, TermKind, TermStore, UninterpretedSortId,
@@ -253,7 +253,7 @@ impl Session {
         ) {
             return Err(CommandError::Unsupported);
         }
-        if self.options.produce_proofs && logic != "QF_BOOL" {
+        if self.options.produce_proofs && ProofLogic::from_name(logic).is_none() {
             return Err(CommandError::Unsupported);
         }
         self.logic = Some(logic.to_owned());
@@ -676,13 +676,20 @@ impl Session {
             .flat_map(|frame| frame.assertion_terms.iter().copied())
             .collect::<Vec<_>>();
         roots.extend(user_assumptions.iter().map(|assumption| assumption.term));
-        let proof_premises =
-            (self.options.produce_proofs && user_assumptions.is_empty()).then(|| {
-                self.frames
-                    .iter()
-                    .flat_map(|frame| frame.assertions.iter().cloned())
-                    .collect::<Vec<_>>()
-            });
+        let proof_logic = self.options.produce_proofs.then(|| {
+            ProofLogic::from_name(
+                self.logic
+                    .as_deref()
+                    .expect("run_check requires a selected logic"),
+            )
+            .expect("set_logic rejects proof-unsupported logics")
+        });
+        let proof_premises = (proof_logic.is_some() && user_assumptions.is_empty()).then(|| {
+            self.frames
+                .iter()
+                .flat_map(|frame| frame.assertions.iter().cloned())
+                .collect::<Vec<_>>()
+        });
         let result = solve_smt(
             &mut self.terms,
             &mut self.solver,
@@ -703,10 +710,16 @@ impl Session {
             }
             SmtSolveResult::Unsat => {
                 let proof = if let Some(premises) = proof_premises.as_deref() {
-                    let symbol_names = self.active_boolean_symbol_names()?;
+                    let atom_names = self.active_proof_atom_names()?;
                     Some(
-                        prove_boolean_unsat(&self.terms, &roots, premises, &symbol_names)
-                            .map_err(CommandError::from)?,
+                        prove_boolean_unsat(
+                            proof_logic.expect("proof premises require a proof logic"),
+                            &self.terms,
+                            &roots,
+                            premises,
+                            &atom_names,
+                        )
+                        .map_err(CommandError::from)?,
                     )
                 } else {
                     None
@@ -2030,16 +2043,43 @@ impl Session {
         }
     }
 
-    fn active_boolean_symbol_names(&self) -> Result<HashMap<SymbolId, String>, CommandError> {
+    fn active_proof_atom_names(&self) -> Result<HashMap<SymbolId, ProofAtom>, CommandError> {
         let mut names = HashMap::new();
         for declaration in self.active_declarations() {
-            let TermKind::Atom(symbol) = self.terms.node(declaration.term).kind else {
-                return Err(CommandError::message(format!(
-                    "QF_BOOL proof declaration `{}` is not a Boolean atom",
-                    declaration.name
-                )));
-            };
-            names.insert(symbol, declaration.name.clone());
+            match &self.terms.node(declaration.term).kind {
+                TermKind::Atom(symbol) => {
+                    names.insert(*symbol, ProofAtom::Bool(declaration.name.clone()));
+                }
+                TermKind::BitVec(bits) => {
+                    for (index, &bit) in bits.iter().enumerate() {
+                        let TermKind::Atom(symbol) = self.terms.node(bit).kind else {
+                            return Err(CommandError::message(format!(
+                                "proof declaration `{}` has a non-atomic bit",
+                                declaration.name
+                            )));
+                        };
+                        let index = u32::try_from(index).map_err(|_| {
+                            CommandError::message(format!(
+                                "proof declaration `{}` is too wide",
+                                declaration.name
+                            ))
+                        })?;
+                        names.insert(
+                            symbol,
+                            ProofAtom::BitVecBit {
+                                name: declaration.name.clone(),
+                                index,
+                            },
+                        );
+                    }
+                }
+                _ => {
+                    return Err(CommandError::message(format!(
+                        "proof declaration `{}` is neither Boolean nor bit-vector",
+                        declaration.name
+                    )));
+                }
+            }
         }
         Ok(names)
     }
@@ -2522,7 +2562,7 @@ mod tests {
     fn proof_mode_rejects_theory_logics_until_theory_certificates_exist() {
         let output = execute(
             "(set-option :produce-proofs true)
-             (set-logic QF_BV)
+             (set-logic QF_UF)
              (set-logic QF_BOOL)
              (check-sat)
              (get-proof)",
@@ -2532,6 +2572,22 @@ mod tests {
             "unsupported\nsat\n\
              (error \"get-proof requires a preceding unsat result\")\n"
         );
+    }
+
+    #[test]
+    fn qf_bv_proofs_use_named_declaration_bits() {
+        let output = execute(
+            "(set-option :produce-proofs true)
+             (set-logic QF_BV)
+             (declare-const x (_ BitVec 2))
+             (assert (= x #b00))
+             (assert (= (bvadd x #b01) #b00))
+             (check-sat)
+             (get-proof)",
+        );
+        assert!(output.starts_with("unsat\n(satrap-edrat :version 1 :logic QF_BV"));
+        assert!(output.contains(":premises (\"(= x #b00)\" \"(= (bvadd x #b01) #b00)\")"));
+        assert!(output.ends_with("0\n\")\n"));
     }
 
     #[test]

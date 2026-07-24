@@ -10,6 +10,7 @@ use super::term::{SymbolId, TermId, TermKind, TermStore};
 
 #[derive(Clone, Debug)]
 pub(crate) struct BooleanRefutation {
+    logic: ProofLogic,
     variable_count: usize,
     clauses: Vec<crate::solver::ProofInputClause>,
     premises: Vec<String>,
@@ -50,12 +51,42 @@ impl BooleanRefutation {
             .join(" ");
         let drat = String::from_utf8_lossy(&self.drat);
         format!(
-            "(satrap-edrat :version 1 :logic QF_BOOL :variables {} \
+            "(satrap-edrat :version 1 :logic {} :variables {} \
              :premises ({premises}) :clauses ({clauses}) :drat {})",
+            self.logic.name(),
             self.variable_count,
             quote_string(&drat)
         )
     }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ProofLogic {
+    QfBool,
+    QfBv,
+}
+
+impl ProofLogic {
+    pub(crate) fn from_name(name: &str) -> Option<Self> {
+        match name {
+            "QF_BOOL" => Some(Self::QfBool),
+            "QF_BV" => Some(Self::QfBv),
+            _ => None,
+        }
+    }
+
+    fn name(self) -> &'static str {
+        match self {
+            Self::QfBool => "QF_BOOL",
+            Self::QfBv => "QF_BV",
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub(crate) enum ProofAtom {
+    Bool(String),
+    BitVecBit { name: String, index: u32 },
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -84,10 +115,11 @@ impl Error for ProofError {}
 /// allocation history, so a separate checker can reconstruct it from the
 /// original SMT-LIB query before validating the DRAT suffix.
 pub(crate) fn prove_boolean_unsat(
+    logic: ProofLogic,
     terms: &TermStore,
     roots: &[TermId],
     premises: &[String],
-    symbol_names: &HashMap<SymbolId, String>,
+    atom_names: &HashMap<SymbolId, ProofAtom>,
 ) -> Result<BooleanRefutation, ProofError> {
     if roots.len() != premises.len() {
         return Err(ProofError::new(
@@ -98,7 +130,7 @@ pub(crate) fn prove_boolean_unsat(
     let mut canonicalizer = Canonicalizer::default();
     let roots = roots
         .iter()
-        .map(|&root| canonicalizer.convert(terms, root, symbol_names))
+        .map(|&root| canonicalizer.convert(terms, root, atom_names))
         .collect::<Result<Vec<_>, _>>()?;
 
     let output = SharedBuffer::default();
@@ -148,6 +180,7 @@ pub(crate) fn prove_boolean_unsat(
     }
 
     Ok(BooleanRefutation {
+        logic,
         variable_count: solver.variable_count(),
         clauses,
         premises: premises.to_vec(),
@@ -162,7 +195,7 @@ struct BoolExpr(Arc<BoolNode>);
 enum BoolNode {
     False,
     True,
-    Atom(String),
+    Atom(ProofAtom),
     Not(BoolExpr),
     And(Vec<BoolExpr>),
     Or(Vec<BoolExpr>),
@@ -188,7 +221,7 @@ impl Canonicalizer {
         &mut self,
         terms: &TermStore,
         term: TermId,
-        symbol_names: &HashMap<SymbolId, String>,
+        atom_names: &HashMap<SymbolId, ProofAtom>,
     ) -> Result<BoolExpr, ProofError> {
         if let Some(expression) = self.converted.get(&term) {
             return Ok(expression.clone());
@@ -197,7 +230,7 @@ impl Canonicalizer {
             TermKind::Bool(false) => self.intern(BoolNode::False),
             TermKind::Bool(true) => self.intern(BoolNode::True),
             TermKind::Atom(symbol) => {
-                let name = symbol_names.get(&symbol).ok_or_else(|| {
+                let name = atom_names.get(&symbol).ok_or_else(|| {
                     ProofError::new(format!(
                         "Boolean proof atom {} has no active declaration",
                         symbol.0
@@ -206,37 +239,37 @@ impl Canonicalizer {
                 self.intern(BoolNode::Atom(name.clone()))
             }
             TermKind::Not(inner) => {
-                let inner = self.convert(terms, inner, symbol_names)?;
+                let inner = self.convert(terms, inner, atom_names)?;
                 self.not(inner)
             }
             TermKind::And(items) => {
                 let items = items
                     .iter()
-                    .map(|&item| self.convert(terms, item, symbol_names))
+                    .map(|&item| self.convert(terms, item, atom_names))
                     .collect::<Result<Vec<_>, _>>()?;
                 self.junction(items, true)
             }
             TermKind::Or(items) => {
                 let items = items
                     .iter()
-                    .map(|&item| self.convert(terms, item, symbol_names))
+                    .map(|&item| self.convert(terms, item, atom_names))
                     .collect::<Result<Vec<_>, _>>()?;
                 self.junction(items, false)
             }
             TermKind::Xor(left, right) => {
-                let left = self.convert(terms, left, symbol_names)?;
-                let right = self.convert(terms, right, symbol_names)?;
+                let left = self.convert(terms, left, atom_names)?;
+                let right = self.convert(terms, right, atom_names)?;
                 self.xor(left, right)
             }
             TermKind::Iff(left, right) => {
-                let left = self.convert(terms, left, symbol_names)?;
-                let right = self.convert(terms, right, symbol_names)?;
+                let left = self.convert(terms, left, atom_names)?;
+                let right = self.convert(terms, right, atom_names)?;
                 self.iff(left, right)
             }
             TermKind::Ite(condition, then_term, else_term) => {
-                let condition = self.convert(terms, condition, symbol_names)?;
-                let then_term = self.convert(terms, then_term, symbol_names)?;
-                let else_term = self.convert(terms, else_term, symbol_names)?;
+                let condition = self.convert(terms, condition, atom_names)?;
+                let then_term = self.convert(terms, then_term, atom_names)?;
+                let else_term = self.convert(terms, else_term, atom_names)?;
                 self.ite(condition, then_term, else_term)
             }
             TermKind::TheoryEquality(_, _, _)
@@ -548,6 +581,7 @@ mod tests {
         let names = HashMap::from([(a_symbol, "a".to_owned()), (b_symbol, "b".to_owned())]);
 
         let proof = prove_boolean_unsat(
+            ProofLogic::QfBool,
             &terms,
             &[either, not_a, not_b],
             &[
@@ -555,7 +589,10 @@ mod tests {
                 "(not a)".to_owned(),
                 "(not b)".to_owned(),
             ],
-            &names,
+            &names
+                .into_iter()
+                .map(|(symbol, name)| (symbol, ProofAtom::Bool(name)))
+                .collect(),
         )
         .unwrap();
 
@@ -589,6 +626,7 @@ mod tests {
             let not_b = terms.not(b).unwrap();
             let names = HashMap::from([(a_symbol, "a".to_owned()), (b_symbol, "b".to_owned())]);
             prove_boolean_unsat(
+                ProofLogic::QfBool,
                 &terms,
                 &[either, not_a, not_b],
                 &[
@@ -596,7 +634,10 @@ mod tests {
                     "(not a)".to_owned(),
                     "(not b)".to_owned(),
                 ],
-                &names,
+                &names
+                    .into_iter()
+                    .map(|(symbol, name)| (symbol, ProofAtom::Bool(name)))
+                    .collect(),
             )
             .unwrap()
         }

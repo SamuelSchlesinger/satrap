@@ -271,7 +271,7 @@ fn ensure_array_argument_equalities(
         let left = &applications[left_index];
         for &right_index in &relevance.applications[position + 1..] {
             let right = &applications[right_index];
-            if left.function != right.function {
+            if left.function != right.function || terms.select_array_sort(left.function).is_some() {
                 continue;
             }
             let domain = terms.function_signature(left.function)?.domain.clone();

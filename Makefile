@@ -1,13 +1,19 @@
-.PHONY: check test release profiling smoke proof-smoke
+.PHONY: check check-fast check-msrv install-hooks test release profiling smoke proof-smoke
 
 PYTHON ?= python3
 DRAT_TRIM ?= drat-trim
 
 check:
-	cargo fmt --all -- --check
-	cargo clippy --all-targets --all-features -- -D warnings
-	cargo test --all-targets
-	$(PYTHON) -m unittest discover -s tools -p 'test_*.py'
+	PYTHON="$(PYTHON)" ./scripts/ci.sh
+
+check-fast:
+	./scripts/check-fast.sh
+
+check-msrv:
+	./scripts/check-msrv.sh
+
+install-hooks:
+	./scripts/install-hooks.sh
 
 test:
 	cargo test --all-targets

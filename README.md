@@ -44,6 +44,7 @@ The crate requires Rust 1.85 or newer.
 ```sh
 cargo build --release
 cargo test --all-targets
+make install-hooks
 ```
 
 Solve a DIMACS file:

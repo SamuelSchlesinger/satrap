@@ -14,16 +14,8 @@ jobs:
       - uses: actions/checkout@v4
       - name: Install Rust
         run: rustup show
-      - name: Formatting
-        run: cargo fmt --all -- --check
-      - name: Lints
-        run: cargo clippy --all-targets --all-features -- -D warnings
-      - name: Tests
-        run: cargo test --all-targets
-      - name: Python tool tests
-        run: python3 -m unittest discover -s tools -p 'test_*.py'
-      - name: Release build
-        run: cargo build --release
+      - name: Repository CI gate
+        run: ./scripts/ci.sh
 
   msrv:
     runs-on: ubuntu-latest
@@ -32,4 +24,4 @@ jobs:
       - name: Install minimum supported Rust
         run: rustup toolchain install 1.85.0 --profile minimal
       - name: Test minimum supported Rust
-        run: cargo +1.85.0 test --all-targets
+        run: ./scripts/check-msrv.sh

@@ -2,9 +2,25 @@
 
 Correctness comes before speed, and measured speed comes before novelty claims.
 
-Before submitting a change, run `make check`. A solver change should include a
-small regression test when possible. Any heuristic or data-structure change
-that claims performance improvement should also include:
+Install the checked-in Git hooks once per clone:
+
+```sh
+make install-hooks
+```
+
+The pre-commit hook runs the fast formatting and compile gate. The pre-push
+hook runs the same full gate as the main CI job followed by the Rust 1.85 MSRV
+suite. The shared entrypoints live in `scripts/`, so local hooks and GitHub
+Actions cannot drift silently.
+
+Make regular, small commits at coherent green points. Each commit should have
+one purpose, keep unrelated formatting or refactors separate, and include its
+own regression test when practical. Before submitting a change, run
+`make check`; use `make check-msrv` when changing dependencies or
+compiler-sensitive code.
+
+Any heuristic or data-structure change that claims performance improvement
+should also include:
 
 1. an experiment record based on `experiments/template.toml`;
 2. the exact before/after revisions and build flags;

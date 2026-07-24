@@ -166,6 +166,55 @@ fn deterministic_exact_arithmetic_corpora_agree_with_z3() {
     }
 }
 
+#[test]
+fn exact_arithmetic_models_are_independently_validated_by_z3() {
+    if Command::new("z3").arg("--version").output().is_err() {
+        eprintln!("skipping arithmetic model validation because z3 is not installed");
+        return;
+    }
+
+    let cases = arithmetic_model_cases();
+    assert_eq!(cases.len(), 56);
+    for case in cases {
+        let script = case.solver_script();
+        let ours = run_solver(env!("CARGO_BIN_EXE_smt"), &[], &script);
+        assert!(
+            ours.status.success(),
+            "our solver failed on {}:\nscript:\n{}\nstdout:\n{}\nstderr:\n{}",
+            case.name,
+            script,
+            String::from_utf8_lossy(&ours.stdout),
+            String::from_utf8_lossy(&ours.stderr)
+        );
+        let ours_stdout = String::from_utf8(ours.stdout).expect("our output must be UTF-8");
+        assert_eq!(
+            check_results(&ours_stdout),
+            ["sat"],
+            "our solver did not produce a model for {}:\n{ours_stdout}",
+            case.name
+        );
+
+        let validation_script = case.z3_validation_script(&ours_stdout);
+        let z3 = run_solver("z3", &["-in", "-smt2"], &validation_script);
+        assert!(
+            z3.status.success(),
+            "z3 rejected the validation script for {}:\nscript:\n{}\nstdout:\n{}\nstderr:\n{}",
+            case.name,
+            validation_script,
+            String::from_utf8_lossy(&z3.stdout),
+            String::from_utf8_lossy(&z3.stderr)
+        );
+        let z3_stdout = String::from_utf8(z3.stdout).expect("z3 output must be UTF-8");
+        assert_eq!(
+            check_results(&z3_stdout),
+            ["sat"],
+            "our model does not satisfy {} according to z3:\n\
+             solver output:\n{ours_stdout}\nvalidation output:\n{z3_stdout}",
+            case.name
+        );
+    }
+}
+
 fn differential_script() -> String {
     const WORD_EXPRESSIONS: &[(&str, u32)] = &[
         ("(bvnot x)", 4),
@@ -655,6 +704,169 @@ fn lra_differential_script() -> String {
     }
     script.push_str("(exit)\n");
     script
+}
+
+struct ArithmeticModelCase {
+    name: String,
+    logic: &'static str,
+    sort: &'static str,
+    assertions: Vec<String>,
+}
+
+impl ArithmeticModelCase {
+    fn solver_script(&self) -> String {
+        let mut script = String::from("(set-option :produce-models true)\n");
+        self.write_problem(&mut script);
+        script.push_str("(check-sat)\n(get-model)\n(exit)\n");
+        script
+    }
+
+    fn z3_validation_script(&self, solver_output: &str) -> String {
+        let mut script = String::new();
+        self.write_problem(&mut script);
+        for name in ["x", "y", "z"] {
+            let value = extract_constant_model_value(solver_output, name, self.sort);
+            writeln!(script, "(assert (= {name} {value}))").unwrap();
+        }
+        script.push_str("(check-sat)\n(exit)\n");
+        script
+    }
+
+    fn write_problem(&self, script: &mut String) {
+        writeln!(script, "(set-logic {})", self.logic).unwrap();
+        for name in ["x", "y", "z"] {
+            writeln!(script, "(declare-const {name} {})", self.sort).unwrap();
+        }
+        for assertion in &self.assertions {
+            writeln!(script, "(assert {assertion})").unwrap();
+        }
+    }
+}
+
+fn extract_constant_model_value(output: &str, name: &str, sort: &str) -> String {
+    let prefix = format!("(define-fun {name} () {sort} ");
+    let definition = output
+        .lines()
+        .map(str::trim)
+        .find(|line| line.starts_with(&prefix))
+        .unwrap_or_else(|| panic!("model does not define {name} as {sort}:\n{output}"));
+    definition
+        .strip_prefix(&prefix)
+        .and_then(|value| value.strip_suffix(')'))
+        .unwrap_or_else(|| panic!("malformed model definition for {name}:\n{definition}"))
+        .to_owned()
+}
+
+fn arithmetic_model_cases() -> Vec<ArithmeticModelCase> {
+    let mut cases = Vec::with_capacity(56);
+
+    for query in 0_i32..16 {
+        let x = (query * 7).rem_euclid(19) - 9;
+        let y = (query * 11).rem_euclid(17) - 8;
+        let z = (query * 13).rem_euclid(23) - 11;
+        let slack = query.rem_euclid(4);
+        let mut assertions = vec![
+            format!("(<= (- x y) {})", smt_integer(x - y + slack)),
+            format!("(>= (- y z) {})", smt_integer(y - z - slack)),
+            format!("(< (- z x) {})", smt_integer(z - x + slack + 1)),
+            format!("(> (- x z) {})", smt_integer(x - z - slack - 1)),
+        ];
+        match query.rem_euclid(3) {
+            0 => assertions.push(format!("(= (- x y) {})", smt_integer(x - y))),
+            1 => assertions.push(format!("(or (= (- y z) {}) (< x y))", smt_integer(y - z))),
+            _ => assertions.push(format!(
+                "(not (> (- z x) {}))",
+                smt_integer(z - x + slack + 1)
+            )),
+        }
+        cases.push(ArithmeticModelCase {
+            name: format!("QF_IDL model {query}"),
+            logic: "QF_IDL",
+            sort: "Int",
+            assertions,
+        });
+    }
+
+    for query in 0_i32..16 {
+        let x = (query * 11).rem_euclid(31) - 15;
+        let y = (query * 17).rem_euclid(29) - 14;
+        let z = (query * 19).rem_euclid(37) - 18;
+        let slack = query.rem_euclid(5) + 1;
+        let mut assertions = vec![
+            format!("(<= (- x y) {})", smt_sixths(x - y + slack)),
+            format!("(>= (- y z) {})", smt_sixths(y - z - slack)),
+            format!("(< (- z x) {})", smt_sixths(z - x + slack)),
+            format!("(> (- x z) {})", smt_sixths(x - z - slack)),
+        ];
+        if query % 2 == 0 {
+            assertions.push(format!("(= (- x y) {})", smt_sixths(x - y)));
+        } else {
+            assertions.push(format!(
+                "(or (= (- y z) {}) (> x {}))",
+                smt_sixths(y - z),
+                smt_sixths(x - 1)
+            ));
+        }
+        cases.push(ArithmeticModelCase {
+            name: format!("QF_RDL model {query}"),
+            logic: "QF_RDL",
+            sort: "Real",
+            assertions,
+        });
+    }
+
+    const COEFFICIENTS: &[(i32, i32, i32)] = &[(1, 2, -3), (-2, 3, 1), (3, -1, 2), (-3, -2, 1)];
+    for query in 0_i32..24 {
+        let x = (query * 5).rem_euclid(23) - 11;
+        let y = (query * 7).rem_euclid(19) - 9;
+        let z = (query * 11).rem_euclid(29) - 14;
+        let (a, b, c) = COEFFICIENTS[query as usize % COEFFICIENTS.len()];
+        let linear = a * x + b * y + c * z;
+        let expression = format!(
+            "(+ (* {} x) (* {} y) (* {} z))",
+            smt_integer(a),
+            smt_integer(b),
+            smt_integer(c)
+        );
+        let mut assertions = vec![
+            format!("(= {expression} {})", smt_sixths(linear)),
+            format!("(> x {})", smt_sixths(x - 2)),
+            format!("(< y {})", smt_sixths(y + 2)),
+            format!("(<= (+ x y) {})", smt_sixths(x + y + 1)),
+            format!("(>= (- z x) {})", smt_sixths(z - x - 1)),
+        ];
+        match query.rem_euclid(4) {
+            0 => assertions.push(format!(
+                "(= (ite (< x {}) (+ y (/ 1.0 6.0)) \
+                 (+ z (/ 1.0 3.0))) {})",
+                smt_sixths(x + 1),
+                smt_sixths(y + 1)
+            )),
+            1 => assertions.push(format!(
+                "(or (= (+ x y) {}) (> z {}))",
+                smt_sixths(x + y),
+                smt_sixths(z - 1)
+            )),
+            2 => assertions.push(format!("(not (> {expression} {}))", smt_sixths(linear))),
+            _ => assertions.push(format!("(distinct (+ x y) {})", smt_sixths(x + y + 1))),
+        }
+        cases.push(ArithmeticModelCase {
+            name: format!("QF_LRA model {query}"),
+            logic: "QF_LRA",
+            sort: "Real",
+            assertions,
+        });
+    }
+
+    cases
+}
+
+fn smt_sixths(numerator: i32) -> String {
+    match numerator {
+        0 => "0.0".to_owned(),
+        value if value < 0 => format!("(- (/ {}.0 6.0))", value.unsigned_abs()),
+        value => format!("(/ {value}.0 6.0)"),
+    }
 }
 
 fn smt_integer(value: i32) -> String {

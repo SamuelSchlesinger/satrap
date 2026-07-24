@@ -258,11 +258,15 @@ with Z3 on 640 UF/UFBV and 384 array/array-combination incremental queries.
 Exact QF_IDL uses arbitrary-precision difference constraints; QF_RDL and QF_LRA
 use exact rational Fourier–Motzkin elimination. Another 1,024 deterministic
 incremental arithmetic queries agree with Z3, and popped unsupported arithmetic
-atoms no longer participate in later checks. General LIA deliberately returns
-`unknown`. The arithmetic typed API, all UF/array arithmetic combinations,
-independent model and proof validation, and trail-level theory propagation
-remain open. The current counts are differential evidence against one mature
-solver, not independent validation.
+atoms no longer participate in later checks. The typed API now exposes exact
+Int/Real construction and values. An in-process evaluator rejects inconsistent
+arithmetic candidates before `sat`, and 56 deterministic returned IDL/RDL/LRA
+models are replayed as exact bindings and checked against the original formulas
+by Z3 in the mandatory integration gate. General LIA deliberately returns
+`unknown`. All UF/array arithmetic combinations, fragment-complete independent
+model and proof validation, and trail-level theory propagation remain open.
+The status counts remain evidence against one mature external solver, not a
+complete validation argument.
 
 ## Gate 5: algorithmic research and world-class evaluation
 

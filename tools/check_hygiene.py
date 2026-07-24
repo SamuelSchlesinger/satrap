@@ -218,7 +218,7 @@ def check_gate_wiring(errors: list[str]) -> None:
     )
     require_commands(
         ROOT / "scripts/ci.sh",
-        ("scripts/quality.sh",),
+        ("scripts/quality.sh", "z3 --version"),
         errors,
     )
     require_commands(
@@ -233,7 +233,7 @@ def check_gate_wiring(errors: list[str]) -> None:
     )
     require_commands(
         ROOT / ".github/workflows/ci.yml",
-        ("actions/checkout@v6",),
+        ("actions/checkout@v6", "z3"),
         errors,
     )
 

@@ -29,7 +29,8 @@ is not yet a general or state-of-the-art SMT solver. The
   assignments, named unsat cores, resource limits, and interruption.
 - Complete fixed-width QF_BV lowering, congruence closure for QF_UF, and
   extensional arrays, including QF_UFBV, QF_ABV, and QF_AUFBV combinations.
-- A typed Rust API for constructing reusable SAT and SMT contexts.
+- A typed Rust API for constructing reusable SAT and SMT contexts, including
+  exact integer and rational-real terms.
 - Reproducible experiment and benchmark tooling that records inputs, versions,
   machine metadata, validation results, and solver disagreements.
 
@@ -95,8 +96,8 @@ recoverable command errors, so it can be used as a long-lived subprocess.
 Current SMT coverage includes Core, QF_BV, QF_UF, QF_UFBV, QF_ABV, and
 QF_AUFBV, plus experimental exact QF_IDL, QF_RDL, and QF_LRA. Protocol edge
 cases, general LIA, arithmetic theory combinations, proof production,
-independent model validation, fuzzing, and competition-scale performance
-remain open.
+fragment-complete independent model validation, fuzzing, and competition-scale
+performance remain open.
 
 ## Rust API
 
@@ -114,8 +115,8 @@ solver.add_clause(&[!x, y]);
 assert!(matches!(solver.solve(), SolveResult::Sat(_)));
 ```
 
-The `sat::smt` module provides typed Boolean, bit-vector, UF, and array terms
-plus a reusable context API.
+The `sat::smt` module provides typed Boolean, bit-vector, exact Int/Real, UF,
+and array terms plus a reusable context API.
 
 ## Validation and benchmarking
 
@@ -129,8 +130,10 @@ For the gate breakdown, lint rationale, and small-commit procedure, see the
 [quality policy](docs/QUALITY.md).
 
 Deterministic tests cover the SAT kernel against brute force and exercise the
-implemented SMT fragments against Z3 when it is installed. These generated
-tests are correctness evidence, not representative performance benchmarks.
+implemented SMT fragments against Z3. The shared integration gate requires Z3,
+including exact replay of returned arithmetic models; it never silently skips
+the second solver. These generated tests are correctness evidence, not
+representative performance benchmarks.
 
 For controlled solver comparisons:
 

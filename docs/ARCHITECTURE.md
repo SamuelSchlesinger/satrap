@@ -644,6 +644,16 @@ assertions and assumptions; popped formulas therefore do not keep imposing
 theory work. Integer formulas outside difference logic return `unknown`
 instead of being approximated.
 
+Before an arithmetic candidate escapes as `sat`, a separate evaluator checks
+the original active roots, exact predicate truth values, integer integrality,
+and every relevant selected arithmetic-`ite` branch. Failure is reported as
+`unknown`, and model inspection is available only after `sat`; resource or
+incompleteness results never manufacture a placeholder model. The integration
+suite additionally replays 56 deterministic IDL/RDL/LRA models as exact
+constant bindings into Z3 and requires the original formulas to remain
+satisfiable. This external corpus is a useful independent oracle, not yet a
+fragment-complete model-validation architecture.
+
 The implemented layering is:
 
 ```text
@@ -664,9 +674,9 @@ Theory lemmas and unconditional axioms are permanent because term definitions
 are permanent even when the assertion that first exposed them is scoped.
 Resource limits currently charge SAT conflicts/propagations, not parsing,
 lowering, theory preparation, or final checking. General linear integer
-arithmetic, arithmetic theory combinations, the typed arithmetic API,
-trail-level propagation, independent SMT model/proof validation, and an
-incremental SMT proof format remain future work.
+arithmetic, arithmetic theory combinations, trail-level propagation,
+fragment-complete independent SMT model/proof validation, and an incremental
+SMT proof format remain future work.
 
 ## Performance policy
 

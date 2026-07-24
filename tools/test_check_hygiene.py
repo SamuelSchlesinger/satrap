@@ -81,12 +81,12 @@ class HygieneChecksTests(unittest.TestCase):
                 "scripts/ci.sh\nscripts/check-msrv.sh\nscripts/check-security.sh\n"
             ),
             ".github/workflows/ci.yml": (
-                "actions/checkout@v6\nscripts/ci.sh\nscripts/check-msrv.sh\n"
+                "actions/checkout@v6\nz3\nscripts/ci.sh\nscripts/check-msrv.sh\n"
             ),
             ".github/workflows/security.yml": (
                 "actions/checkout@v6\nscripts/check-security.sh\n"
             ),
-            "scripts/ci.sh": "scripts/quality.sh\n",
+            "scripts/ci.sh": "scripts/quality.sh\nz3 --version\n",
             "scripts/quality.sh": "shellcheck\nactionlint\ntools/check_hygiene.py\n",
         }
         with directory, patch.object(check_hygiene, "ROOT", root):
@@ -103,7 +103,10 @@ class HygieneChecksTests(unittest.TestCase):
             check_hygiene.check_gate_wiring(errors)
             self.assertEqual(
                 errors,
-                ["scripts/ci.sh: must invoke scripts/quality.sh"],
+                [
+                    "scripts/ci.sh: must invoke scripts/quality.sh",
+                    "scripts/ci.sh: must invoke z3 --version",
+                ],
             )
 
     def test_audit_version_check_detects_ci_drift(self) -> None:

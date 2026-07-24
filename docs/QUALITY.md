@@ -24,7 +24,7 @@ claim.
 | --- | --- | --- |
 | Commit | `make check-fast` | Formatting, compilation, shell syntax, and repository hygiene |
 | Quality | `make quality` | Strict Clippy, rustdoc, ShellCheck, Actionlint, lockfile, and structural checks |
-| Integration | `make check` | Quality plus Rust/Python tests and a release build |
+| Integration | `make check` | Quality plus required Z3 differential/model checks, Rust/Python tests, and a release build |
 | Compatibility | `make check-msrv` | Full tests on the declared minimum Rust version |
 | Dependencies | `make audit` | RustSec advisory audit; requires `cargo-audit` and network access |
 
@@ -34,12 +34,14 @@ CI independently calls the same integration and compatibility scripts and
 runs the RustSec audit on every push and pull request, plus weekly, so a newly
 published advisory is caught even when the repository is unchanged.
 
-The pre-push gate requires `cargo-audit`, ShellCheck, and Actionlint. On macOS,
-install them with:
+The pre-push gate requires `cargo-audit`, ShellCheck, Actionlint, and Z3. Z3 is
+mandatory here even though a direct `cargo test` can skip its differential
+tests: neither the local integration gate nor hosted CI may silently lose the
+second solver. On macOS, install the tools with:
 
 ```sh
 cargo install cargo-audit --version 0.22.2 --locked
-brew install actionlint shellcheck
+brew install actionlint shellcheck z3
 ```
 
 Use the corresponding package manager on other platforms. Hosted CI installs

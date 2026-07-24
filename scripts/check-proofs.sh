@@ -31,6 +31,13 @@ check_proof() {
         "$@"
 }
 
+check_smt_proof() {
+    "${PYTHON:-python3}" tools/check_smt_proof.py \
+        --input "$1" \
+        --solver target/release/smt \
+        --checker "$drat_trim"
+}
+
 check_proof --formula benchmarks/smoke/unsat.cnf
 check_proof --formula benchmarks/smoke/chrono-unsat.cnf
 check_proof --formula benchmarks/smoke/probe-unsat.cnf --solver-arg=--probe
@@ -44,3 +51,7 @@ check_proof --formula benchmarks/smoke/factor-unsat.cnf --solver-arg=--factor
 check_proof \
     --formula benchmarks/smoke/factor-macro-unsat.cnf \
     --solver-arg=--factor-macro
+
+for formula in benchmarks/smt-proof-smoke/*.smt2; do
+    check_smt_proof "$formula"
+done

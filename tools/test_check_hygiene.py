@@ -108,6 +108,7 @@ class HygieneChecksTests(unittest.TestCase):
             "scripts/check-proofs.sh": (
                 "tools/proof_smoke.py\n--probe\n--vivify\n--subsume\n"
                 "--binary-minimize\n--eliminate\n--factor\n--factor-macro\n"
+                "tools/check_smt_proof.py\nbenchmarks/smt-proof-smoke\n"
             ),
             "scripts/check-python.sh": "ruff check\nruff format --check\n",
             "scripts/check-fast.sh": "scripts/check-python.sh\n",

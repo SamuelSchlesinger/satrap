@@ -1,4 +1,4 @@
-.PHONY: audit check check-fast check-fuzz check-msrv check-proofs check-python install-fuzz-tools install-hooks install-oracles install-proof-checkers install-python-tools profiling proof-smoke quality release smoke test
+.PHONY: audit check check-fast check-fuzz check-msrv check-proofs check-python install-fuzz-tools install-hooks install-oracles install-proof-checkers install-python-tools profiling proof-smoke quality release smoke smt-proof-smoke test
 
 PYTHON ?= python3
 PROOF_CHECKER_CACHE ?= .cache/proof-checkers
@@ -62,3 +62,11 @@ smoke: release
 
 proof-smoke: release
 	$(PYTHON) tools/proof_smoke.py --solver target/release/sat --checker "$(DRAT_TRIM)"
+
+smt-proof-smoke: release
+	@for formula in benchmarks/smt-proof-smoke/*.smt2; do \
+		$(PYTHON) tools/check_smt_proof.py \
+			--input "$$formula" \
+			--solver target/release/smt \
+			--checker "$(DRAT_TRIM)" || exit 1; \
+	done

@@ -390,6 +390,8 @@ def check_gate_wiring(errors: list[str]) -> None:
             "--eliminate",
             "--factor",
             "--factor-macro",
+            "tools/check_smt_proof.py",
+            "benchmarks/smt-proof-smoke",
         ),
         errors,
     )

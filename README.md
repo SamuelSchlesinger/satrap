@@ -26,7 +26,7 @@ is not yet a general or state-of-the-art SMT solver. The
 - SAT models and streaming DRAT proofs, checked by pinned DRAT-trim in the
   local and hosted integration gates.
 - Query-specific `get-proof` certificates for the Boolean, bit-vector, ground
-  UF, non-nested array, and integer/real difference-logic fragments. A separate
+  UF, non-nested array, difference-logic, and linear-real fragments. A separate
   checker reconstructs each active query and validates every theory lemma
   before DRAT checking.
 - Interactive SMT-LIB with `push`/`pop`, `check-sat-assuming`, models, values,
@@ -104,11 +104,11 @@ recoverable command errors, so it can be used as a long-lived subprocess.
 Current SMT coverage includes Core, QF_BV, QF_UF, QF_UFBV, QF_ABV, and
 QF_AUFBV, plus experimental exact QF_IDL, QF_LIA, QF_RDL, and QF_LRA.
 The corresponding QF_UFIDL, QF_UFLIA, QF_UFLRA, and QF_AUFLIA combinations
-are also implemented. Protocol edge cases, proof production for general
-linear arithmetic and theory combinations, fragment-complete independent
-validation, sustained fuzz campaigns, and competition-scale performance
-remain open. Proof production currently covers QF_BOOL, QF_BV, QF_UF,
-QF_UFBV, QF_ABV, QF_AUFBV, QF_IDL, and QF_RDL. See
+are also implemented. Protocol edge cases, proof production for linear integer
+arithmetic and theory combinations, fragment-complete independent validation,
+sustained fuzz campaigns, and competition-scale performance remain open. Proof
+production currently covers QF_BOOL, QF_BV, QF_UF, QF_UFBV, QF_ABV, QF_AUFBV,
+QF_IDL, QF_RDL, and QF_LRA. See
 [Proof checking](docs/PROOF_CHECKING.md) for the exact boundary.
 
 ## Rust API
@@ -153,7 +153,7 @@ fuzzing, and independently checks the SAT proof-mode matrix. It never silently
 skips a linter, oracle, fuzz target, or proof check. The proof gate also
 reconstructs every currently certified SMT fragment from its original scoped
 input, independently validates the finite-theory reductions or exact
-difference-logic conflicts, and checks each query-specific DRAT refutation.
+arithmetic conflicts, and checks each query-specific DRAT refutation.
 These generated checks are correctness evidence, not representative
 performance benchmarks. See the
 [fuzzing guide](docs/FUZZING.md) and [proof-checking guide](docs/PROOF_CHECKING.md)

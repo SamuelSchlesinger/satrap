@@ -85,12 +85,13 @@ suite and a claim-bearing benchmark campaign are documented in
 
 The proof gate additionally runs the release SMT executable online and
 reconstructs active QF_BOOL, QF_BV, QF_UF, QF_UFBV, QF_ABV, QF_AUFBV, QF_IDL,
-and QF_RDL queries in an independent Python implementation. It repeats
+QF_RDL, and QF_LRA queries in an independent Python implementation. It repeats
 fixed-width bit-vector lowering, finite ground-UF class/congruence lowering,
-ground extensional-array lowering, exact difference-logic negative-cycle
-validation, and canonical CNF generation before checking the embedded DRAT
-suffix. Nested arrays, general LIA/LRA, and arithmetic theory combinations
-remain outside that claim and are rejected when proof production is requested.
+ground extensional-array lowering, exact difference-logic negative-cycle and
+linear-real Fourier-Motzkin validation, and canonical CNF generation before
+checking the embedded DRAT suffix. Nested arrays, LIA, and arithmetic theory
+combinations remain outside that claim and are rejected when proof production
+is requested.
 
 `tools/check_hygiene.py` enforces the small but easy-to-forget invariants:
 UTF-8/LF text, final newlines, no trailing whitespace, valid local Markdown
@@ -100,8 +101,8 @@ entrypoints and that the integration script still includes the quality and
 fuzz gates, all three oracle version checks, every fuzz target, the
 proof-checked benchmark smoke, and that the security workflow remains wired to
 RustSec. It also requires every canonical QF_BOOL, QF_BV, QF_UF, QF_UFBV,
-QF_ABV, QF_AUFBV, QF_IDL, and QF_RDL proof-corpus file to remain present and
-nonempty.
+QF_ABV, QF_AUFBV, QF_IDL, QF_RDL, and QF_LRA proof-corpus file to remain
+present and nonempty.
 
 The ordinary gate deliberately does not enable every `clippy::pedantic` or
 `clippy::nursery` lint. Solver code contains exact numeric conversions,

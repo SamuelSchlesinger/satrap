@@ -246,7 +246,8 @@ impl Session {
         let logic = expect_symbol(&arguments[0], "logic name")?;
         if !matches!(
             logic,
-            "QF_BOOL"
+            "ALL"
+                | "QF_BOOL"
                 | "QF_BV"
                 | "QF_UF"
                 | "QF_UFBV"
@@ -2028,7 +2029,7 @@ impl Session {
     fn require_bitvectors(&self) -> Result<(), CommandError> {
         if matches!(
             self.logic.as_deref(),
-            Some("QF_BV" | "QF_UFBV" | "QF_ABV" | "QF_AUFBV")
+            Some("ALL" | "QF_BV" | "QF_UFBV" | "QF_ABV" | "QF_AUFBV")
         ) {
             Ok(())
         } else {
@@ -2040,7 +2041,8 @@ impl Session {
         if matches!(
             self.logic.as_deref(),
             Some(
-                "QF_UF"
+                "ALL"
+                    | "QF_UF"
                     | "QF_UFBV"
                     | "QF_AUFBV"
                     | "QF_UFIDL"
@@ -2058,7 +2060,7 @@ impl Session {
     fn require_arrays(&self) -> Result<(), CommandError> {
         if matches!(
             self.logic.as_deref(),
-            Some("QF_ABV" | "QF_AUFBV" | "QF_AUFLIA")
+            Some("ALL" | "QF_ABV" | "QF_AUFBV" | "QF_AUFLIA")
         ) {
             Ok(())
         } else {
@@ -2070,7 +2072,8 @@ impl Session {
         if matches!(
             self.logic.as_deref(),
             Some(
-                "QF_IDL"
+                "ALL"
+                    | "QF_IDL"
                     | "QF_LIA"
                     | "QF_RDL"
                     | "QF_LRA"
@@ -2089,7 +2092,7 @@ impl Session {
     fn require_integers(&self) -> Result<(), CommandError> {
         if matches!(
             self.logic.as_deref(),
-            Some("QF_IDL" | "QF_LIA" | "QF_UFIDL" | "QF_UFLIA" | "QF_AUFLIA")
+            Some("ALL" | "QF_IDL" | "QF_LIA" | "QF_UFIDL" | "QF_UFLIA" | "QF_AUFLIA")
         ) {
             Ok(())
         } else {
@@ -2100,7 +2103,7 @@ impl Session {
     fn require_reals(&self) -> Result<(), CommandError> {
         if matches!(
             self.logic.as_deref(),
-            Some("QF_RDL" | "QF_LRA" | "QF_UFLRA")
+            Some("ALL" | "QF_RDL" | "QF_LRA" | "QF_UFLRA")
         ) {
             Ok(())
         } else {
@@ -3012,6 +3015,27 @@ mod tests {
              (error \"decimal value does not fit in a 4-bit vector\")\n\
              sat\n"
         );
+    }
+
+    #[test]
+    fn all_selects_the_supported_union_without_expanding_the_proof_claim() {
+        let output = execute(
+            "(set-logic ALL)
+             (declare-const a (Array Int (_ BitVec 2)))
+             (declare-const i Int)
+             (declare-const value (_ BitVec 2))
+             (declare-fun observe ((_ BitVec 2)) Int)
+             (assert (= value #b01))
+             (assert (distinct (select (store a i value) i) value))
+             (assert (= (observe value) 7))
+             (check-sat)
+             (reset)
+             (set-option :produce-proofs true)
+             (set-logic ALL)
+             (set-logic QF_BOOL)
+             (check-sat)",
+        );
+        assert_eq!(output, "unsat\nunsupported\nsat\n");
     }
 
     #[test]

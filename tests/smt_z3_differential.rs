@@ -79,7 +79,17 @@ fn deterministic_qf_uf_and_ufbv_corpora_agree_with_z3() {
             expected,
             "z3 did not answer every {name} query:\n{z3_stdout}"
         );
-        assert_eq!(ours_results, z3_results, "{name} differential mismatch");
+        let mismatch = ours_results
+            .iter()
+            .zip(&z3_results)
+            .position(|(ours, z3)| ours != z3);
+        assert_eq!(
+            mismatch,
+            None,
+            "{name} differential mismatch at query {mismatch:?}: ours={:?}, z3={:?}",
+            mismatch.map(|index| ours_results[index]),
+            mismatch.map(|index| z3_results[index])
+        );
     }
 }
 
@@ -131,6 +141,7 @@ fn deterministic_exact_arithmetic_corpora_agree_with_z3() {
     }
     for (name, script, expected) in [
         ("QF_IDL", idl_differential_script(), 384),
+        ("QF_LIA", lia_differential_script(), 384),
         ("QF_RDL", rdl_differential_script(), 256),
         ("QF_LRA", lra_differential_script(), 384),
     ] {
@@ -162,7 +173,17 @@ fn deterministic_exact_arithmetic_corpora_agree_with_z3() {
             expected,
             "z3 did not answer every {name} query:\n{z3_stdout}"
         );
-        assert_eq!(ours_results, z3_results, "{name} differential mismatch");
+        let mismatch = ours_results
+            .iter()
+            .zip(&z3_results)
+            .position(|(ours, z3)| ours != z3);
+        assert_eq!(
+            mismatch,
+            None,
+            "{name} differential mismatch at query {mismatch:?}: ours={:?}, z3={:?}",
+            mismatch.map(|index| ours_results[index]),
+            mismatch.map(|index| z3_results[index])
+        );
     }
 }
 
@@ -174,7 +195,7 @@ fn exact_arithmetic_models_are_independently_validated_by_z3() {
     }
 
     let cases = arithmetic_model_cases();
-    assert_eq!(cases.len(), 56);
+    assert_eq!(cases.len(), 72);
     for case in cases {
         let script = case.solver_script();
         let ours = run_solver(env!("CARGO_BIN_EXE_smt"), &[], &script);
@@ -595,6 +616,64 @@ fn idl_differential_script() -> String {
     script
 }
 
+fn lia_differential_script() -> String {
+    const COEFFICIENTS: &[i32] = &[-4, -3, -2, -1, 1, 2, 3, 4];
+    let mut script = String::from(
+        "(set-logic QF_LIA)\n\
+         (declare-const x Int)\n\
+         (declare-const y Int)\n\
+         (declare-const z Int)\n\
+         (assert (and (<= (- 12) x) (<= x 12)))\n\
+         (assert (and (<= (- 12) y) (<= y 12)))\n\
+         (assert (and (<= (- 12) z) (<= z 12)))\n",
+    );
+    let mut state = 0x082e_fa98_u32;
+    for query in 0..384 {
+        writeln!(script, "(push 1)").unwrap();
+        for assertion in 0..5 {
+            state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            let a = COEFFICIENTS[(state as usize >> 2) % COEFFICIENTS.len()];
+            let b = COEFFICIENTS[(state as usize >> 9) % COEFFICIENTS.len()];
+            let c = COEFFICIENTS[(state as usize >> 16) % COEFFICIENTS.len()];
+            let bound = i32::try_from((state >> 23) % 25).unwrap() - 12;
+            let relation = ["<=", "<", ">=", ">"][(state as usize >> 5) & 3];
+            let atom = format!(
+                "({relation} (+ (* {} x) (* {} y) (* {} z)) {})",
+                smt_integer(a),
+                smt_integer(b),
+                smt_integer(c),
+                smt_integer(bound)
+            );
+            if assertion == 3 && query % 5 == 0 {
+                writeln!(script, "(assert (or {atom} (= (+ x y) z)))").unwrap();
+            } else if assertion == 4 && query % 7 == 0 {
+                writeln!(script, "(assert (not {atom}))").unwrap();
+            } else {
+                writeln!(script, "(assert {atom})").unwrap();
+            }
+        }
+        match query % 8 {
+            0 => {
+                writeln!(script, "(assert (= (+ (* 2 x) (* 2 y)) 1))").unwrap();
+            }
+            1 => {
+                writeln!(script, "(assert (= (+ (* 3 x) (* 5 y) (* (- 2) z)) 7))").unwrap();
+            }
+            2 => {
+                writeln!(script, "(assert (distinct (* 2 (+ x y)) 1))").unwrap();
+            }
+            3 => {
+                writeln!(script, "(assert (= (ite (< x y) (+ x z) (- y z)) 4))").unwrap();
+            }
+            _ => {}
+        }
+        writeln!(script, "(check-sat)").unwrap();
+        writeln!(script, "(pop 1)").unwrap();
+    }
+    script.push_str("(exit)\n");
+    script
+}
+
 fn rdl_differential_script() -> String {
     const VARIABLES: &[&str] = &["x", "y", "z"];
     const BOUNDS: &[&str] = &[
@@ -758,7 +837,7 @@ fn extract_constant_model_value(output: &str, name: &str, sort: &str) -> String 
 }
 
 fn arithmetic_model_cases() -> Vec<ArithmeticModelCase> {
-    let mut cases = Vec::with_capacity(56);
+    let mut cases = Vec::with_capacity(72);
 
     for query in 0_i32..16 {
         let x = (query * 7).rem_euclid(19) - 9;
@@ -782,6 +861,51 @@ fn arithmetic_model_cases() -> Vec<ArithmeticModelCase> {
         cases.push(ArithmeticModelCase {
             name: format!("QF_IDL model {query}"),
             logic: "QF_IDL",
+            sort: "Int",
+            assertions,
+        });
+    }
+
+    const LIA_COEFFICIENTS: &[(i32, i32, i32)] = &[(2, 3, -5), (-4, 3, 2), (5, -2, 3), (-3, -4, 5)];
+    for query in 0_i32..16 {
+        let x = (query * 5).rem_euclid(17) - 8;
+        let y = (query * 7).rem_euclid(19) - 9;
+        let z = (query * 11).rem_euclid(23) - 11;
+        let (a, b, c) = LIA_COEFFICIENTS[query as usize % LIA_COEFFICIENTS.len()];
+        let linear = a * x + b * y + c * z;
+        let expression = format!(
+            "(+ (* {} x) (* {} y) (* {} z))",
+            smt_integer(a),
+            smt_integer(b),
+            smt_integer(c)
+        );
+        let mut assertions = vec![
+            format!("(= {expression} {})", smt_integer(linear)),
+            format!("(>= x {})", smt_integer(x - 3)),
+            format!("(<= y {})", smt_integer(y + 3)),
+            format!("(>= (- z x) {})", smt_integer(z - x - 2)),
+            format!("(<= (+ x y) {})", smt_integer(x + y + 2)),
+        ];
+        match query.rem_euclid(4) {
+            0 => assertions.push(format!(
+                "(= (ite (< x {}) (+ y 1) (- z 2)) {})",
+                smt_integer(x + 1),
+                smt_integer(y + 1)
+            )),
+            1 => assertions.push(format!(
+                "(or (= (+ (* 2 x) (* 3 y)) {}) (> z {}))",
+                smt_integer(2 * x + 3 * y),
+                smt_integer(z - 1)
+            )),
+            2 => assertions.push(format!("(not (> {expression} {}))", smt_integer(linear))),
+            _ => assertions.push(format!(
+                "(distinct (+ (* 2 x) y) {})",
+                smt_integer(2 * x + y + 1)
+            )),
+        }
+        cases.push(ArithmeticModelCase {
+            name: format!("QF_LIA model {query}"),
+            logic: "QF_LIA",
             sort: "Int",
             assertions,
         });

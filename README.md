@@ -94,9 +94,9 @@ The process responds after each complete command and keeps reading after
 recoverable command errors, so it can be used as a long-lived subprocess.
 
 Current SMT coverage includes Core, QF_BV, QF_UF, QF_UFBV, QF_ABV, and
-QF_AUFBV, plus experimental exact QF_IDL, QF_RDL, and QF_LRA. Protocol edge
-cases, general LIA, arithmetic theory combinations, proof production,
-fragment-complete independent model validation, fuzzing, and competition-scale
+QF_AUFBV, plus experimental exact QF_IDL, QF_LIA, QF_RDL, and QF_LRA.
+Protocol edge cases, arithmetic theory combinations, proof production,
+fragment-complete independent validation, fuzzing, and competition-scale
 performance remain open.
 
 ## Rust API

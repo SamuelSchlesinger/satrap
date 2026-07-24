@@ -35,10 +35,11 @@ pub(crate) fn validate_model(
     roots: &[TermId],
     atom_value: impl Fn(SymbolId) -> bool,
 ) -> Result<(), ModelValidationError> {
-    let relevant = terms.reachable_boolean_terms(roots)?;
+    let root_relevant = terms.reachable_boolean_terms(roots)?;
+    let (arithmetic_relevant, selected_ites) = expand_arithmetic_relevance(terms, &root_relevant)?;
     validate_integer_values(terms, theory)?;
-    validate_arithmetic_ites(terms, theory, &relevant, &atom_value)?;
-    validate_arithmetic_predicates(terms, theory, &relevant, &atom_value)?;
+    validate_arithmetic_ites(terms, theory, &selected_ites, &atom_value)?;
+    validate_arithmetic_predicates(terms, theory, &arithmetic_relevant, &atom_value)?;
 
     for &root in roots {
         if !terms.evaluate_bool(root, &atom_value)? {
@@ -46,6 +47,63 @@ pub(crate) fn validate_model(
         }
     }
     Ok(())
+}
+
+fn expand_arithmetic_relevance(
+    terms: &TermStore,
+    root_relevant: &HashSet<TermId>,
+) -> Result<(HashSet<TermId>, Vec<usize>), TermError> {
+    let mut relevant = root_relevant.clone();
+    let mut variables = HashSet::new();
+    let mut selected_predicates = HashSet::new();
+    let mut selected_ites = HashSet::new();
+    loop {
+        let mut changed = false;
+        for predicate in terms.arithmetic_predicates() {
+            if !relevant.contains(&predicate.term) || !selected_predicates.insert(predicate.term) {
+                continue;
+            }
+            variables.extend(
+                terms
+                    .arithmetic_expression(predicate.expression)?
+                    .coefficients
+                    .keys()
+                    .copied(),
+            );
+            changed = true;
+        }
+        for (index, item) in terms.arithmetic_ites().iter().enumerate() {
+            if selected_ites.contains(&index) {
+                continue;
+            }
+            let result = terms.arithmetic_expression_for_term(item.result)?;
+            if !result
+                .coefficients
+                .keys()
+                .any(|variable| variables.contains(variable))
+            {
+                continue;
+            }
+            selected_ites.insert(index);
+            relevant.extend(terms.reachable_boolean_terms(&[item.condition])?);
+            for branch in [item.then_term, item.else_term] {
+                variables.extend(
+                    terms
+                        .arithmetic_expression_for_term(branch)?
+                        .coefficients
+                        .keys()
+                        .copied(),
+                );
+            }
+            changed = true;
+        }
+        if !changed {
+            break;
+        }
+    }
+    let mut selected_ites = selected_ites.into_iter().collect::<Vec<_>>();
+    selected_ites.sort_unstable();
+    Ok((relevant, selected_ites))
 }
 
 fn validate_integer_values(
@@ -96,56 +154,10 @@ fn validate_arithmetic_predicates(
 fn validate_arithmetic_ites(
     terms: &TermStore,
     theory: &TheoryModel,
-    relevant: &HashSet<TermId>,
+    selected: &[usize],
     atom_value: &impl Fn(SymbolId) -> bool,
 ) -> Result<(), ModelValidationError> {
-    let mut variables = terms
-        .arithmetic_predicates()
-        .iter()
-        .filter(|predicate| relevant.contains(&predicate.term))
-        .flat_map(|predicate| {
-            terms
-                .arithmetic_expression(predicate.expression)
-                .expect("arithmetic predicate expressions belong to the term store")
-                .coefficients
-                .keys()
-                .copied()
-        })
-        .collect::<HashSet<_>>();
-    let mut selected = HashSet::new();
-
-    loop {
-        let mut changed = false;
-        for (index, item) in terms.arithmetic_ites().iter().enumerate() {
-            if selected.contains(&index) {
-                continue;
-            }
-            let result = terms.arithmetic_expression_for_term(item.result)?;
-            if !result
-                .coefficients
-                .keys()
-                .any(|variable| variables.contains(variable))
-            {
-                continue;
-            }
-            selected.insert(index);
-            for branch in [item.then_term, item.else_term] {
-                variables.extend(
-                    terms
-                        .arithmetic_expression_for_term(branch)?
-                        .coefficients
-                        .keys()
-                        .copied(),
-                );
-            }
-            changed = true;
-        }
-        if !changed {
-            break;
-        }
-    }
-
-    for index in selected {
+    for &index in selected {
         let item = terms.arithmetic_ites()[index];
         let selected_branch = if terms.evaluate_bool(item.condition, atom_value)? {
             item.then_term

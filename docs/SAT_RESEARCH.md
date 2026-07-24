@@ -101,12 +101,13 @@ instance” will mean a model or proof artifact that another tool can verify.
 The SMT implementation is deliberately pre-competition. Deterministic
 differential corpora currently agree with Z3 4.16.0 on 544 QF_BV, 384 QF_UF,
 256 QF_UFBV, 256 QF_ABV, 128 QF_AUFBV, and 1,024 exact QF_IDL/QF_RDL/QF_LRA
-incremental queries. This is only one external solver, generated corpora are
-not representative benchmarks, SMT models do not yet pass an independent model
-validator, and theory UNSAT results do not yet carry independently checkable
-proofs. General LIA, required arithmetic combinations, complete protocol
-conformance, signal-driven interruption, fuzzing, and the world-class benchmark
-gates remain open and are tracked candidly in [the roadmap](ROADMAP.md).
+incremental queries, plus 384 QF_LIA queries. This is only one external solver,
+generated corpora are not representative benchmarks, the 72 exact arithmetic
+model replays are not yet fragment-complete, and theory UNSAT results do not
+yet carry independently checkable proofs. Required arithmetic combinations,
+complete protocol conformance, signal-driven interruption, fuzzing, and the
+world-class benchmark gates remain open and are tracked candidly in
+[the roadmap](ROADMAP.md).
 
 The SAT proof stream has been checked with DRAT-trim on smoke and real
 competition instances. A targeted REGN comparison is now competitive with

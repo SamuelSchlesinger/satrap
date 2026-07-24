@@ -240,6 +240,7 @@ impl Session {
                 | "QF_ABV"
                 | "QF_AUFBV"
                 | "QF_IDL"
+                | "QF_LIA"
                 | "QF_RDL"
                 | "QF_LRA"
         ) {
@@ -1919,7 +1920,10 @@ impl Session {
     }
 
     fn require_arithmetic(&self) -> Result<(), CommandError> {
-        if matches!(self.logic.as_deref(), Some("QF_IDL" | "QF_RDL" | "QF_LRA")) {
+        if matches!(
+            self.logic.as_deref(),
+            Some("QF_IDL" | "QF_LIA" | "QF_RDL" | "QF_LRA")
+        ) {
             Ok(())
         } else {
             Err(CommandError::Unsupported)
@@ -1927,7 +1931,7 @@ impl Session {
     }
 
     fn require_integers(&self) -> Result<(), CommandError> {
-        if matches!(self.logic.as_deref(), Some("QF_IDL")) {
+        if matches!(self.logic.as_deref(), Some("QF_IDL" | "QF_LIA")) {
             Ok(())
         } else {
             Err(CommandError::Unsupported)
@@ -2713,27 +2717,65 @@ mod tests {
     }
 
     #[test]
-    fn unsupported_integer_linear_and_nonlinear_fragments_are_honest() {
+    fn qf_lia_decides_general_linear_constraints_and_exact_models() {
         let output = execute(
-            "(set-logic QF_IDL)
+            "(set-option :produce-models true)
+             (set-logic QF_LIA)
              (declare-const x Int)
              (declare-const y Int)
-             (assert (= (+ x y) 1))
+             (assert (= (+ (* 2 x) (* 3 y)) 7))
+             (assert (>= x 0))
+             (assert (>= y 0))
              (check-sat)
-             (get-info :reason-unknown)
+             (get-value (x y (+ (* 2 x) (* 3 y))))
+             (push 1)
+             (assert (= (* 2 (+ x y)) 1))
+             (check-sat)
+             (pop 1)
+             (check-sat)",
+        );
+        let mut lines = output.lines();
+        assert_eq!(lines.next(), Some("sat"));
+        let values = lines.next().expect("get-value response");
+        assert!(values.starts_with("((x "));
+        assert!(values.contains(" (y "));
+        assert!(values.ends_with(" 7))"));
+        assert_eq!(lines.next(), Some("unsat"));
+        assert_eq!(lines.next(), Some("sat"));
+    }
+
+    #[test]
+    fn arithmetic_ite_conditions_are_in_theory_relevance_closure() {
+        let output = execute(
+            "(set-logic QF_LIA)
+             (declare-const x Int)
+             (declare-const y Int)
+             (assert (= x 0))
+             (assert (= y 1))
+             (assert (= (ite (< x y) 0 1) 1))
+             (check-sat)",
+        );
+        assert_eq!(output, "unsat\n");
+    }
+
+    #[test]
+    fn nonlinear_integer_arithmetic_remains_an_explicit_error() {
+        let output = execute(
+            "(set-logic QF_LIA)
+             (declare-const x Int)
+             (declare-const y Int)
              (assert (= (* x y) 2))",
         );
         assert_eq!(
             output,
-            "unknown\n(:reason-unknown incomplete)\n\
-             (error \"nonlinear multiplication is outside the supported logics\")\n"
+            "(error \"nonlinear multiplication is outside the supported logics\")\n"
         );
     }
 
     #[test]
-    fn popped_incomplete_arithmetic_atoms_do_not_poison_later_queries() {
+    fn popped_general_integer_atoms_do_not_poison_later_queries() {
         let output = execute(
-            "(set-logic QF_IDL)
+            "(set-logic QF_LIA)
              (declare-const x Int)
              (declare-const y Int)
              (push 1)
@@ -2743,7 +2785,7 @@ mod tests {
              (assert (= x 0))
              (check-sat)",
         );
-        assert_eq!(output, "unknown\nsat\n");
+        assert_eq!(output, "sat\nsat\n");
     }
 
     #[test]

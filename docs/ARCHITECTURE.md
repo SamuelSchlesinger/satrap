@@ -636,20 +636,21 @@ product.
 
 Arithmetic terms are canonical affine expressions with arbitrary-precision
 integer and rational coefficients. Integer difference constraints normalize to
-weighted graph edges and use Bellman–Ford negative-cycle detection. Real
-difference logic and general linear real arithmetic use exact Fourier–Motzkin
-elimination with open-bound tracking and reverse model reconstruction.
-Arithmetic checking is restricted to predicates reachable from active
-assertions and assumptions; popped formulas therefore do not keep imposing
-theory work. Integer formulas outside difference logic return `unknown`
-instead of being approximated.
+weighted graph edges and use Bellman–Ford negative-cycle detection. General
+linear integer arithmetic first enumerates variables with provably finite
+constant bounds, then falls back to terminating Cooper elimination; scaling and
+explicit divisibility constraints preserve modular contradictions exactly.
+Real difference logic and general linear real arithmetic use exact
+Fourier–Motzkin elimination with open-bound tracking and reverse model
+reconstruction. Arithmetic checking follows the full relevance closure through
+selected arithmetic-`ite` conditions while excluding popped formulas.
 
 Before an arithmetic candidate escapes as `sat`, a separate evaluator checks
 the original active roots, exact predicate truth values, integer integrality,
 and every relevant selected arithmetic-`ite` branch. Failure is reported as
 `unknown`, and model inspection is available only after `sat`; resource or
 incompleteness results never manufacture a placeholder model. The integration
-suite additionally replays 56 deterministic IDL/RDL/LRA models as exact
+suite additionally replays 72 deterministic IDL/LIA/RDL/LRA models as exact
 constant bindings into Z3 and requires the original formulas to remain
 satisfiable. This external corpus is a useful independent oracle, not yet a
 fragment-complete model-validation architecture.
@@ -673,10 +674,10 @@ bit-vector encoding  UF + extensional arrays  exact linear arithmetic
 Theory lemmas and unconditional axioms are permanent because term definitions
 are permanent even when the assertion that first exposed them is scoped.
 Resource limits currently charge SAT conflicts/propagations, not parsing,
-lowering, theory preparation, or final checking. General linear integer
-arithmetic, arithmetic theory combinations, trail-level propagation,
-fragment-complete independent SMT model/proof validation, and an incremental
-SMT proof format remain future work.
+lowering, theory preparation, or final checking. Arithmetic theory
+combinations, trail-level propagation, fragment-complete independent SMT
+model/proof validation, and an incremental SMT proof format remain future
+work.
 
 ## Performance policy
 

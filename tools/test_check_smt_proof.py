@@ -1,6 +1,13 @@
 import unittest
 
-from check_smt_proof import ProofCheckError, validate_encoding
+from check_smt_proof import (
+    CnfEncoder,
+    ProofCheckError,
+    ProofSession,
+    SExprReader,
+    UfLowering,
+    validate_encoding,
+)
 
 SCRIPT = """
 (set-option :produce-proofs true)
@@ -19,6 +26,19 @@ PROOF = """unsat
  :drat "0
 ")
 """
+
+
+def cnf_satisfiable(encoder: CnfEncoder, clauses) -> bool:
+    for assignment in range(1 << encoder.variable_count):
+        if all(
+            any(
+                bool(assignment & (1 << (abs(literal) - 1))) == (literal > 0)
+                for literal in literals
+            )
+            for _, literals in clauses
+        ):
+            return True
+    return False
 
 
 class SmtProofCheckerTests(unittest.TestCase):
@@ -138,6 +158,57 @@ class SmtProofCheckerTests(unittest.TestCase):
             "premises do not match",
         ):
             validate_encoding(qf_bv_script, PROOF)
+
+    def test_boolean_certificates_cannot_smuggle_theory_clauses(self):
+        with self.assertRaisesRegex(
+            ProofCheckError,
+            "QF_BOOL proof contains forbidden `theory` clause",
+        ):
+            validate_encoding(
+                SCRIPT,
+                PROOF.replace("(formula 1)", "(theory 1)", 1),
+            )
+
+    def test_ground_uf_lowering_makes_congruence_refutation_propositional(self):
+        script = """
+        (set-option :produce-proofs true)
+        (set-logic QF_UF)
+        (declare-sort U 0)
+        (declare-const a U)
+        (declare-const b U)
+        (declare-fun f (U) U)
+        (assert (= a b))
+        (assert (distinct (f a) (f b)))
+        (check-sat)
+        (get-proof)
+        """
+        queries = ProofSession().execute_all(SExprReader(script).read_all())
+        self.assertEqual(len(queries), 1)
+        roots, axioms = UfLowering(queries[0].roots).lower_roots(queries[0].roots)
+        self.assertEqual(len(axioms), 1)
+        encoder = CnfEncoder()
+        clauses = encoder.build(roots, axioms)
+        self.assertFalse(cnf_satisfiable(encoder, clauses))
+
+    def test_ground_uf_lowering_does_not_identify_distinct_argument_tuples(self):
+        script = """
+        (set-option :produce-proofs true)
+        (set-logic QF_UF)
+        (declare-sort U 0)
+        (declare-const a U)
+        (declare-const b U)
+        (declare-fun f (U) U)
+        (assert (distinct a b))
+        (assert (distinct (f a) (f b)))
+        (check-sat)
+        (get-proof)
+        """
+        queries = ProofSession().execute_all(SExprReader(script).read_all())
+        self.assertEqual(len(queries), 1)
+        roots, axioms = UfLowering(queries[0].roots).lower_roots(queries[0].roots)
+        encoder = CnfEncoder()
+        clauses = encoder.build(roots, axioms)
+        self.assertTrue(cnf_satisfiable(encoder, clauses))
 
 
 if __name__ == "__main__":

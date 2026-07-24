@@ -125,6 +125,9 @@ Run the local quality gate with:
 make check
 ```
 
+For the gate breakdown, lint rationale, and small-commit procedure, see the
+[quality policy](docs/QUALITY.md).
+
 Deterministic tests cover the SAT kernel against brute force and exercise the
 implemented SMT fragments against Z3 when it is installed. These generated
 tests are correctness evidence, not representative performance benchmarks.
@@ -154,7 +157,8 @@ and an independently verified claim.
 - `src/bin/smt.rs` — streaming SMT-LIB command-line interface
 - `tests/` — differential and end-to-end correctness tests
 - `tools/` — corpus, proof, and benchmark utilities
-- `docs/` — architecture, benchmarking protocol, research notes, and roadmap
+- `docs/` — architecture, quality policy, benchmarking protocol, research
+  notes, and roadmap
 
 ## Contributing
 

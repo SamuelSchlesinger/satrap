@@ -5,19 +5,24 @@ Correctness comes before speed, and measured speed comes before novelty claims.
 Install the checked-in Git hooks once per clone:
 
 ```sh
+cargo install cargo-audit --locked
+brew install actionlint shellcheck  # macOS; use your package manager elsewhere
 make install-hooks
 ```
 
 The pre-commit hook runs the fast formatting and compile gate. The pre-push
 hook runs the same full gate as the main CI job followed by the Rust 1.85 MSRV
-suite. The shared entrypoints live in `scripts/`, so local hooks and GitHub
-Actions cannot drift silently.
+suite and RustSec audit. Hosted CI independently reruns all three gates. The
+shared entrypoints live in `scripts/`, and the hygiene checker rejects broken
+gate wiring, so local hooks and GitHub Actions cannot drift silently.
 
 Make regular, small commits at coherent green points. Each commit should have
 one purpose, keep unrelated formatting or refactors separate, and include its
 own regression test when practical. Before submitting a change, run
-`make check`; use `make check-msrv` when changing dependencies or
-compiler-sensitive code.
+`make check`; use `make quality` for the non-test lint and documentation gate,
+and `make check-msrv` when changing dependencies or compiler-sensitive code.
+The complete review order, lint rationale, exception policy, and repository
+maintenance procedure live in the [quality policy](docs/QUALITY.md).
 
 Any heuristic or data-structure change that claims performance improvement
 should also include:

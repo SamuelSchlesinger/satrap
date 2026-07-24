@@ -197,4 +197,40 @@ mod tests {
         ));
         assert_eq!(solver.solve(), SolveResult::Unsat);
     }
+
+    #[test]
+    fn extensionally_equal_arrays_are_congruent_function_arguments() {
+        let mut terms = TermStore::new();
+        let array_sort = terms.array_sort(Sort::Int, Sort::Int).unwrap();
+        let array = terms.fresh_term(Sort::Array(array_sort)).unwrap();
+        let index = terms.fresh_term(Sort::Int).unwrap();
+        let selected = terms.select(array, index).unwrap();
+        let restored = terms.store(array, index, selected).unwrap();
+        let observe = terms
+            .declare_function(&[Sort::Array(array_sort)], Sort::Bool)
+            .unwrap();
+        let observed_array = terms.apply(observe, &[array]).unwrap();
+        let observed_restored = terms.apply(observe, &[restored]).unwrap();
+        let different = terms.xor(observed_array, observed_restored).unwrap();
+
+        let mut solver = Solver::new();
+        let mut encoder = BoolEncoder::default();
+        let different_literal = encoder.encode(&terms, &mut solver, different).unwrap();
+        solver.try_add_clause(&[different_literal]).unwrap();
+        let mut theories = TheoryManager::default();
+
+        assert!(matches!(
+            solve(
+                &mut terms,
+                &mut solver,
+                &mut encoder,
+                &mut theories,
+                &[different],
+                &[],
+                SolveLimits::default()
+            )
+            .unwrap(),
+            SmtSolveResult::Unsat
+        ));
+    }
 }

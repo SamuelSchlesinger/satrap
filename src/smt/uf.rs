@@ -261,6 +261,35 @@ fn relevant_value(
     })
 }
 
+fn ensure_array_argument_equalities(
+    terms: &mut TermStore,
+    relevance: &UfRelevance,
+) -> Result<bool, TermError> {
+    let equality_count = terms.theory_equalities().len();
+    let applications = terms.applications().to_vec();
+    for (position, &left_index) in relevance.applications.iter().enumerate() {
+        let left = &applications[left_index];
+        for &right_index in &relevance.applications[position + 1..] {
+            let right = &applications[right_index];
+            if left.function != right.function {
+                continue;
+            }
+            let domain = terms.function_signature(left.function)?.domain.clone();
+            for ((&left_argument, &right_argument), &sort) in left
+                .arguments
+                .iter()
+                .zip(right.arguments.iter())
+                .zip(domain.iter())
+            {
+                if matches!(sort, Sort::Array(_)) && left_argument != right_argument {
+                    terms.equivalent(left_argument, right_argument)?;
+                }
+            }
+        }
+    }
+    Ok(terms.theory_equalities().len() != equality_count)
+}
+
 impl Theory for UfTheory {
     type Model = UfModel;
 
@@ -269,8 +298,13 @@ impl Theory for UfTheory {
         terms: &mut TermStore,
         relevant: &HashSet<TermId>,
     ) -> Result<(), TermError> {
-        terms.prepare_arrays()?;
-        let relevance = compute_uf_relevance(terms, relevant)?;
+        let relevance = loop {
+            terms.prepare_arrays()?;
+            let relevance = compute_uf_relevance(terms, relevant)?;
+            if !ensure_array_argument_equalities(terms, &relevance)? {
+                break relevance;
+            }
+        };
         self.required.clear();
         self.shared_arithmetic_terms.clear();
         self.shared_arithmetic_equalities.clear();

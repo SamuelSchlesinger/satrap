@@ -193,6 +193,29 @@ def check_audit_version(errors: list[str]) -> None:
         errors.append(f"cargo-audit versions disagree: {rendered}")
 
 
+def check_z3_version(errors: list[str]) -> None:
+    declarations = {
+        "scripts/ci.sh": extract_version(
+            ROOT / "scripts/ci.sh",
+            r"^required_z3_version=([0-9.]+)",
+            errors,
+        ),
+        ".github/workflows/ci.yml": extract_version(
+            ROOT / ".github/workflows/ci.yml",
+            r'^\s*Z3_VERSION:\s*"([^"]+)"',
+            errors,
+        ),
+    }
+    versions = {version for version in declarations.values() if version is not None}
+    if len(versions) > 1:
+        rendered = ", ".join(
+            f"{name}={'.'.join(map(str, version))}"
+            for name, version in declarations.items()
+            if version is not None
+        )
+        errors.append(f"Z3 versions disagree: {rendered}")
+
+
 def require_commands(path: Path, commands: tuple[str, ...], errors: list[str]) -> None:
     text = read_text(path, errors)
     if text is None:
@@ -253,6 +276,7 @@ def main() -> int:
     check_markdown_links(files, errors)
     check_msrv(errors)
     check_audit_version(errors)
+    check_z3_version(errors)
     check_gate_wiring(errors)
     check_executable_scripts(errors)
 

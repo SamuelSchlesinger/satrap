@@ -34,10 +34,10 @@ CI independently calls the same integration and compatibility scripts and
 runs the RustSec audit on every push and pull request, plus weekly, so a newly
 published advisory is caught even when the repository is unchanged.
 
-The pre-push gate requires `cargo-audit`, ShellCheck, Actionlint, and Z3. Z3 is
-mandatory here even though a direct `cargo test` can skip its differential
-tests: neither the local integration gate nor hosted CI may silently lose the
-second solver. On macOS, install the tools with:
+The pre-push gate requires `cargo-audit`, ShellCheck, Actionlint, and Z3 4.16.0.
+Z3 is mandatory here even though a direct `cargo test` can skip its
+differential tests: neither the local integration gate nor hosted CI may
+silently lose the second solver. On macOS, install the tools with:
 
 ```sh
 cargo install cargo-audit --version 0.22.2 --locked
@@ -45,11 +45,12 @@ brew install actionlint shellcheck z3
 ```
 
 Use the corresponding package manager on other platforms. Hosted CI installs
-its own copies and pins Actionlint to `v1.7.12` and cargo-audit to `0.22.2`.
+the official Z3 4.16.0 archive after verifying its SHA-256 digest, and pins
+Actionlint to `v1.7.12` and cargo-audit to `0.22.2`.
 
 `tools/check_hygiene.py` enforces the small but easy-to-forget invariants:
 UTF-8/LF text, final newlines, no trailing whitespace, valid local Markdown
-links, executable scripts, synchronized MSRV declarations, and identical
+links, executable scripts, synchronized MSRV/Z3 declarations, and identical
 top-level CI/pre-push entrypoints. It also verifies that the integration script
 still includes the quality gate and that the security workflow remains wired
 to RustSec.

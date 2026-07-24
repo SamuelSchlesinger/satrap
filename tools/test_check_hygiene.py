@@ -132,6 +132,26 @@ class HygieneChecksTests(unittest.TestCase):
                 ],
             )
 
+    def test_z3_version_check_detects_ci_drift(self) -> None:
+        directory, root = self.temporary_root()
+        with directory, patch.object(check_hygiene, "ROOT", root):
+            script = root / "scripts/ci.sh"
+            workflow = root / ".github/workflows/ci.yml"
+            script.parent.mkdir(parents=True)
+            workflow.parent.mkdir(parents=True)
+            script.write_text("required_z3_version=4.16.0\n", encoding="utf-8")
+            workflow.write_text('env:\n  Z3_VERSION: "4.15.8"\n', encoding="utf-8")
+            errors: list[str] = []
+            check_hygiene.check_z3_version(errors)
+            self.assertEqual(
+                errors,
+                [
+                    "Z3 versions disagree: "
+                    "scripts/ci.sh=4.16.0, "
+                    ".github/workflows/ci.yml=4.15.8"
+                ],
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -65,3 +65,4 @@ cargo test --all-targets --locked
 "${PYTHON:-python3}" -m unittest discover -s tools -p 'test_*.py'
 "$repo_root/scripts/check-fuzz.sh"
 "$repo_root/scripts/check-proofs.sh"
+make smoke >/dev/null

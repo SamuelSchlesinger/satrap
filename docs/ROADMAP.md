@@ -23,8 +23,9 @@ Passing this gate means “worth iterating on,” not “competitive.”
   irreversible preprocessing and an incremental proof container remain;
 - the textual DRAT stream includes deletion steps, and the baseline plus every
   proof-sensitive SAT mode is checked by pinned DRAT-trim on every push;
-  automatic validation and artifact retention for every UNSAT benchmark row
-  remain;
+  the benchmark runner now allocates and retains per-run proof artifacts,
+  records checker evidence, and can reject every unchecked UNSAT row in strict
+  mode; claim-bearing full-corpus campaigns remain to be run under that mode;
 - model checking integrated into every benchmark run;
 - named core subsets now have deterministic independent replay cases in every
   advertised fragment, including a combined core/assumption query; integrating

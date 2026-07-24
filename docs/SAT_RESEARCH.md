@@ -96,7 +96,8 @@ instance” will mean a model or proof artifact that another tool can verify.
 - deterministic differential tests against brute force; and
 - a benchmark runner that hashes inputs, records machine/run metadata, checks
   SAT models with a constant-memory streaming validator, rejects abnormal
-  solver exits, detects solver disagreement, and emits JSONL.
+  solver exits, detects solver disagreement, retains per-run UNSAT proofs,
+  invokes independent checkers, and emits JSONL with artifact evidence.
 
 The SMT implementation is deliberately pre-competition. Deterministic
 differential corpora contain 3,872 incremental queries across QF_BV, QF_UF,
@@ -128,8 +129,9 @@ baseline, deep chronological backtracking, and every proof-sensitive
 preprocessing/minimization mode. A targeted REGN comparison is competitive with
 pinned Kissat 4.0.4, but the small corpus and a failed mixed-family promotion
 gate do not support a general competitiveness claim. The benchmark runner also
-does not yet validate every UNSAT row; see
-[Proof checking](PROOF_CHECKING.md).
+supports a strict mode in which every UNSAT row needs a valid independently
+checked proof; existing historical artifacts are not retroactively upgraded.
+See [Proof checking](PROOF_CHECKING.md).
 
 ## Build and run
 
@@ -516,15 +518,18 @@ python3 tools/benchmark.py \
   --instances /path/to/cnf-corpus \
   --timeout 300 \
   --repeat 3 \
-  --solver "ours=target/release/sat" \
-  --solver "reference=/path/to/reference-solver" \
+  --solver "ours=target/release/sat --proof {proof}" \
+  --proof-checker \
+    "ours=.cache/proof-checkers/bin/drat-trim {instance} {proof}" \
+  --require-unsat-proofs \
   --output results/run.jsonl
 ```
 
 The runner never invokes a shell. A command containing spaces is parsed with
 shell-like quoting; `{instance}` may be used to place the input path somewhere
-other than the final argument. See [benchmarking](BENCHMARKING.md) before
-interpreting results.
+other than the final argument. Configure a separate proof command and checker
+for each comparison solver that may report UNSAT. See
+[benchmarking](BENCHMARKING.md) before interpreting results.
 
 An exploratory single-threaded comparison against Z3 4.16.0 used 32
 deterministically generated random 3-SAT formulas at ratio 4.267, three repeats,

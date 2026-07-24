@@ -94,7 +94,7 @@ class HygieneChecksTests(unittest.TestCase):
             ),
             "scripts/ci.sh": (
                 "scripts/quality.sh\nscripts/check-fuzz.sh\nscripts/check-proofs.sh\n"
-                "z3 --version\ncvc5 --version\n"
+                "make smoke\nz3 --version\ncvc5 --version\n"
                 "bitwuzla --version\n"
             ),
             "scripts/check-fuzz.sh": (
@@ -115,6 +115,10 @@ class HygieneChecksTests(unittest.TestCase):
                 "--binary-minimize\n--eliminate\n--factor\n--factor-macro\n"
             ),
             "scripts/quality.sh": "shellcheck\nactionlint\ntools/check_hygiene.py\n",
+            "Makefile": (
+                "tools/benchmark.py\n--proof {proof}\n"
+                "--proof-checker\n--require-unsat-proofs\n"
+            ),
         }
         with directory, patch.object(check_hygiene, "ROOT", root):
             for relative, contents in files.items():
@@ -134,6 +138,7 @@ class HygieneChecksTests(unittest.TestCase):
                     "scripts/ci.sh: must invoke scripts/quality.sh",
                     "scripts/ci.sh: must invoke scripts/check-fuzz.sh",
                     "scripts/ci.sh: must invoke scripts/check-proofs.sh",
+                    "scripts/ci.sh: must invoke make smoke",
                     "scripts/ci.sh: must invoke z3 --version",
                     "scripts/ci.sh: must invoke cvc5 --version",
                     "scripts/ci.sh: must invoke bitwuzla --version",

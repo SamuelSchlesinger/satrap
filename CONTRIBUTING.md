@@ -19,9 +19,10 @@ suite and RustSec audit. The integration gate requires the pinned Z3, cvc5, and
 Bitwuzla differential oracles installed by `make install-oracles` and the
 pinned fuzz toolchain installed by `make install-fuzz-tools`, plus the pinned
 DRAT-trim checker installed by `make install-proof-checkers`. Hosted CI
-independently reruns all three gates, including the SAT proof-mode matrix. The
-shared entrypoints live in `scripts/`, and the hygiene checker rejects broken
-gate wiring, so local hooks and GitHub Actions cannot drift silently.
+independently reruns all three gates, including the SAT proof-mode matrix and
+strict proof-checked benchmark smoke. The shared entrypoints live in
+`scripts/`, and the hygiene checker rejects broken gate wiring, so local hooks
+and GitHub Actions cannot drift silently.
 
 Make regular, small commits at coherent green points. Each commit should have
 one purpose, keep unrelated formatting or refactors separate, and include its

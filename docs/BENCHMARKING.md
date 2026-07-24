@@ -43,9 +43,37 @@ counter access. Record it rather than assuming it is neutral.
 
 `tools/benchmark.py` checks DIMACS SAT models with a streaming, constant-memory
 formula pass, rejects unexpected process exits, and flags cross-solver status
-disagreement. UNSAT rows are currently marked `unchecked`; this is a known
-blocker for any “newly solved” claim unless a separate checker validates the
-retained proof artifact.
+disagreement. It can also allocate a distinct proof path for every run, retain
+the artifact, and invoke an independently configured checker. A configured
+checker failure, timeout, missing verdict, missing proof, or proof mutation
+fails the benchmark. Use `--require-unsat-proofs` to make any unchecked UNSAT
+row fail as well.
+
+The solver command must contain `{proof}` when its matching
+`--proof-checker NAME=COMMAND` is configured. The checker command must contain
+both `{instance}` and `{proof}`, must exit successfully, and must print an exact
+`s VERIFIED` line. For the checked-in solver and pinned DRAT-trim:
+
+```sh
+python3 tools/benchmark.py \
+  --instances /path/to/cnf-corpus \
+  --timeout 300 \
+  --repeat 3 \
+  --solver "ours=target/release/sat --proof {proof}" \
+  --proof-checker \
+    "ours=.cache/proof-checkers/bin/drat-trim {instance} {proof}" \
+  --require-unsat-proofs \
+  --output results/run.jsonl
+```
+
+With file output, proofs are retained in a new
+`results/run.jsonl.artifacts` directory by default. Use `--artifacts` to choose
+another new directory. With standard output, proof files are temporary unless
+`--artifacts` is supplied, although their hashes, sizes, and checker outcomes
+still appear in the JSONL. When retained storage is enabled, partial proof files
+survive solver or checker failures. In a head-to-head run, configure a checker
+for every solver that may report UNSAT before enabling
+`--require-unsat-proofs`.
 
 ## Metrics
 
@@ -64,8 +92,11 @@ ones.
 The benchmark runner emits one JSON object per run. Each includes solver and
 instance identifiers, command, hashes, UTC time, wall time, timeout, exit code,
 reported status, validation state, host metadata, run index, seed, and current
-Git revision when available. The output path must not already exist, which helps
-prevent accidental destruction of prior results.
+Git revision when available. Proof-enabled rows additionally include the
+artifact path when retained, proof hash and size, checker command and binary
+hash, checker timing and exit state, and bounded output tails. Neither the
+output path nor the artifact directory may already exist, which helps prevent
+accidental destruction or stale-proof reuse.
 
 The checked-in `benchmarks/smoke` files test plumbing only. They say nothing
 about solver performance.

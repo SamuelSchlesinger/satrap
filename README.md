@@ -154,14 +154,17 @@ python3 tools/benchmark.py \
   --instances /path/to/cnf-corpus \
   --timeout 300 \
   --repeat 3 \
-  --solver "ours=target/release/sat" \
-  --solver "reference=/path/to/reference-solver" \
+  --solver "ours=target/release/sat --proof {proof}" \
+  --proof-checker \
+    "ours=.cache/proof-checkers/bin/drat-trim {instance} {proof}" \
+  --require-unsat-proofs \
   --output results/run.jsonl
 ```
 
 Read [Benchmarking](docs/BENCHMARKING.md) before interpreting results. The
 project deliberately distinguishes a development result, a held-out result,
-and an independently verified claim.
+and an independently verified claim. Add each comparison solver with its own
+proof command and independent checker when using the strict proof flag.
 
 ## Repository guide
 

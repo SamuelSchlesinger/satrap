@@ -1,7 +1,8 @@
 .PHONY: audit check check-fast check-fuzz check-msrv check-proofs install-fuzz-tools install-hooks install-oracles install-proof-checkers profiling proof-smoke quality release smoke test
 
 PYTHON ?= python3
-DRAT_TRIM ?= drat-trim
+PROOF_CHECKER_CACHE ?= .cache/proof-checkers
+DRAT_TRIM ?= $(PROOF_CHECKER_CACHE)/bin/drat-trim
 
 check:
 	PYTHON="$(PYTHON)" ./scripts/ci.sh
@@ -46,7 +47,12 @@ profiling:
 	RUSTFLAGS="-C target-cpu=native" cargo build --profile profiling --locked
 
 smoke: release
-	$(PYTHON) tools/benchmark.py --instances benchmarks/smoke --solver "sat=target/release/sat" --output -
+	$(PYTHON) tools/benchmark.py \
+		--instances benchmarks/smoke \
+		--solver "sat=target/release/sat --proof {proof}" \
+		--proof-checker "sat=$(DRAT_TRIM) {instance} {proof}" \
+		--require-unsat-proofs \
+		--output -
 
 proof-smoke: release
 	$(PYTHON) tools/proof_smoke.py --solver target/release/sat --checker "$(DRAT_TRIM)"

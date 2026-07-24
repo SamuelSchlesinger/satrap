@@ -26,7 +26,7 @@ claim.
 | Quality | `make quality` | Strict Clippy, rustdoc, ShellCheck, Actionlint, lockfile, and structural checks |
 | Fuzz | `make check-fuzz` | Locked format/Clippy/sanitizer build plus bounded parser, incremental SMT, and SAT proof campaigns |
 | Proof | `make check-proofs` | Release SAT certificates checked by pinned DRAT-trim across every proof-sensitive mode |
-| Integration | `make check` | Quality plus required three-oracle differential/model checks, Rust/Python tests, fuzz smoke, and a release build |
+| Integration | `make check` | Quality plus required three-oracle differential/model checks, Rust/Python tests, fuzz smoke, proof-checked benchmark smoke, and a release build |
 | Compatibility | `make check-msrv` | Full tests on the declared minimum Rust version |
 | Dependencies | `make audit` | RustSec advisory audit; requires `cargo-audit` and network access |
 
@@ -69,17 +69,20 @@ long-running commands, corpus policy, and reproduction steps are in
 The proof gate builds the release solver and validates certificates for the
 baseline plus each proof-sensitive preprocessing and minimization mode. The
 checker source archive is hash-pinned and its declared revision is synchronized
-by the hygiene gate. Scope, assumptions, SMT theory certificates, and the
-difference between a push smoke suite and benchmark-wide proof retention are
-documented in [Proof checking](PROOF_CHECKING.md).
+by the hygiene gate. The integration gate also drives the real benchmark runner
+in strict mode: all nine UNSAT smoke rows must retain a proof long enough for
+independent checking, while the SAT row must pass model validation. Scope,
+assumptions, SMT theory certificates, and the difference between a push smoke
+suite and a claim-bearing benchmark campaign are documented in
+[Proof checking](PROOF_CHECKING.md).
 
 `tools/check_hygiene.py` enforces the small but easy-to-forget invariants:
 UTF-8/LF text, final newlines, no trailing whitespace, valid local Markdown
 links, executable scripts, synchronized MSRV/oracle/fuzz-tool declarations, and
 identical top-level CI/pre-push entrypoints. It also verifies that the
 integration script still includes the quality and fuzz gates, all three oracle
-version checks, every fuzz target, and that the security workflow remains wired
-to RustSec.
+version checks, every fuzz target, the proof-checked benchmark smoke, and that
+the security workflow remains wired to RustSec.
 
 The ordinary gate deliberately does not enable every `clippy::pedantic` or
 `clippy::nursery` lint. Solver code contains exact numeric conversions,

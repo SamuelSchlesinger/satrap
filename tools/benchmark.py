@@ -11,10 +11,12 @@ import json
 import os
 import platform
 import random
+import re
 import shlex
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 from collections import Counter, defaultdict
 from pathlib import Path
@@ -22,10 +24,17 @@ from typing import IO, Iterable
 
 
 @dataclasses.dataclass(frozen=True)
+class ProofCheckerSpec:
+    command: tuple[str, ...]
+    binary_sha256: str | None
+
+
+@dataclasses.dataclass(frozen=True)
 class SolverSpec:
     name: str
     command: tuple[str, ...]
     binary_sha256: str | None
+    proof_checker: ProofCheckerSpec | None = None
 
 
 @dataclasses.dataclass(frozen=True)
@@ -52,6 +61,35 @@ def parse_arguments() -> argparse.Namespace:
         metavar="NAME=COMMAND",
         help="repeat for each solver; {instance} is optional in COMMAND",
     )
+    parser.add_argument(
+        "--proof-checker",
+        action="append",
+        default=[],
+        metavar="NAME=COMMAND",
+        help=(
+            "bind a checker to a solver whose command contains {proof}; "
+            "COMMAND must contain {instance} and {proof}"
+        ),
+    )
+    parser.add_argument(
+        "--artifacts",
+        type=Path,
+        help=(
+            "new directory for proof artifacts; defaults beside file output, "
+            "or to temporary storage when output is standard output"
+        ),
+    )
+    parser.add_argument(
+        "--proof-timeout",
+        type=float,
+        default=300.0,
+        help="seconds per independent proof check",
+    )
+    parser.add_argument(
+        "--require-unsat-proofs",
+        action="store_true",
+        help="fail the run if any solver reports UNSAT without a valid proof",
+    )
     parser.add_argument("--timeout", type=float, default=60.0, help="seconds per run")
     parser.add_argument("--repeat", type=int, default=1, help="runs per pair")
     parser.add_argument("--seed", type=int, default=1, help="task-order seed")
@@ -65,21 +103,72 @@ def parse_arguments() -> argparse.Namespace:
         parser.error("--timeout must be positive")
     if arguments.repeat <= 0:
         parser.error("--repeat must be positive")
+    if arguments.proof_timeout <= 0:
+        parser.error("--proof-timeout must be positive")
     return arguments
 
 
-def parse_solver(value: str) -> SolverSpec:
+def parse_named_command(value: str, kind: str) -> tuple[str, tuple[str, ...]]:
     name, separator, command_text = value.partition("=")
     if not separator or not name.strip() or not command_text.strip():
-        raise ValueError(f"invalid solver specification {value!r}; expected NAME=COMMAND")
+        raise ValueError(
+            f"invalid {kind} specification {value!r}; expected NAME=COMMAND"
+        )
     command = tuple(shlex.split(command_text))
     if not command:
-        raise ValueError(f"solver {name!r} has an empty command")
+        raise ValueError(f"{kind} {name!r} has an empty command")
+    return name.strip(), command
+
+
+def executable_hash(command: tuple[str, ...]) -> str | None:
     executable = shutil.which(command[0])
     if executable is None and Path(command[0]).is_file():
         executable = str(Path(command[0]).resolve())
-    binary_hash = sha256_path(Path(executable)) if executable else None
-    return SolverSpec(name=name.strip(), command=command, binary_sha256=binary_hash)
+    return sha256_path(Path(executable)) if executable else None
+
+
+def parse_solver(value: str) -> SolverSpec:
+    name, command = parse_named_command(value, "solver")
+    return SolverSpec(
+        name=name,
+        command=command,
+        binary_sha256=executable_hash(command),
+    )
+
+
+def attach_proof_checkers(
+    solvers: list[SolverSpec], values: list[str]
+) -> list[SolverSpec]:
+    checkers: dict[str, ProofCheckerSpec] = {}
+    solver_names = {solver.name for solver in solvers}
+    for value in values:
+        name, command = parse_named_command(value, "proof checker")
+        if name not in solver_names:
+            raise ValueError(f"proof checker names unknown solver {name!r}")
+        if name in checkers:
+            raise ValueError(f"duplicate proof checker for solver {name!r}")
+        if not any("{instance}" in part for part in command):
+            raise ValueError(f"proof checker for {name!r} must contain {{instance}}")
+        if not any("{proof}" in part for part in command):
+            raise ValueError(f"proof checker for {name!r} must contain {{proof}}")
+        checkers[name] = ProofCheckerSpec(command, executable_hash(command))
+
+    result = []
+    for solver in solvers:
+        checker = checkers.get(solver.name)
+        has_proof_path = any("{proof}" in part for part in solver.command)
+        if checker is not None and not has_proof_path:
+            raise ValueError(
+                f"solver {solver.name!r} needs a {{proof}} placeholder "
+                "when a proof checker is configured"
+            )
+        if checker is None and has_proof_path:
+            raise ValueError(
+                f"solver {solver.name!r} has a {{proof}} placeholder "
+                "but no proof checker"
+            )
+        result.append(dataclasses.replace(solver, proof_checker=checker))
+    return result
 
 
 def collect_instances(path: Path) -> list[Path]:
@@ -94,11 +183,166 @@ def collect_instances(path: Path) -> list[Path]:
     return [instance.resolve() for instance in instances]
 
 
-def render_command(spec: SolverSpec, instance: Path) -> list[str]:
-    rendered = [part.replace("{instance}", str(instance)) for part in spec.command]
-    if not any("{instance}" in part for part in spec.command):
+def render_command(
+    command: tuple[str, ...], instance: Path, proof: Path | None = None
+) -> list[str]:
+    if proof is None and any("{proof}" in part for part in command):
+        raise ValueError("command contains {proof}, but no proof path was provided")
+    rendered = []
+    for part in command:
+        part = part.replace("{instance}", str(instance))
+        if proof is not None:
+            part = part.replace("{proof}", str(proof))
+        rendered.append(part)
+    if not any("{instance}" in part for part in command):
         rendered.append(str(instance))
     return rendered
+
+
+def safe_artifact_component(value: str) -> str:
+    readable = re.sub(r"[^A-Za-z0-9_.-]+", "_", value).strip("._")
+    readable = readable[:48] or "artifact"
+    identity = sha256_bytes(value.encode("utf-8"))[:12]
+    return f"{readable}-{identity}"
+
+
+def proof_artifact_path(
+    root: Path,
+    spec: SolverSpec,
+    formula: Formula,
+    run_index: int,
+) -> Path:
+    solver_directory = root / safe_artifact_component(spec.name)
+    solver_directory.mkdir(parents=True, exist_ok=True)
+    instance_name = safe_artifact_component(formula.path.name)
+    path_identity = sha256_bytes(str(formula.path).encode("utf-8"))[:12]
+    return solver_directory / f"{instance_name}-{path_identity}-run-{run_index}.drat"
+
+
+def proof_artifact_metadata(path: Path, retained: bool) -> dict[str, object]:
+    present = path.is_file()
+    return {
+        "path": str(path) if retained else None,
+        "retained": retained,
+        "present": present,
+        "bytes": path.stat().st_size if present else None,
+        "sha256": sha256_path(path) if present else None,
+    }
+
+
+def unchecked_proof_metadata(
+    checker: ProofCheckerSpec,
+    formula: Formula,
+    proof_path: Path,
+    retained: bool,
+) -> dict[str, object]:
+    metadata = proof_artifact_metadata(proof_path, retained)
+    metadata.update(
+        {
+            "checker_command": render_command(
+                checker.command, formula.path, proof_path
+            ),
+            "checker_binary_sha256": checker.binary_sha256,
+            "checker_status": "not-run",
+            "checker_timeout_seconds": None,
+            "checker_wall_seconds": None,
+            "checker_timed_out": False,
+            "checker_exit_code": None,
+            "checker_stdout_sha256": None,
+            "checker_stdout_tail": "",
+            "checker_stderr_tail": "",
+        }
+    )
+    return metadata
+
+
+def validate_unsat_proof(
+    checker: ProofCheckerSpec,
+    formula: Formula,
+    proof_path: Path,
+    timeout: float,
+    retained: bool,
+    environment: dict[str, str],
+) -> tuple[str, dict[str, object]]:
+    command = render_command(checker.command, formula.path, proof_path)
+    before = proof_artifact_metadata(proof_path, retained)
+    if not before["present"]:
+        metadata = unchecked_proof_metadata(
+            checker, formula, proof_path, retained
+        )
+        metadata["checker_status"] = "missing-proof"
+        metadata["checker_timeout_seconds"] = timeout
+        return "invalid: missing proof artifact", metadata
+
+    started = time.perf_counter()
+    try:
+        completed = subprocess.run(
+            command,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            errors="replace",
+            timeout=timeout,
+            check=False,
+            env=environment,
+        )
+        wall_seconds = time.perf_counter() - started
+        stdout = completed.stdout
+        stderr = completed.stderr
+        exit_code: int | None = completed.returncode
+        timed_out = False
+        execution_error = None
+    except subprocess.TimeoutExpired as error:
+        wall_seconds = time.perf_counter() - started
+        stdout = decode_timeout_stream(error.stdout)
+        stderr = decode_timeout_stream(error.stderr)
+        exit_code = None
+        timed_out = True
+        execution_error = None
+    except OSError as error:
+        wall_seconds = time.perf_counter() - started
+        stdout = ""
+        stderr = str(error)
+        exit_code = None
+        timed_out = False
+        execution_error = error
+
+    after = proof_artifact_metadata(proof_path, retained)
+    metadata = after | {
+        "checker_command": command,
+        "checker_binary_sha256": checker.binary_sha256,
+        "checker_status": "completed",
+        "checker_timeout_seconds": timeout,
+        "checker_wall_seconds": wall_seconds,
+        "checker_timed_out": timed_out,
+        "checker_exit_code": exit_code,
+        "checker_stdout_sha256": sha256_bytes(stdout.encode("utf-8")),
+        "checker_stdout_tail": stdout[-2000:],
+        "checker_stderr_tail": stderr[-2000:],
+    }
+
+    if timed_out:
+        metadata["checker_status"] = "timeout"
+        return "invalid: proof checker timed out", metadata
+    if execution_error is not None:
+        metadata["checker_status"] = "execution-error"
+        return f"invalid: could not execute proof checker: {execution_error}", metadata
+    if not after["present"]:
+        metadata["checker_status"] = "artifact-removed"
+        return "invalid: proof checker removed proof artifact", metadata
+    if after["sha256"] != before["sha256"]:
+        metadata["checker_status"] = "artifact-changed"
+        return "invalid: proof checker changed proof artifact", metadata
+    if exit_code != 0:
+        metadata["checker_status"] = "rejected"
+        return f"invalid: proof checker exited with status {exit_code}", metadata
+    if not any(line.strip() == "s VERIFIED" for line in stdout.splitlines()):
+        metadata["checker_status"] = "missing-verdict"
+        return "invalid: proof checker did not report s VERIFIED", metadata
+
+    metadata["checker_status"] = "verified"
+    return "valid", metadata
 
 
 def run_solver(
@@ -110,8 +354,19 @@ def run_solver(
     host: dict[str, str],
     revision: str | None,
     formula: Formula,
+    artifact_root: Path | None = None,
+    retain_artifacts: bool = False,
+    proof_timeout: float = 300.0,
 ) -> dict[str, object]:
-    command = render_command(spec, instance)
+    proof_path = None
+    if spec.proof_checker is not None:
+        if artifact_root is None:
+            raise ValueError("a proof checker requires artifact storage")
+        proof_path = proof_artifact_path(artifact_root, spec, formula, run_index)
+        if proof_path.exists():
+            raise ValueError(f"refusing to overwrite proof artifact: {proof_path}")
+
+    command = render_command(spec.command, instance, proof_path)
     started_at = dt.datetime.now(dt.timezone.utc).isoformat()
     started = time.perf_counter()
     environment = os.environ.copy()
@@ -143,18 +398,45 @@ def run_solver(
         status = "TIMEOUT"
         status_error = None
         timed_out = True
+    except OSError as error:
+        wall_seconds = time.perf_counter() - started
+        stdout = ""
+        stderr = str(error)
+        exit_code = None
+        status = "INVALID"
+        status_error = f"could not execute solver: {error}"
+        timed_out = False
 
+    proof: dict[str, object] | None = None
     if status == "SAT":
         validation = validate_model(formula, stdout)
     elif status == "UNSAT":
-        validation = "unchecked"
+        if spec.proof_checker is None or proof_path is None:
+            validation = "unchecked"
+        else:
+            validation, proof = validate_unsat_proof(
+                spec.proof_checker,
+                formula,
+                proof_path,
+                proof_timeout,
+                retain_artifacts,
+                environment,
+            )
     elif status == "INVALID":
         validation = f"invalid-status: {status_error}"
     else:
         validation = "not-applicable"
 
+    if proof is None and spec.proof_checker is not None and proof_path is not None:
+        proof = unchecked_proof_metadata(
+            spec.proof_checker,
+            formula,
+            proof_path,
+            retain_artifacts,
+        )
+
     return {
-        "schema": 1,
+        "schema": 2,
         "started_at": started_at,
         "solver": spec.name,
         "solver_command": command,
@@ -169,6 +451,7 @@ def run_solver(
         "exit_code": exit_code,
         "status": status,
         "validation": validation,
+        "proof": proof,
         "stdout_sha256": sha256_bytes(stdout.encode("utf-8")),
         "stderr_tail": stderr[-2000:],
         "git_revision": revision,
@@ -359,11 +642,15 @@ def open_output(value: str) -> tuple[IO[str], bool]:
         raise ValueError(f"refusing to overwrite existing output: {path}") from error
 
 
-def summarize(rows: Iterable[dict[str, object]]) -> bool:
+def summarize(
+    rows: Iterable[dict[str, object]],
+    require_unsat_proofs: bool = False,
+) -> bool:
     rows = list(rows)
     counts: dict[str, Counter[str]] = defaultdict(Counter)
     per_instance: dict[str, set[str]] = defaultdict(set)
     failed_validation = False
+    failed_proof = False
     invalid_execution = False
     for row in rows:
         solver = str(row["solver"])
@@ -374,6 +661,14 @@ def summarize(rows: Iterable[dict[str, object]]) -> bool:
         validation = str(row["validation"])
         if status == "SAT" and validation != "valid":
             failed_validation = True
+        if status == "UNSAT" and validation.startswith("invalid:"):
+            failed_proof = True
+        if (
+            status == "UNSAT"
+            and require_unsat_proofs
+            and validation != "valid"
+        ):
+            failed_proof = True
         if status == "INVALID":
             invalid_execution = True
 
@@ -385,21 +680,73 @@ def summarize(rows: Iterable[dict[str, object]]) -> bool:
         print(f"disagreement: {instance}: {sorted(per_instance[instance])}", file=sys.stderr)
     if failed_validation:
         print("one or more SAT models failed validation", file=sys.stderr)
+    if failed_proof:
+        print(
+            "one or more UNSAT results lacked an independently valid proof",
+            file=sys.stderr,
+        )
     if invalid_execution:
         print("one or more solver executions had invalid status or exit behavior", file=sys.stderr)
-    return not disagreements and not failed_validation and not invalid_execution
+    return (
+        not disagreements
+        and not failed_validation
+        and not failed_proof
+        and not invalid_execution
+    )
 
 
 def main() -> int:
     arguments = parse_arguments()
+    temporary_artifacts: tempfile.TemporaryDirectory[str] | None = None
+    created_artifact_root: Path | None = None
     try:
         solvers = [parse_solver(value) for value in arguments.solver]
         if len({solver.name for solver in solvers}) != len(solvers):
             raise ValueError("solver names must be unique")
+        solvers = attach_proof_checkers(solvers, arguments.proof_checker)
         instances = collect_instances(arguments.instances)
         formulas = {instance: parse_formula(instance) for instance in instances}
+        if arguments.output != "-" and Path(arguments.output).exists():
+            raise ValueError(
+                f"refusing to overwrite existing output: {arguments.output}"
+            )
+
+        proof_enabled = any(solver.proof_checker is not None for solver in solvers)
+        if arguments.artifacts is not None and not proof_enabled:
+            raise ValueError("--artifacts requires at least one --proof-checker")
+        if proof_enabled:
+            if arguments.artifacts is not None:
+                artifact_root = arguments.artifacts.resolve()
+                retain_artifacts = True
+            elif arguments.output != "-":
+                artifact_root = Path(f"{arguments.output}.artifacts").resolve()
+                retain_artifacts = True
+            else:
+                temporary_artifacts = tempfile.TemporaryDirectory(
+                    prefix="sat-benchmark-proofs-"
+                )
+                artifact_root = Path(temporary_artifacts.name)
+                retain_artifacts = False
+            if artifact_root.exists() and retain_artifacts:
+                raise ValueError(
+                    f"refusing to overwrite artifact directory: {artifact_root}"
+                )
+            artifact_root.mkdir(parents=True, exist_ok=not retain_artifacts)
+            if retain_artifacts:
+                created_artifact_root = artifact_root
+        else:
+            artifact_root = None
+            retain_artifacts = False
+
         output, should_close = open_output(arguments.output)
     except (OSError, UnicodeError, ValueError) as error:
+        if temporary_artifacts is not None:
+            temporary_artifacts.cleanup()
+        if created_artifact_root is not None:
+            try:
+                created_artifact_root.rmdir()
+            except OSError:
+                pass
         print(f"error: {error}", file=sys.stderr)
         return 2
 
@@ -429,6 +776,9 @@ def main() -> int:
                 host,
                 revision,
                 formulas[instance],
+                artifact_root,
+                retain_artifacts,
+                arguments.proof_timeout,
             )
             rows.append(row)
             output.write(json.dumps(row, sort_keys=True) + "\n")
@@ -436,8 +786,10 @@ def main() -> int:
     finally:
         if should_close:
             output.close()
+        if temporary_artifacts is not None:
+            temporary_artifacts.cleanup()
 
-    return 0 if summarize(rows) else 3
+    return 0 if summarize(rows, arguments.require_unsat_proofs) else 3
 
 
 if __name__ == "__main__":

@@ -22,7 +22,9 @@ revision.
 The checker is kept under the ignored `.cache/proof-checkers` directory. The
 pre-push hook and hosted CI both invoke the same proof gate through
 `scripts/ci.sh`; repository hygiene tests prevent that wiring from being
-silently removed.
+silently removed. They also run the benchmark smoke path in strict proof mode,
+so the runner-to-checker integration cannot silently degrade while the
+standalone proof suite remains green.
 
 ## Mandatory proof suite
 
@@ -61,8 +63,11 @@ python3 tools/proof_smoke.py \
 ## Boundary
 
 This gate establishes that representative SAT proof paths remain accepted by
-an independent checker on every normal push. It does not validate every
-benchmark result, replace longer proof campaigns, or establish SMT proof
+an independent checker on every normal push. `tools/benchmark.py` can retain
+one proof per run, check it independently, and reject every unchecked UNSAT
+result with `--require-unsat-proofs`. Claim-bearing benchmark configurations
+must enable that flag and configure a checker for every participating solver.
+This does not replace longer proof campaigns or establish SMT proof
 production.
 
 In particular, an assumption-only UNSAT query deliberately does not append a

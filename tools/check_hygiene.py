@@ -317,6 +317,7 @@ def check_gate_wiring(errors: list[str]) -> None:
             "scripts/quality.sh",
             "scripts/check-fuzz.sh",
             "scripts/check-proofs.sh",
+            "make smoke",
             "z3 --version",
             "cvc5 --version",
             "bitwuzla --version",
@@ -364,6 +365,16 @@ def check_gate_wiring(errors: list[str]) -> None:
             "--eliminate",
             "--factor",
             "--factor-macro",
+        ),
+        errors,
+    )
+    require_commands(
+        ROOT / "Makefile",
+        (
+            "tools/benchmark.py",
+            "--proof {proof}",
+            "--proof-checker",
+            "--require-unsat-proofs",
         ),
         errors,
     )

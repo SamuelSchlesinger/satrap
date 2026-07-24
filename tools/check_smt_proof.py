@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Independently validate a satrap Boolean, bit-vector, or ground-UF eDRAT certificate."""
+"""Independently validate a satrap Boolean, BV, UF, or finite-array eDRAT certificate."""
 
 from __future__ import annotations
 
@@ -45,21 +45,113 @@ class BitVecExpr:
     bits: tuple[BoolExpr, ...]
 
 
+class OrderedSort:
+    def __lt__(self, other: object) -> bool:
+        if not isinstance(other, OrderedSort):
+            return NotImplemented
+        return sort_order_key(self) < sort_order_key(other)
+
+    def __le__(self, other: object) -> bool:
+        if not isinstance(other, OrderedSort):
+            return NotImplemented
+        return sort_order_key(self) <= sort_order_key(other)
+
+    def __gt__(self, other: object) -> bool:
+        if not isinstance(other, OrderedSort):
+            return NotImplemented
+        return sort_order_key(self) > sort_order_key(other)
+
+    def __ge__(self, other: object) -> bool:
+        if not isinstance(other, OrderedSort):
+            return NotImplemented
+        return sort_order_key(self) >= sort_order_key(other)
+
+
 @dataclass(frozen=True)
-class BitVecSort:
+class BoolSort(OrderedSort):
+    pass
+
+
+@dataclass(frozen=True)
+class BitVecSort(OrderedSort):
     width: int
 
 
-@dataclass(frozen=True, order=True)
-class UninterpretedSort:
+@dataclass(frozen=True)
+class UninterpretedSort(OrderedSort):
     name: str
+
+
+@dataclass(frozen=True)
+class ArraySort(OrderedSort):
+    index: SortExpr
+    element: SortExpr
+
+
+SortExpr: TypeAlias = BoolSort | BitVecSort | UninterpretedSort | ArraySort
+BOOL_SORT = BoolSort()
+
+
+def sort_order_key(sort: OrderedSort) -> tuple[object, ...]:
+    if isinstance(sort, BoolSort):
+        return (0,)
+    if isinstance(sort, BitVecSort):
+        return (1, sort.width)
+    if isinstance(sort, UninterpretedSort):
+        return (2, sort.name)
+    if isinstance(sort, ArraySort):
+        return (3, sort_order_key(sort.index), sort_order_key(sort.element))
+    raise ProofCheckError("unknown proof sort")
+
+
+class OrderedFunction:
+    def __lt__(self, other: object) -> bool:
+        if not isinstance(other, OrderedFunction):
+            return NotImplemented
+        return function_order_key(self) < function_order_key(other)
+
+    def __le__(self, other: object) -> bool:
+        if not isinstance(other, OrderedFunction):
+            return NotImplemented
+        return function_order_key(self) <= function_order_key(other)
+
+    def __gt__(self, other: object) -> bool:
+        if not isinstance(other, OrderedFunction):
+            return NotImplemented
+        return function_order_key(self) > function_order_key(other)
+
+    def __ge__(self, other: object) -> bool:
+        if not isinstance(other, OrderedFunction):
+            return NotImplemented
+        return function_order_key(self) >= function_order_key(other)
+
+
+@dataclass(frozen=True)
+class DeclaredFunctionName(OrderedFunction):
+    name: str
+
+
+@dataclass(frozen=True)
+class ArraySelectFunction(OrderedFunction):
+    array_sort: ArraySort
+
+
+ProofFunction: TypeAlias = DeclaredFunctionName | ArraySelectFunction
+
+
+def function_order_key(function: OrderedFunction) -> tuple[object, ...]:
+    if isinstance(function, DeclaredFunctionName):
+        return (0, function.name)
+    if isinstance(function, ArraySelectFunction):
+        return (1, sort_order_key(function.array_sort))
+    raise ProofCheckError("unknown proof function")
 
 
 @dataclass(frozen=True, order=True)
 class ApplicationExpr:
-    function: str
-    domain: tuple[object, ...]
-    range: object
+    function: ProofFunction
+    domain: tuple[SortExpr, ...]
+    range: SortExpr
     arguments: tuple[object, ...]
 
 
@@ -69,8 +161,6 @@ class UfExpr:
 
 
 TermExpr: TypeAlias = BoolExpr | BitVecExpr | UfExpr
-SortExpr: TypeAlias = str | BitVecSort | UninterpretedSort
-BOOL_SORT = "Bool"
 
 
 class SExprReader:
@@ -288,7 +378,7 @@ def expect_bitvec_term(value: TermExpr, role: str) -> BitVecExpr:
 
 def expect_uf_term(value: TermExpr, role: str) -> UfExpr:
     if not isinstance(value, UfExpr):
-        raise ProofCheckError(f"{role} must have uninterpreted sort")
+        raise ProofCheckError(f"{role} must have an abstract sort")
     return value
 
 
@@ -300,19 +390,19 @@ def term_sort(value: TermExpr) -> SortExpr:
     return BOOL_SORT
 
 
-def uf_sort(value: UfExpr) -> UninterpretedSort:
+def uf_sort(value: UfExpr) -> SortExpr:
     node = value.node
-    if node[0] in {0, 2}:
+    if node[0] in {0, 2, 3, 4, 5}:
         sort = node[1]
     elif node[0] == 1:
         application = node[1]
         if not isinstance(application, ApplicationExpr):
-            raise ProofCheckError("malformed uninterpreted application")
+            raise ProofCheckError("malformed abstract application")
         sort = application.range
     else:
-        raise ProofCheckError("unknown uninterpreted proof term")
-    if not isinstance(sort, UninterpretedSort):
-        raise ProofCheckError("uninterpreted proof term has a lowered result sort")
+        raise ProofCheckError("unknown abstract proof term")
+    if not isinstance(sort, (UninterpretedSort, ArraySort)):
+        raise ProofCheckError("abstract proof term has a lowered result sort")
     return sort
 
 
@@ -770,7 +860,14 @@ class ProofSession:
             logic = atom(arguments[0], "logic")
             if self.logic is not None:
                 raise ProofCheckError("logic has already been set")
-            if logic not in {"QF_BOOL", "QF_BV", "QF_UF", "QF_UFBV"}:
+            if logic not in {
+                "QF_BOOL",
+                "QF_BV",
+                "QF_UF",
+                "QF_UFBV",
+                "QF_ABV",
+                "QF_AUFBV",
+            }:
                 raise ProofCheckError("proof script uses an unsupported logic")
             self.logic = logic
             self._invalidate_query()
@@ -798,7 +895,7 @@ class ProofSession:
             sort_name = atom(arguments[0], "sort name")
             if parse_numeral(arguments[1], "sort arity") != 0:
                 raise ProofCheckError("proof checker accepts only nullary sorts")
-            if self.logic not in {"QF_UF", "QF_UFBV"}:
+            if self.logic not in {"QF_UF", "QF_UFBV", "QF_AUFBV"}:
                 raise ProofCheckError("uninterpreted sort used outside a UF proof logic")
             if sort_name in self.sorts:
                 raise ProofCheckError(f"duplicate sort `{sort_name}`")
@@ -1000,6 +1097,8 @@ class ProofSession:
         if isinstance(values[0], list):
             identifier = items(values[0], "indexed identifier")
             terms = [self.parse_term(argument, locals_) for argument in values[1:]]
+            if identifier and identifier[0] == "as":
+                return self._apply_qualified(identifier, terms)
             return self._apply_indexed(identifier, terms)
         operator = atom(values[0], "term operator")
         arguments = values[1:]
@@ -1083,6 +1182,23 @@ class ProofSession:
                     )
                 )
             return ite(condition, terms[1], expect_bool_term(terms[2], "ite branch"))
+        if operator == "select":
+            exact_arity(terms, 2, operator)
+            array = expect_uf_term(terms[0], "select source")
+            array_sort = uf_sort(array)
+            if not isinstance(array_sort, ArraySort):
+                raise ProofCheckError("select source must have array sort")
+            self._require_declared_sort(terms[1], array_sort.index, "select index")
+            return self._array_select(array, terms[1])
+        if operator == "store":
+            exact_arity(terms, 3, operator)
+            array = expect_uf_term(terms[0], "store source")
+            array_sort = uf_sort(array)
+            if not isinstance(array_sort, ArraySort):
+                raise ProofCheckError("store source must have array sort")
+            self._require_declared_sort(terms[1], array_sort.index, "store index")
+            self._require_declared_sort(terms[2], array_sort.element, "store value")
+            return UfExpr((4, array_sort, array, terms[1], terms[2]))
         if operator == "concat":
             exact_arity(terms, 2, operator)
             return bitvector_concat(
@@ -1173,10 +1289,10 @@ class ProofSession:
         parsed_sort = self.parse_sort(sort)
         if self.logic == "QF_BOOL" and parsed_sort != BOOL_SORT:
             raise ProofCheckError("QF_BOOL proof contains a non-Boolean declaration")
-        if self.logic == "QF_BV" and isinstance(parsed_sort, UninterpretedSort):
-            raise ProofCheckError("QF_BV proof contains an uninterpreted declaration")
-        if self.logic == "QF_UF" and isinstance(parsed_sort, BitVecSort):
-            raise ProofCheckError("QF_UF proof contains a bit-vector declaration")
+        if self.logic in {"QF_BV", "QF_ABV"} and isinstance(parsed_sort, UninterpretedSort):
+            raise ProofCheckError(f"{self.logic} proof contains an uninterpreted declaration")
+        if self.logic == "QF_UF" and isinstance(parsed_sort, (BitVecSort, ArraySort)):
+            raise ProofCheckError("QF_UF proof contains a non-UF declaration")
         if parsed_sort == BOOL_SORT:
             term: TermExpr = (2, 0, name)
         elif isinstance(parsed_sort, BitVecSort):
@@ -1195,7 +1311,7 @@ class ProofSession:
 
     def _declare_function(self, name: str, function: FunctionBinding) -> None:
         self._require_logic()
-        if self.logic not in {"QF_UF", "QF_UFBV"}:
+        if self.logic not in {"QF_UF", "QF_UFBV", "QF_AUFBV"}:
             raise ProofCheckError("uninterpreted function used outside a UF proof logic")
         if name in self.bindings or name in self.functions:
             raise ProofCheckError(f"duplicate term symbol `{name}`")
@@ -1208,7 +1324,7 @@ class ProofSession:
             raise ProofCheckError("declaration used before set-logic")
 
     def _require_bitvectors(self) -> None:
-        if self.logic not in {"QF_BV", "QF_UFBV"}:
+        if self.logic not in {"QF_BV", "QF_UFBV", "QF_ABV", "QF_AUFBV"}:
             raise ProofCheckError("bit-vector term used outside a bit-vector proof logic")
 
     @staticmethod
@@ -1222,7 +1338,7 @@ class ProofSession:
             return (2, 0, name)
         if isinstance(sort, BitVecSort):
             return BitVecExpr(tuple((2, 1, name, bit) for bit in range(sort.width)))
-        if isinstance(sort, UninterpretedSort):
+        if isinstance(sort, (UninterpretedSort, ArraySort)):
             return UfExpr((0, sort, name))
         raise ProofCheckError("defined function parameter has an unsupported sort")
 
@@ -1237,10 +1353,18 @@ class ProofSession:
         if len(values) == 3 and values[0] == "_" and values[1] == "BitVec":
             width = parse_numeral(values[2], "bit-vector width")
             check_bitvector_width(width)
-            if self.logic not in {"QF_BV", "QF_UFBV"}:
+            if self.logic not in {"QF_BV", "QF_UFBV", "QF_ABV", "QF_AUFBV"}:
                 raise ProofCheckError("bit-vector sort used outside a bit-vector proof logic")
             return BitVecSort(width)
-        raise ProofCheckError("proof checker accepts only Bool and BitVec sorts")
+        if len(values) == 3 and values[0] == "Array":
+            if self.logic not in {"QF_ABV", "QF_AUFBV"}:
+                raise ProofCheckError("array sort used outside an array proof logic")
+            index = self.parse_sort(values[1])
+            element = self.parse_sort(values[2])
+            if isinstance(index, ArraySort) or isinstance(element, ArraySort):
+                raise ProofCheckError("nested arrays are outside the proof boundary")
+            return ArraySort(index, element)
+        raise ProofCheckError("proof checker encountered an unsupported sort")
 
     def _apply_indexed(self, identifier: list[SExpr], terms: list[TermExpr]) -> TermExpr:
         if len(identifier) < 3 or identifier[0] != "_":
@@ -1266,6 +1390,42 @@ class ProofSession:
         if operator == "rotate_right":
             return bitvector_rotate(term, index, False)
         raise ProofCheckError(f"unsupported indexed bit-vector operator `{operator}`")
+
+    def _apply_qualified(
+        self,
+        identifier: list[SExpr],
+        terms: list[TermExpr],
+    ) -> TermExpr:
+        exact_arity(identifier, 3, "qualified identifier")
+        if atom(identifier[0], "qualified identifier") != "as":
+            raise ProofCheckError("unsupported qualified identifier")
+        if atom(identifier[1], "qualified operator") != "const":
+            raise ProofCheckError("unsupported qualified operator")
+        exact_arity(terms, 1, "constant array")
+        sort = self.parse_sort(identifier[2])
+        if not isinstance(sort, ArraySort):
+            raise ProofCheckError("qualified const must name an array sort")
+        self._require_declared_sort(terms[0], sort.element, "constant-array value")
+        return UfExpr((3, sort, terms[0]))
+
+    @staticmethod
+    def _array_select(array: UfExpr, index: TermExpr) -> TermExpr:
+        sort = uf_sort(array)
+        if not isinstance(sort, ArraySort):
+            raise ProofCheckError("array select has a non-array source")
+        application = ApplicationExpr(
+            ArraySelectFunction(sort),
+            (sort, sort.index),
+            sort.element,
+            (array, index),
+        )
+        if sort.element == BOOL_SORT:
+            return (2, 2, application, 0)
+        if isinstance(sort.element, BitVecSort):
+            return BitVecExpr(tuple((2, 2, application, bit) for bit in range(sort.element.width)))
+        if isinstance(sort.element, UninterpretedSort):
+            return UfExpr((1, application))
+        raise ProofCheckError("nested array elements are outside the proof boundary")
 
     def _equivalent(self, left: TermExpr, right: TermExpr) -> BoolExpr:
         if term_sort(left) != term_sort(right):
@@ -1298,7 +1458,7 @@ class ProofSession:
             )
             return result
         application = ApplicationExpr(
-            function.name,
+            DeclaredFunctionName(function.name),
             tuple(function.domain),
             function.range,
             tuple(terms),
@@ -1309,7 +1469,7 @@ class ProofSession:
             return BitVecExpr(
                 tuple((2, 2, application, index) for index in range(function.range.width))
             )
-        if isinstance(function.range, UninterpretedSort):
+        if isinstance(function.range, (UninterpretedSort, ArraySort)):
             return UfExpr((1, application))
         raise ProofCheckError(f"function `{name}` has an unsupported result sort")
 
@@ -1357,7 +1517,8 @@ def parse_numeral(value: SExpr, role: str) -> int:
 class UfLowering:
     def __init__(self, roots: tuple[BoolExpr, ...]):
         self.applications: set[ApplicationExpr] = set()
-        self.abstract_terms: dict[UninterpretedSort, set[UfExpr]] = {}
+        self.abstract_terms: dict[SortExpr, set[UfExpr]] = {}
+        self.processed_array_selects: set[ApplicationExpr] = set()
         self.lowered: dict[BoolExpr, BoolExpr] = {}
         self.lowered_abstract: dict[UfExpr, tuple[BoolExpr, ...]] = {}
         for root in roots:
@@ -1366,8 +1527,9 @@ class UfLowering:
     def lower_roots(
         self, roots: tuple[BoolExpr, ...]
     ) -> tuple[tuple[BoolExpr, ...], tuple[BoolExpr, ...]]:
+        self.prepare_theory()
         lowered = tuple(self.lower_bool(root) for root in roots)
-        return lowered, self.congruence_axioms()
+        return lowered, self.theory_axioms()
 
     def _collect_bool(self, expression: BoolExpr) -> None:
         kind = expression[0]
@@ -1413,28 +1575,42 @@ class UfLowering:
             if not isinstance(argument, (tuple, BitVecExpr, UfExpr)):
                 raise ProofCheckError("malformed proof application argument")
             self._collect_term(argument)
-        if isinstance(application.range, UninterpretedSort):
+        if isinstance(application.range, (UninterpretedSort, ArraySort)):
             result = UfExpr((1, application))
-            self.abstract_terms.setdefault(application.range, set()).add(result)
+            self._register_abstract(result)
 
     def _collect_abstract(self, expression: UfExpr) -> None:
         node = expression.node
         if node[0] == 0:
-            sort = uf_sort(expression)
-            self.abstract_terms.setdefault(sort, set()).add(expression)
+            self._register_abstract(expression)
         elif node[0] == 1:
             application = node[1]
             if not isinstance(application, ApplicationExpr):
-                raise ProofCheckError("malformed uninterpreted application")
+                raise ProofCheckError("malformed abstract application")
             self._collect_application(application)
-            sort = uf_sort(expression)
-            self.abstract_terms.setdefault(sort, set()).add(expression)
+            self._register_abstract(expression)
         elif node[0] == 2:
             self._collect_bool(node[2])
             self._collect_abstract(node[3])
             self._collect_abstract(node[4])
+        elif node[0] == 3:
+            self._collect_term(node[2])
+            self._register_abstract(expression)
+        elif node[0] == 4:
+            self._collect_abstract(node[2])
+            self._collect_term(node[3])
+            self._collect_term(node[4])
+            self._register_abstract(expression)
+        elif node[0] == 5:
+            self._collect_abstract(node[3])
+            self._collect_abstract(node[4])
+            self._register_abstract(expression)
         else:
-            raise ProofCheckError("unknown uninterpreted proof term")
+            raise ProofCheckError("unknown abstract proof term")
+
+    def _register_abstract(self, expression: UfExpr) -> None:
+        if expression.node[0] != 2:
+            self.abstract_terms.setdefault(uf_sort(expression), set()).add(expression)
 
     def lower_bool(self, expression: BoolExpr) -> BoolExpr:
         if expression in self.lowered:
@@ -1477,20 +1653,18 @@ class UfLowering:
             return self.lowered_abstract[expression]
         node = expression.node
         sort = uf_sort(expression)
-        if node[0] in {0, 1}:
+        if node[0] in {0, 1, 3, 4, 5}:
             count = len(self.abstract_terms.get(sort, set()))
             if count == 0:
-                raise ProofCheckError("uninterpreted proof sort has no canonical ground terms")
+                raise ProofCheckError("abstract proof sort has no canonical ground terms")
             width = max(1, (count - 1).bit_length())
-            bits = tuple((2, 3, sort.name, expression, index) for index in range(width))
+            bits = tuple((2, 3, sort, expression, index) for index in range(width))
         elif node[0] == 2:
             condition = self.lower_bool(node[2])
             then_bits = self.abstract_bits(node[3])
             else_bits = self.abstract_bits(node[4])
             if len(then_bits) != len(else_bits):
-                raise ProofCheckError(
-                    "uninterpreted ite branches have inconsistent class encodings"
-                )
+                raise ProofCheckError("abstract ite branches have inconsistent class encodings")
             bits = tuple(
                 ite(condition, then_bit, else_bit)
                 for then_bit, else_bit in zip(
@@ -1500,13 +1674,13 @@ class UfLowering:
                 )
             )
         else:
-            raise ProofCheckError("unknown uninterpreted proof term")
+            raise ProofCheckError("unknown abstract proof term")
         self.lowered_abstract[expression] = bits
         return bits
 
     def abstract_equal(self, left: UfExpr, right: UfExpr) -> BoolExpr:
         if uf_sort(left) != uf_sort(right):
-            raise ProofCheckError("uninterpreted equality operands have different sorts")
+            raise ProofCheckError("abstract equality operands have different sorts")
         return junction(
             [
                 iff(left_bit, right_bit)
@@ -1552,9 +1726,202 @@ class UfLowering:
             return BitVecExpr(
                 tuple((2, 2, application, index) for index in range(application.range.width))
             )
-        if isinstance(application.range, UninterpretedSort):
+        if isinstance(application.range, (UninterpretedSort, ArraySort)):
             return UfExpr((1, application))
         raise ProofCheckError("proof application has an unsupported result sort")
+
+    def prepare_theory(self) -> None:
+        for array_sort, left, right in self.array_pairs():
+            witness = self.array_witness(array_sort, left, right)
+            self.array_select_application(left, witness)
+            self.array_select_application(right, witness)
+
+        while True:
+            pending = sorted(
+                application
+                for application in self.applications
+                if isinstance(application.function, ArraySelectFunction)
+                and application not in self.processed_array_selects
+            )
+            if not pending:
+                return
+            for application in pending:
+                self.processed_array_selects.add(application)
+                self.expand_array_select(application)
+
+    def theory_axioms(self) -> tuple[BoolExpr, ...]:
+        application_count = len(self.applications)
+        abstract_term_count = sum(map(len, self.abstract_terms.values()))
+        axioms = {
+            *self.array_semantics_axioms(),
+            *self.array_extensionality_axioms(),
+            *self.congruence_axioms(),
+        }
+        if (
+            len(self.applications) != application_count
+            or sum(map(len, self.abstract_terms.values())) != abstract_term_count
+        ):
+            raise ProofCheckError("array proof theory closure changed after Boolean lowering")
+        return tuple(sorted(axioms))
+
+    def array_pairs(self) -> list[tuple[ArraySort, UfExpr, UfExpr]]:
+        pairs = []
+        for sort in sorted(self.abstract_terms):
+            if not isinstance(sort, ArraySort):
+                continue
+            terms = sorted(self.abstract_terms[sort])
+            for left_index, left in enumerate(terms):
+                for right in terms[left_index + 1 :]:
+                    pairs.append((sort, left, right))
+        return pairs
+
+    def array_witness(
+        self,
+        array_sort: ArraySort,
+        left: UfExpr,
+        right: UfExpr,
+    ) -> TermExpr:
+        index_sort = array_sort.index
+        if index_sort == BOOL_SORT:
+            return (2, 4, array_sort, left, right, 0)
+        if isinstance(index_sort, BitVecSort):
+            return BitVecExpr(
+                tuple((2, 4, array_sort, left, right, index) for index in range(index_sort.width))
+            )
+        if isinstance(index_sort, UninterpretedSort):
+            witness = UfExpr((5, index_sort, array_sort, left, right))
+            self._register_abstract(witness)
+            return witness
+        raise ProofCheckError("nested array indices are outside the proof boundary")
+
+    @staticmethod
+    def value_sort(value: TermExpr) -> SortExpr:
+        return term_sort(value)
+
+    def array_select_application(
+        self,
+        array: UfExpr,
+        index: TermExpr,
+    ) -> ApplicationExpr:
+        array_sort = uf_sort(array)
+        if not isinstance(array_sort, ArraySort):
+            raise ProofCheckError("array select has a non-array source")
+        if self.value_sort(index) != array_sort.index:
+            raise ProofCheckError("array select index has an inconsistent proof sort")
+        if isinstance(array_sort.element, ArraySort):
+            raise ProofCheckError("nested array elements are outside the proof boundary")
+        application = ApplicationExpr(
+            ArraySelectFunction(array_sort),
+            (array_sort, array_sort.index),
+            array_sort.element,
+            (array, index),
+        )
+        self._collect_application(application)
+        return application
+
+    def expand_array_select(self, application: ApplicationExpr) -> None:
+        if not isinstance(application.function, ArraySelectFunction):
+            return
+        if len(application.arguments) != 2 or not isinstance(application.arguments[0], UfExpr):
+            raise ProofCheckError("canonical array select has malformed arguments")
+        array = application.arguments[0]
+        index = application.arguments[1]
+        if not isinstance(index, (tuple, BitVecExpr, UfExpr)):
+            raise ProofCheckError("canonical array select has a malformed index")
+        node = array.node
+        if node[0] == 4:
+            self.array_select_application(node[2], index)
+        elif node[0] == 2:
+            self.array_select_application(node[3], index)
+            self.array_select_application(node[4], index)
+
+    def value_ite(
+        self,
+        condition: BoolExpr,
+        then_value: TermExpr,
+        else_value: TermExpr,
+    ) -> TermExpr:
+        if self.value_sort(then_value) != self.value_sort(else_value):
+            raise ProofCheckError("proof ite values have inconsistent sorts")
+        condition = self.lower_bool(condition)
+        if isinstance(then_value, BitVecExpr) and isinstance(else_value, BitVecExpr):
+            return BitVecExpr(
+                tuple(
+                    ite(
+                        condition,
+                        self.lower_bool(then_bit),
+                        self.lower_bool(else_bit),
+                    )
+                    for then_bit, else_bit in zip(
+                        then_value.bits,
+                        else_value.bits,
+                        strict=True,
+                    )
+                )
+            )
+        if isinstance(then_value, UfExpr) and isinstance(else_value, UfExpr):
+            return UfExpr(
+                (
+                    2,
+                    uf_sort(then_value),
+                    condition,
+                    then_value,
+                    else_value,
+                )
+            )
+        if isinstance(then_value, tuple) and isinstance(else_value, tuple):
+            return ite(
+                condition,
+                self.lower_bool(then_value),
+                self.lower_bool(else_value),
+            )
+        raise ProofCheckError("proof ite values have inconsistent representations")
+
+    def array_semantics_axioms(self) -> set[BoolExpr]:
+        axioms = set()
+        applications = sorted(
+            application
+            for application in self.applications
+            if isinstance(application.function, ArraySelectFunction)
+        )
+        for application in applications:
+            if len(application.arguments) != 2 or not isinstance(application.arguments[0], UfExpr):
+                raise ProofCheckError("canonical array select has malformed arguments")
+            array = application.arguments[0]
+            index = application.arguments[1]
+            if not isinstance(index, (tuple, BitVecExpr, UfExpr)):
+                raise ProofCheckError("canonical array select has a malformed index")
+            node = array.node
+            semantic_value: TermExpr | None = None
+            if node[0] == 3:
+                semantic_value = node[2]
+            elif node[0] == 4:
+                fallback = self.application_result(self.array_select_application(node[2], index))
+                same_index = self.value_equal(node[3], index)
+                semantic_value = self.value_ite(same_index, node[4], fallback)
+            elif node[0] == 2:
+                then_value = self.application_result(self.array_select_application(node[3], index))
+                else_value = self.application_result(self.array_select_application(node[4], index))
+                semantic_value = self.value_ite(node[2], then_value, else_value)
+            if semantic_value is not None:
+                axioms.add(
+                    self.value_equal(
+                        self.application_result(application),
+                        semantic_value,
+                    )
+                )
+        return axioms
+
+    def array_extensionality_axioms(self) -> set[BoolExpr]:
+        axioms = set()
+        for array_sort, left, right in self.array_pairs():
+            witness = self.array_witness(array_sort, left, right)
+            left_value = self.application_result(self.array_select_application(left, witness))
+            right_value = self.application_result(self.array_select_application(right, witness))
+            arrays_equal = self.abstract_equal(left, right)
+            values_differ = negate(self.value_equal(left_value, right_value))
+            axioms.add(junction([arrays_equal, values_differ], False))
+        return axioms
 
     def congruence_axioms(self) -> tuple[BoolExpr, ...]:
         applications = sorted(self.applications)
@@ -1734,7 +2101,14 @@ def parse_certificate(text: str) -> Certificate:
     if atom(fields.get(":version", []), "proof version") != "1":
         raise ProofCheckError("unsupported satrap-edrat proof version")
     logic = atom(fields.get(":logic", []), "proof logic")
-    if logic not in {"QF_BOOL", "QF_BV", "QF_UF", "QF_UFBV"}:
+    if logic not in {
+        "QF_BOOL",
+        "QF_BV",
+        "QF_UF",
+        "QF_UFBV",
+        "QF_ABV",
+        "QF_AUFBV",
+    }:
         raise ProofCheckError(f"satrap-edrat checker does not accept logic `{logic}`")
     variable_count = parse_numeral(fields.get(":variables", []), "proof variable count")
     premises = []
@@ -1750,7 +2124,7 @@ def parse_certificate(text: str) -> Certificate:
         kind = atom(parts[0], "proof clause origin")
         allowed_kinds = (
             {"formula", "encoding", "theory"}
-            if logic in {"QF_UF", "QF_UFBV"}
+            if logic in {"QF_UF", "QF_UFBV", "QF_ABV", "QF_AUFBV"}
             else {"formula", "encoding"}
         )
         if kind not in allowed_kinds:
@@ -1784,7 +2158,7 @@ def validate_encoding(script: str, proof: str) -> Certificate:
     if len(expected_roots) != 1:
         raise ProofCheckError("matching source queries have different Boolean meanings")
     raw_roots = next(iter(expected_roots))
-    if certificate.logic in {"QF_UF", "QF_UFBV"}:
+    if certificate.logic in {"QF_UF", "QF_UFBV", "QF_ABV", "QF_AUFBV"}:
         roots, theory_axioms = UfLowering(raw_roots).lower_roots(raw_roots)
     else:
         roots = raw_roots

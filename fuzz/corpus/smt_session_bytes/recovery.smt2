@@ -1,0 +1,8 @@
+(set-logic QF_BOOL)
+(declare-const p Bool)
+(assert p)
+(assert (and (not p) #b012))
+(check-sat)
+)
+(check-sat)
+(exit)

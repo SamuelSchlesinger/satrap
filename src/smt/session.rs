@@ -2364,8 +2364,18 @@ pub fn run<R: BufRead, W: Write>(input: R, mut output: W) -> Result<(), SessionI
     let mut session = Session::new();
     let mut channels = OutputChannels::new(&mut output);
     loop {
-        let Some(command) = reader.next().map_err(SessionIoError::parse)? else {
-            return Ok(());
+        let command = match reader.next() {
+            Ok(Some(command)) => command,
+            Ok(None) => return Ok(()),
+            Err(error) if error.is_recoverable() => {
+                let response = CommandOutput::error(&error.to_string());
+                channels.write_regular(
+                    session.regular_output_channel(),
+                    response.response.as_deref().expect("errors have responses"),
+                )?;
+                continue;
+            }
+            Err(error) => return Err(SessionIoError::parse(error)),
         };
         let previous_regular = session.regular_output_channel().to_owned();
         let previous_diagnostic = session.diagnostic_output_channel().to_owned();

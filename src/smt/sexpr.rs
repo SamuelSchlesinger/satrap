@@ -91,6 +91,7 @@ pub(crate) struct ParseError {
     line: usize,
     column: usize,
     message: String,
+    recoverable: bool,
 }
 
 impl ParseError {
@@ -99,7 +100,21 @@ impl ParseError {
             line,
             column,
             message: message.into(),
+            recoverable: true,
         }
+    }
+
+    fn input(line: usize, column: usize, message: impl Into<String>) -> Self {
+        Self {
+            line,
+            column,
+            message: message.into(),
+            recoverable: false,
+        }
+    }
+
+    pub(crate) fn is_recoverable(&self) -> bool {
+        self.recoverable
     }
 }
 
@@ -120,6 +135,18 @@ pub(crate) struct Reader<R> {
     lookahead: Option<u8>,
     line: usize,
     column: usize,
+    open_lists: usize,
+    // Recovery is deferred until `next` so the caller can flush the error
+    // response before waiting for the rest of an interactive command.
+    recovery: Option<Recovery>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Recovery {
+    List,
+    String,
+    QuotedSymbol,
+    UnexpectedClose,
 }
 
 impl<R: BufRead> Reader<R> {
@@ -129,15 +156,26 @@ impl<R: BufRead> Reader<R> {
             lookahead: None,
             line: 1,
             column: 1,
+            open_lists: 0,
+            recovery: None,
         }
     }
 
     pub(crate) fn next(&mut self) -> Result<Option<SExpr>, ParseError> {
+        self.recover_pending()?;
         self.skip_trivia()?;
         if self.peek()?.is_none() {
             return Ok(None);
         }
-        self.parse_expr(0).map(Some)
+        match self.parse_expr(0) {
+            Ok(expression) => Ok(Some(expression)),
+            Err(error) => {
+                if error.is_recoverable() && self.recovery.is_none() && self.open_lists > 0 {
+                    self.recovery = Some(Recovery::List);
+                }
+                Err(error)
+            }
+        }
     }
 
     fn parse_expr(&mut self, depth: usize) -> Result<SExpr, ParseError> {
@@ -147,12 +185,14 @@ impl<R: BufRead> Reader<R> {
         match self.peek()? {
             Some(b'(') => {
                 self.bump()?;
+                self.open_lists += 1;
                 let mut items = Vec::new();
                 loop {
                     self.skip_trivia()?;
                     match self.peek()? {
                         Some(b')') => {
                             self.bump()?;
+                            self.open_lists -= 1;
                             return Ok(SExpr::List(items));
                         }
                         None => return Err(self.error("unterminated list")),
@@ -160,7 +200,10 @@ impl<R: BufRead> Reader<R> {
                     }
                 }
             }
-            Some(b')') => Err(self.error("unexpected `)`")),
+            Some(b')') => {
+                self.recovery = Some(Recovery::UnexpectedClose);
+                Err(self.error("unexpected `)`"))
+            }
             Some(b'"') => self.parse_string(),
             Some(b'|') => self.parse_quoted_symbol(),
             Some(_) => self.parse_atom(),
@@ -187,8 +230,14 @@ impl<R: BufRead> Reader<R> {
                     }
                 }
                 Some(byte) if is_printable_or_whitespace(byte) => bytes.push(byte),
-                Some(_) => return Err(self.error("invalid character in string literal")),
-                None => return Err(self.error("unterminated string literal")),
+                Some(_) => {
+                    self.recovery = Some(Recovery::String);
+                    return Err(self.error("invalid character in string literal"));
+                }
+                None => {
+                    self.recovery = Some(Recovery::String);
+                    return Err(self.error("unterminated string literal"));
+                }
             }
         }
     }
@@ -207,11 +256,18 @@ impl<R: BufRead> Reader<R> {
                     }));
                 }
                 Some(b'\\') => {
+                    self.recovery = Some(Recovery::QuotedSymbol);
                     return Err(self.error("backslash is not allowed in a quoted symbol"));
                 }
                 Some(byte) if is_printable_or_whitespace(byte) => bytes.push(byte),
-                Some(_) => return Err(self.error("invalid character in quoted symbol")),
-                None => return Err(self.error("unterminated quoted symbol")),
+                Some(_) => {
+                    self.recovery = Some(Recovery::QuotedSymbol);
+                    return Err(self.error("invalid character in quoted symbol"));
+                }
+                None => {
+                    self.recovery = Some(Recovery::QuotedSymbol);
+                    return Err(self.error("unterminated quoted symbol"));
+                }
             }
         }
     }
@@ -277,7 +333,7 @@ impl<R: BufRead> Reader<R> {
             let buffer = match self.input.fill_buf() {
                 Ok(buffer) => buffer,
                 Err(error) => {
-                    return Err(ParseError::new(
+                    return Err(ParseError::input(
                         self.line,
                         self.column,
                         format!("input error: {error}"),
@@ -306,6 +362,68 @@ impl<R: BufRead> Reader<R> {
 
     fn error(&self, message: impl Into<String>) -> ParseError {
         ParseError::new(self.line, self.column, message)
+    }
+
+    fn recover_pending(&mut self) -> Result<(), ParseError> {
+        let Some(recovery) = self.recovery.take() else {
+            return Ok(());
+        };
+        match recovery {
+            Recovery::String => self.skip_string_remainder()?,
+            Recovery::QuotedSymbol => self.skip_quoted_symbol_remainder()?,
+            Recovery::UnexpectedClose => {
+                self.bump()?;
+            }
+            Recovery::List => {}
+        }
+        self.skip_open_lists()
+    }
+
+    fn skip_string_remainder(&mut self) -> Result<(), ParseError> {
+        while let Some(byte) = self.bump()? {
+            if byte != b'"' {
+                continue;
+            }
+            if self.peek()? == Some(b'"') {
+                self.bump()?;
+            } else {
+                break;
+            }
+        }
+        Ok(())
+    }
+
+    fn skip_quoted_symbol_remainder(&mut self) -> Result<(), ParseError> {
+        while let Some(byte) = self.bump()? {
+            if byte == b'|' {
+                break;
+            }
+        }
+        Ok(())
+    }
+
+    fn skip_open_lists(&mut self) -> Result<(), ParseError> {
+        while self.open_lists > 0 {
+            let Some(byte) = self.bump()? else {
+                self.open_lists = 0;
+                break;
+            };
+            match byte {
+                b'(' => self.open_lists += 1,
+                b')' => self.open_lists -= 1,
+                b'"' => self.skip_string_remainder()?,
+                b'|' => self.skip_quoted_symbol_remainder()?,
+                b';' => {
+                    while let Some(byte) = self.bump()? {
+                        if byte == b'\n' {
+                            break;
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        Ok(())
     }
 }
 
@@ -461,6 +579,80 @@ mod tests {
                 .to_string()
                 .contains("unterminated")
         );
+        assert_eq!(reader.next().unwrap(), None);
+    }
+
+    #[test]
+    fn recovers_after_a_malformed_nested_token() {
+        let mut reader = Reader::new(Cursor::new(
+            b"(assert (and true #b012 (or false true))) (echo \"recovered\")",
+        ));
+        assert!(
+            reader
+                .next()
+                .unwrap_err()
+                .to_string()
+                .contains("invalid SMT-LIB token `#b012`")
+        );
+        let Some(SExpr::List(echo)) = reader.next().unwrap() else {
+            panic!("expected the command after the malformed expression");
+        };
+        assert_eq!(echo[0].word(), Some("echo"));
+        assert_eq!(echo[1].string(), Some("recovered"));
+        assert_eq!(reader.next().unwrap(), None);
+    }
+
+    #[test]
+    fn recovery_respects_strings_comments_and_quoted_symbols() {
+        let input = b"(assert (= |bad\\name| (f \")\" ; ignored )\n |(|))) (exit)";
+        let mut reader = Reader::new(Cursor::new(input));
+        assert!(
+            reader
+                .next()
+                .unwrap_err()
+                .to_string()
+                .contains("backslash is not allowed")
+        );
+        let Some(SExpr::List(exit)) = reader.next().unwrap() else {
+            panic!("expected exit after malformed quoted symbol");
+        };
+        assert_eq!(exit[0].word(), Some("exit"));
+        assert_eq!(reader.next().unwrap(), None);
+    }
+
+    #[test]
+    fn recovers_from_inside_an_invalid_string() {
+        let mut input = b"(echo \"bad".to_vec();
+        input.push(0);
+        input.extend_from_slice(b"tail\") (exit)");
+        let mut reader = Reader::new(Cursor::new(input));
+        assert!(
+            reader
+                .next()
+                .unwrap_err()
+                .to_string()
+                .contains("invalid character in string literal")
+        );
+        let Some(SExpr::List(exit)) = reader.next().unwrap() else {
+            panic!("expected exit after invalid string");
+        };
+        assert_eq!(exit[0].word(), Some("exit"));
+    }
+
+    #[test]
+    fn consumes_an_unexpected_top_level_close_before_continuing() {
+        let mut reader = Reader::new(Cursor::new(b") (exit)"));
+        assert!(
+            reader
+                .next()
+                .unwrap_err()
+                .to_string()
+                .contains("unexpected")
+        );
+        let Some(SExpr::List(exit)) = reader.next().unwrap() else {
+            panic!("expected exit after unexpected close");
+        };
+        assert_eq!(exit[0].word(), Some("exit"));
     }
 
     #[test]

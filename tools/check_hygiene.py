@@ -199,6 +199,11 @@ def check_gate_wiring(errors: list[str]) -> None:
         errors,
     )
     require_commands(
+        ROOT / "scripts/quality.sh",
+        ("shellcheck", "actionlint", "tools/check_hygiene.py"),
+        errors,
+    )
+    require_commands(
         ROOT / ".github/workflows/security.yml",
         ("rustsec/audit-check@v2.0.0",),
         errors,

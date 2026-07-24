@@ -5,6 +5,13 @@ set -eu
 repo_root=$(git rev-parse --show-toplevel)
 cd "$repo_root"
 
+for tool in shellcheck actionlint; do
+    if ! command -v "$tool" >/dev/null 2>&1; then
+        echo "$tool is required by the quality gate" >&2
+        exit 1
+    fi
+done
+
 # Keep the manifest, lockfile, code, documentation, and repository policy in
 # agreement. Tests and optimized builds belong to scripts/ci.sh.
 cargo metadata --locked --no-deps --format-version 1 >/dev/null
@@ -16,4 +23,6 @@ RUSTDOCFLAGS="-D warnings" cargo doc \
     --locked \
     --no-deps
 sh -n scripts/*.sh .githooks/*
+shellcheck scripts/*.sh .githooks/*
+actionlint .github/workflows/*.yml
 "${PYTHON:-python3}" tools/check_hygiene.py

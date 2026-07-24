@@ -73,6 +73,35 @@ class HygieneChecksTests(unittest.TestCase):
                 ],
             )
 
+    def test_gate_wiring_detects_a_disconnected_quality_gate(self) -> None:
+        directory, root = self.temporary_root()
+        files = {
+            ".githooks/pre-commit": "scripts/check-fast.sh\n",
+            ".githooks/pre-push": (
+                "scripts/ci.sh\nscripts/check-msrv.sh\nscripts/check-security.sh\n"
+            ),
+            ".github/workflows/ci.yml": "scripts/ci.sh\nscripts/check-msrv.sh\n",
+            ".github/workflows/security.yml": "rustsec/audit-check@v2.0.0\n",
+            "scripts/ci.sh": "scripts/quality.sh\n",
+            "scripts/quality.sh": "shellcheck\nactionlint\ntools/check_hygiene.py\n",
+        }
+        with directory, patch.object(check_hygiene, "ROOT", root):
+            for relative, contents in files.items():
+                path = root / relative
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(contents, encoding="utf-8")
+
+            errors: list[str] = []
+            check_hygiene.check_gate_wiring(errors)
+            self.assertEqual(errors, [])
+
+            (root / "scripts/ci.sh").write_text("# disconnected\n", encoding="utf-8")
+            check_hygiene.check_gate_wiring(errors)
+            self.assertEqual(
+                errors,
+                ["scripts/ci.sh: must invoke scripts/quality.sh"],
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

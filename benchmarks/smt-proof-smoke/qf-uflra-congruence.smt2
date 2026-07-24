@@ -1,0 +1,8 @@
+(set-option :produce-proofs true)
+(set-logic QF_UFLRA)
+(declare-const x Real)
+(declare-fun f (Real) Real)
+(assert (= x 0.0))
+(assert (> (f x) (f 0.0)))
+(check-sat)
+(get-proof)

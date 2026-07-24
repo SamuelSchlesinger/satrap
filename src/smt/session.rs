@@ -2588,10 +2588,10 @@ mod tests {
     }
 
     #[test]
-    fn proof_mode_rejects_uncertified_theory_logics() {
+    fn proof_mode_rejects_unimplemented_logics_without_mutating_the_session() {
         let output = execute(
             "(set-option :produce-proofs true)
-             (set-logic QF_UFLIA)
+             (set-logic QF_NIA)
              (set-logic QF_BOOL)
              (check-sat)
              (get-proof)",
@@ -3288,6 +3288,110 @@ mod tests {
              (set-logic QF_LIA)
              (declare-const unused Int)
              (define-const unused-offset Int (+ (* 7 unused) 11))
+             {query}"
+        ));
+        assert_eq!(baseline, shifted);
+    }
+
+    #[test]
+    fn qf_ufidl_proofs_combine_congruence_with_exact_integer_arithmetic() {
+        let output = execute(
+            "(set-option :produce-proofs true)
+             (set-logic QF_UFIDL)
+             (declare-const x Int)
+             (declare-fun f (Int) Int)
+             (assert (= x 0))
+             (assert (= (f x) 0))
+             (assert (= (f 0) 1))
+             (check-sat)
+             (get-proof)",
+        );
+        assert!(output.starts_with("unsat\n(satrap-edrat :version 1 :logic QF_UFIDL"));
+        assert!(output.contains("(theory "));
+        assert!(output.ends_with("0\n\")\n"));
+    }
+
+    #[test]
+    fn qf_uflia_proofs_combine_congruence_with_cooper_elimination() {
+        let output = execute(
+            "(set-option :produce-proofs true)
+             (set-logic QF_UFLIA)
+             (declare-const x Int)
+             (declare-const y Int)
+             (declare-fun f (Int) Int)
+             (assert (= x 0))
+             (assert (= (f x) (* 2 y)))
+             (assert (= (f 0) 1))
+             (check-sat)
+             (get-proof)",
+        );
+        assert!(output.starts_with("unsat\n(satrap-edrat :version 1 :logic QF_UFLIA"));
+        assert!(output.contains("(theory "));
+        assert!(output.ends_with("0\n\")\n"));
+    }
+
+    #[test]
+    fn qf_uflra_proofs_combine_congruence_with_fourier_motzkin() {
+        let output = execute(
+            "(set-option :produce-proofs true)
+             (set-logic QF_UFLRA)
+             (declare-const x Real)
+             (declare-fun f (Real) Real)
+             (assert (= x 0.0))
+             (assert (> (f x) (f 0.0)))
+             (check-sat)
+             (get-proof)",
+        );
+        assert!(output.starts_with("unsat\n(satrap-edrat :version 1 :logic QF_UFLRA"));
+        assert!(output.contains("(theory "));
+        assert!(output.ends_with("0\n\")\n"));
+    }
+
+    #[test]
+    fn qf_auflia_proofs_combine_extensional_arrays_uf_and_integer_arithmetic() {
+        let output = execute(
+            "(set-option :produce-proofs true)
+             (set-logic QF_AUFLIA)
+             (declare-const a (Array Int Int))
+             (declare-const i Int)
+             (declare-fun observe ((Array Int Int)) Int)
+             (assert
+               (distinct
+                 (observe (store a i (select a i)))
+                 (observe a)))
+             (check-sat)
+             (get-proof)",
+        );
+        assert!(
+            output.starts_with("unsat\n(satrap-edrat :version 1 :logic QF_AUFLIA"),
+            "unexpected QF_AUFLIA proof output:\n{output}"
+        );
+        assert!(output.contains("(theory "));
+        assert!(output.ends_with("0\n\")\n"));
+    }
+
+    #[test]
+    fn arithmetic_combination_proofs_ignore_unrelated_allocation_history() {
+        let query = "
+             (declare-const x Int)
+             (declare-const y Int)
+             (declare-fun f (Int) Int)
+             (assert (= x 0))
+             (assert (= (f x) (* 2 y)))
+             (assert (= (f 0) 1))
+             (check-sat)
+             (get-proof)";
+        let baseline = execute(&format!(
+            "(set-option :produce-proofs true)
+             (set-logic QF_UFLIA)
+             {query}"
+        ));
+        let shifted = execute(&format!(
+            "(set-option :produce-proofs true)
+             (set-logic QF_UFLIA)
+             (declare-const unused Int)
+             (declare-fun unused-function (Int) Int)
+             (define-const unused-application Int (unused-function unused))
              {query}"
         ));
         assert_eq!(baseline, shifted);

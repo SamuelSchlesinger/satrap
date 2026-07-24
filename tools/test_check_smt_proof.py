@@ -410,6 +410,20 @@ class SmtProofCheckerTests(unittest.TestCase):
         """
         self.assertFalse(combined_integer_encoding_is_satisfiable(script))
 
+    def test_mixed_lowering_preserves_distinct_integer_argument_models(self):
+        script = """
+        (set-option :produce-proofs true)
+        (set-logic QF_UFLIA)
+        (declare-const x Int)
+        (declare-fun f (Int) Int)
+        (assert (= x 1))
+        (assert (= (f x) 0))
+        (assert (= (f 0) 1))
+        (check-sat)
+        (get-proof)
+        """
+        self.assertTrue(combined_integer_encoding_is_satisfiable(script))
+
     def test_mixed_lowering_supports_integer_array_witnesses(self):
         script = """
         (set-option :produce-proofs true)

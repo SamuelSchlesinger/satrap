@@ -219,6 +219,46 @@ class HygieneChecksTests(unittest.TestCase):
                 ],
             )
 
+    def test_proof_logic_coverage_detects_checker_drift(self) -> None:
+        directory, root = self.temporary_root()
+        with directory, patch.object(check_hygiene, "ROOT", root):
+            rust = root / "src/smt/proof.rs"
+            checker = root / "tools/check_smt_proof.py"
+            smoke = root / "benchmarks/smt-proof-smoke"
+            rust.parent.mkdir(parents=True)
+            checker.parent.mkdir(parents=True)
+            smoke.mkdir(parents=True)
+            rust.write_text(
+                "fn from_name(name: &str) { match name {\n"
+                '  "QF_BOOL" => Some(Self::Bool),\n'
+                '  "QF_UF" => Some(Self::Uf),\n'
+                "  _ => None,\n"
+                "} }\n",
+                encoding="utf-8",
+            )
+            checker.write_text(
+                'BASE_PROOF_LOGICS = frozenset({"QF_BOOL"})\n'
+                "COMBINATION_PROOF_LOGICS = frozenset({})\n"
+                "SESSION_PROOF_LOGICS = BASE_PROOF_LOGICS | COMBINATION_PROOF_LOGICS\n"
+                "CERTIFIED_PROOF_LOGICS = SESSION_PROOF_LOGICS\n",
+                encoding="utf-8",
+            )
+            (smoke / "qf-bool.smt2").write_text(
+                "(set-logic QF_BOOL)\n",
+                encoding="utf-8",
+            )
+            (smoke / "qf-uf.smt2").write_text(
+                "(set-logic QF_UF)\n",
+                encoding="utf-8",
+            )
+
+            errors: list[str] = []
+            check_hygiene.check_proof_logic_coverage(errors)
+            self.assertEqual(
+                errors,
+                ["proof logic declarations disagree: Rust-only=QF_UF"],
+            )
+
     def test_audit_version_check_detects_ci_drift(self) -> None:
         directory, root = self.temporary_root()
         with directory, patch.object(check_hygiene, "ROOT", root):

@@ -49,6 +49,10 @@ REQUIRED_QUALITY_ASSETS = (
     Path("benchmarks/smt-proof-smoke/qf-lra-linear.smt2"),
     Path("benchmarks/smt-proof-smoke/qf-rdl-rational.smt2"),
     Path("benchmarks/smt-proof-smoke/qf-rdl-strict.smt2"),
+    Path("benchmarks/smt-proof-smoke/qf-ufidl-congruence.smt2"),
+    Path("benchmarks/smt-proof-smoke/qf-uflia-congruence.smt2"),
+    Path("benchmarks/smt-proof-smoke/qf-uflra-congruence.smt2"),
+    Path("benchmarks/smt-proof-smoke/qf-auflia-arrays.smt2"),
 )
 
 
@@ -365,6 +369,65 @@ def check_integer_proof_limits(errors: list[str]) -> None:
             errors.append(f"{name} declarations disagree: {rendered}")
 
 
+def check_proof_logic_coverage(errors: list[str]) -> None:
+    rust_path = ROOT / "src/smt/proof.rs"
+    checker_path = ROOT / "tools/check_smt_proof.py"
+    rust = read_text(rust_path, errors)
+    checker = read_text(checker_path, errors)
+    if rust is None or checker is None:
+        return
+
+    rust_match = re.search(
+        r"fn from_name\(name: &str\).*?match name \{(.*?)\n\s*_ => None,",
+        rust,
+        flags=re.DOTALL,
+    )
+    if rust_match is None:
+        errors.append("src/smt/proof.rs: proof logic declarations not found")
+        return
+    rust_logics = set(re.findall(r'"(QF_[A-Z0-9]+)"\s*=>\s*Some', rust_match.group(1)))
+
+    checker_logics: set[str] = set()
+    for declaration in ("BASE_PROOF_LOGICS", "COMBINATION_PROOF_LOGICS"):
+        match = re.search(
+            rf"^{declaration} = frozenset\(\s*\{{(.*?)\}}\s*\)",
+            checker,
+            flags=re.DOTALL | re.MULTILINE,
+        )
+        if match is None:
+            errors.append(f"tools/check_smt_proof.py: {declaration} declaration not found")
+            continue
+        checker_logics.update(re.findall(r'"(QF_[A-Z0-9]+)"', match.group(1)))
+    if not re.search(
+        r"^CERTIFIED_PROOF_LOGICS = SESSION_PROOF_LOGICS$",
+        checker,
+        flags=re.MULTILINE,
+    ):
+        errors.append(
+            "tools/check_smt_proof.py: certified proof logics must match session proof logics"
+        )
+
+    if rust_logics != checker_logics:
+        details = []
+        if rust_logics - checker_logics:
+            details.append(f"Rust-only={','.join(sorted(rust_logics - checker_logics))}")
+        if checker_logics - rust_logics:
+            details.append(f"checker-only={','.join(sorted(checker_logics - rust_logics))}")
+        errors.append(f"proof logic declarations disagree: {'; '.join(details)}")
+
+    smoke_logics = set()
+    for path in sorted((ROOT / "benchmarks/smt-proof-smoke").glob("*.smt2")):
+        text = read_text(path, errors)
+        if text is None:
+            continue
+        match = re.search(r"\(set-logic\s+(QF_[A-Z0-9]+)\)", text)
+        if match is not None:
+            smoke_logics.add(match.group(1))
+    missing_smoke = rust_logics - smoke_logics
+    if missing_smoke:
+        errors.append(f"proof smoke corpus missing logic(s): {','.join(sorted(missing_smoke))}")
+
+
 def require_commands(path: Path, commands: tuple[str, ...], errors: list[str]) -> None:
     text = read_text(path, errors)
     if text is None:
@@ -525,6 +588,7 @@ def main() -> int:
     check_python_tool_versions(errors)
     check_proof_checker_revision(errors)
     check_integer_proof_limits(errors)
+    check_proof_logic_coverage(errors)
     check_required_quality_assets(errors)
     check_gate_wiring(errors)
     check_executable_scripts(errors)

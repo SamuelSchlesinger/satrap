@@ -77,6 +77,10 @@ pub(crate) enum ProofLogic {
     Lia,
     Rdl,
     Lra,
+    UfIdl,
+    UfLia,
+    UfLra,
+    AufLia,
 }
 
 impl ProofLogic {
@@ -92,6 +96,10 @@ impl ProofLogic {
             "QF_LIA" => Some(Self::Lia),
             "QF_RDL" => Some(Self::Rdl),
             "QF_LRA" => Some(Self::Lra),
+            "QF_UFIDL" => Some(Self::UfIdl),
+            "QF_UFLIA" => Some(Self::UfLia),
+            "QF_UFLRA" => Some(Self::UfLra),
+            "QF_AUFLIA" => Some(Self::AufLia),
             _ => None,
         }
     }
@@ -108,6 +116,10 @@ impl ProofLogic {
             Self::Lia => "QF_LIA",
             Self::Rdl => "QF_RDL",
             Self::Lra => "QF_LRA",
+            Self::UfIdl => "QF_UFIDL",
+            Self::UfLia => "QF_UFLIA",
+            Self::UfLra => "QF_UFLRA",
+            Self::AufLia => "QF_AUFLIA",
         }
     }
 
@@ -122,6 +134,10 @@ impl ProofLogic {
                 | Self::Lia
                 | Self::Rdl
                 | Self::Lra
+                | Self::UfIdl
+                | Self::UfLia
+                | Self::UfLra
+                | Self::AufLia
         )
     }
 
@@ -131,6 +147,8 @@ impl ProofLogic {
             Self::Lia => Some(ArithmeticProofKind::LinearInteger),
             Self::Rdl => Some(ArithmeticProofKind::RealDifference),
             Self::Lra => Some(ArithmeticProofKind::LinearReal),
+            Self::UfIdl | Self::UfLia | Self::AufLia => Some(ArithmeticProofKind::LinearInteger),
+            Self::UfLra => Some(ArithmeticProofKind::LinearReal),
             _ => None,
         }
     }

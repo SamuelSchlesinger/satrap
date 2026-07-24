@@ -63,9 +63,7 @@ COMBINATION_PROOF_LOGICS = frozenset(
     }
 )
 SESSION_PROOF_LOGICS = BASE_PROOF_LOGICS | COMBINATION_PROOF_LOGICS
-# Combination certificates are admitted only when the producer, independent
-# reconstruction, adversarial tests, and smoke corpus are enabled together.
-CERTIFIED_PROOF_LOGICS = BASE_PROOF_LOGICS
+CERTIFIED_PROOF_LOGICS = SESSION_PROOF_LOGICS
 UF_PROOF_LOGICS = frozenset(
     {
         "QF_UF",

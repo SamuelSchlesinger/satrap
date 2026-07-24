@@ -16,6 +16,10 @@ class HygieneChecksTests(unittest.TestCase):
     def test_normalizes_two_and_three_component_versions(self) -> None:
         self.assertEqual(check_hygiene.normalized_version("Rust 1.85"), (1, 85, 0))
         self.assertEqual(check_hygiene.normalized_version("+1.85.0"), (1, 85, 0))
+        self.assertEqual(
+            check_hygiene.normalized_version("nightly-2026-06-01"),
+            (2026, 6, 1),
+        )
         self.assertIsNone(check_hygiene.normalized_version("stable"))
 
     def test_markdown_check_ignores_external_anchor_and_fenced_links(self) -> None:
@@ -81,15 +85,21 @@ class HygieneChecksTests(unittest.TestCase):
                 "scripts/ci.sh\nscripts/check-msrv.sh\nscripts/check-security.sh\n"
             ),
             ".github/workflows/ci.yml": (
-                "actions/checkout@v6\nscripts/install-smt-oracles.sh\n"
+                "actions/checkout@v6\nscripts/install-fuzz-tools.sh\n"
+                "scripts/install-smt-oracles.sh\n"
                 "scripts/ci.sh\nscripts/check-msrv.sh\n"
             ),
             ".github/workflows/security.yml": (
                 "actions/checkout@v6\nscripts/check-security.sh\n"
             ),
             "scripts/ci.sh": (
-                "scripts/quality.sh\nz3 --version\ncvc5 --version\n"
+                "scripts/quality.sh\nscripts/check-fuzz.sh\n"
+                "z3 --version\ncvc5 --version\n"
                 "bitwuzla --version\n"
+            ),
+            "scripts/check-fuzz.sh": (
+                "--locked\nclippy\nsmt_session_bytes\n"
+                "smt_structured_session\nsat_proof\n"
             ),
             "scripts/install-smt-oracles.sh": (
                 "Z3Prover/z3\ncvc5/cvc5\nbitwuzla/bitwuzla\n"
@@ -112,6 +122,7 @@ class HygieneChecksTests(unittest.TestCase):
                 errors,
                 [
                     "scripts/ci.sh: must invoke scripts/quality.sh",
+                    "scripts/ci.sh: must invoke scripts/check-fuzz.sh",
                     "scripts/ci.sh: must invoke z3 --version",
                     "scripts/ci.sh: must invoke cvc5 --version",
                     "scripts/ci.sh: must invoke bitwuzla --version",
@@ -167,6 +178,33 @@ class HygieneChecksTests(unittest.TestCase):
                     "Z3 versions disagree: "
                     "scripts/ci.sh=4.16.0, "
                     "scripts/install-smt-oracles.sh=4.15.8"
+                ],
+            )
+
+    def test_fuzz_tool_version_check_detects_nightly_drift(self) -> None:
+        directory, root = self.temporary_root()
+        with directory, patch.object(check_hygiene, "ROOT", root):
+            gate = root / "scripts/check-fuzz.sh"
+            installer = root / "scripts/install-fuzz-tools.sh"
+            gate.parent.mkdir(parents=True)
+            gate.write_text(
+                "fuzz_nightly=nightly-2026-06-01\n"
+                "required_cargo_fuzz_version=0.13.2\n",
+                encoding="utf-8",
+            )
+            installer.write_text(
+                "fuzz_nightly=nightly-2026-05-01\n"
+                "cargo_fuzz_version=0.13.2\n",
+                encoding="utf-8",
+            )
+            errors: list[str] = []
+            check_hygiene.check_fuzz_tool_versions(errors)
+            self.assertEqual(
+                errors,
+                [
+                    "fuzz nightly versions disagree: "
+                    "scripts/check-fuzz.sh=2026.6.1, "
+                    "scripts/install-fuzz-tools.sh=2026.5.1"
                 ],
             )
 

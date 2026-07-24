@@ -21,3 +21,8 @@ for tool in z3 cvc5 bitwuzla; do
         echo "Run 'make install-oracles' before pushing; $tool is missing" >&2
     fi
 done
+
+if ! cargo fuzz --version >/dev/null 2>&1 \
+    || ! rustc +nightly-2026-06-01 --version >/dev/null 2>&1; then
+    echo "Run 'make install-fuzz-tools' before pushing; fuzz tools are missing" >&2
+fi

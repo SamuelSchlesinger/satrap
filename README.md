@@ -46,6 +46,7 @@ The crate requires Rust 1.85 or newer.
 cargo build --release
 cargo test --all-targets
 make install-oracles
+make install-fuzz-tools
 make install-hooks
 ```
 
@@ -98,8 +99,8 @@ Current SMT coverage includes Core, QF_BV, QF_UF, QF_UFBV, QF_ABV, and
 QF_AUFBV, plus experimental exact QF_IDL, QF_LIA, QF_RDL, and QF_LRA.
 The corresponding QF_UFIDL, QF_UFLIA, QF_UFLRA, and QF_AUFLIA combinations
 are also implemented. Protocol edge cases, proof production,
-fragment-complete independent validation, fuzzing, and competition-scale
-performance remain open.
+fragment-complete independent validation, sustained fuzz campaigns, and
+competition-scale performance remain open.
 
 ## Rust API
 
@@ -122,7 +123,7 @@ and array terms plus a reusable context API.
 
 ## Validation and benchmarking
 
-Run the local quality gate with:
+Run the shared local integration gate with:
 
 ```sh
 make check
@@ -134,10 +135,12 @@ For the gate breakdown, lint rationale, and small-commit procedure, see the
 Deterministic tests cover the SAT kernel against brute force and exercise the
 implemented SMT fragments against pinned Z3, cvc5, and Bitwuzla releases.
 Arithmetic models are replayed independently through both Z3 and cvc5. Run
-`make install-oracles` once per clone before `make check`; the shared integration
-gate requires exact versions of all three solvers and never silently skips an
-oracle. These generated tests are correctness evidence, not representative
-performance benchmarks.
+`make install-oracles` and `make install-fuzz-tools` once per clone before
+`make check`; the shared integration gate requires exact versions of all three
+solvers and runs bounded coverage-guided parser, session, and proof fuzzing.
+It never silently skips an oracle or fuzz target. These generated checks are
+correctness evidence, not representative performance benchmarks. See the
+[fuzzing guide](docs/FUZZING.md) for longer campaigns and crash reproduction.
 
 For controlled solver comparisons:
 

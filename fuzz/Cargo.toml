@@ -1,0 +1,36 @@
+[package]
+name = "sat-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4.13"
+sat = { path = ".." }
+
+[workspace]
+members = ["."]
+
+[[bin]]
+name = "smt_session_bytes"
+path = "fuzz_targets/smt_session_bytes.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "smt_structured_session"
+path = "fuzz_targets/smt_structured_session.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "sat_proof"
+path = "fuzz_targets/sat_proof.rs"
+test = false
+doc = false
+bench = false

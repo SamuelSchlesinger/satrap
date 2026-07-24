@@ -24,7 +24,8 @@ claim.
 | --- | --- | --- |
 | Commit | `make check-fast` | Formatting, compilation, shell syntax, and repository hygiene |
 | Quality | `make quality` | Strict Clippy, rustdoc, ShellCheck, Actionlint, lockfile, and structural checks |
-| Integration | `make check` | Quality plus required three-oracle differential/model checks, Rust/Python tests, and a release build |
+| Fuzz | `make check-fuzz` | Locked format/Clippy/sanitizer build plus bounded parser, incremental SMT, and SAT proof campaigns |
+| Integration | `make check` | Quality plus required three-oracle differential/model checks, Rust/Python tests, fuzz smoke, and a release build |
 | Compatibility | `make check-msrv` | Full tests on the declared minimum Rust version |
 | Dependencies | `make audit` | RustSec advisory audit; requires `cargo-audit` and network access |
 
@@ -35,15 +36,17 @@ runs the RustSec audit on every push and pull request, plus weekly, so a newly
 published advisory is caught even when the repository is unchanged.
 
 The pre-push gate requires `cargo-audit`, ShellCheck, Actionlint, Z3 4.16.0,
-cvc5 1.3.3, and Bitwuzla 0.9.1. The three SMT oracles are mandatory here even
-though a direct `cargo test` can skip a missing executable: neither the local
-integration gate nor hosted CI may silently lose an independent comparison.
-Install the tools with:
+cvc5 1.3.3, Bitwuzla 0.9.1, nightly-2026-06-01, and cargo-fuzz 0.13.2. The
+three SMT oracles and all three fuzz targets are mandatory here even though a
+direct `cargo test` does not require them: neither the local integration gate
+nor hosted CI may silently lose an independent comparison or sanitizer-backed
+campaign. Install the tools with:
 
 ```sh
 cargo install cargo-audit --version 0.22.2 --locked
 brew install actionlint shellcheck  # macOS; use your package manager elsewhere
 make install-oracles
+make install-fuzz-tools
 ```
 
 `make install-oracles` downloads official release archives into the ignored
@@ -53,12 +56,20 @@ and x86-64 Linux. Bitwuzla also needs GMP and MPFR runtime libraries. Hosted CI
 installs those libraries, invokes the same oracle installer, and pins Actionlint
 to `v1.7.12` and cargo-audit to `0.22.2`.
 
+The fuzz gate builds with sanitizers and runs 256 deterministic libFuzzer
+iterations per target. This is a bounded regression smoke test suitable for
+every push, not a substitute for sustained campaigns. Failure artifacts are
+kept outside the checked-in corpus and uploaded by hosted CI. Target scope,
+long-running commands, corpus policy, and reproduction steps are in
+[Fuzzing](FUZZING.md).
+
 `tools/check_hygiene.py` enforces the small but easy-to-forget invariants:
 UTF-8/LF text, final newlines, no trailing whitespace, valid local Markdown
-links, executable scripts, synchronized MSRV/oracle declarations, and identical
-top-level CI/pre-push entrypoints. It also verifies that the integration script
-still includes the quality gate, all three oracle version checks, and that the
-security workflow remains wired to RustSec.
+links, executable scripts, synchronized MSRV/oracle/fuzz-tool declarations, and
+identical top-level CI/pre-push entrypoints. It also verifies that the
+integration script still includes the quality and fuzz gates, all three oracle
+version checks, every fuzz target, and that the security workflow remains wired
+to RustSec.
 
 The ordinary gate deliberately does not enable every `clippy::pedantic` or
 `clippy::nursery` lint. Solver code contains exact numeric conversions,

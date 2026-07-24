@@ -1,5 +1,7 @@
 /target/
 /.cache/
+/fuzz/artifacts/
+/fuzz/target/
 /results/
 /profiles/
 /benchmarks/downloaded/

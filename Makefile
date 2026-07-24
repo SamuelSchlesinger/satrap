@@ -1,4 +1,4 @@
-.PHONY: audit check check-fast check-msrv install-hooks install-oracles profiling proof-smoke quality release smoke test
+.PHONY: audit check check-fast check-fuzz check-msrv install-fuzz-tools install-hooks install-oracles profiling proof-smoke quality release smoke test
 
 PYTHON ?= python3
 DRAT_TRIM ?= drat-trim
@@ -8,6 +8,9 @@ check:
 
 check-fast:
 	PYTHON="$(PYTHON)" ./scripts/check-fast.sh
+
+check-fuzz:
+	./scripts/check-fuzz.sh
 
 quality:
 	PYTHON="$(PYTHON)" ./scripts/quality.sh
@@ -20,6 +23,9 @@ audit:
 
 install-hooks:
 	./scripts/install-hooks.sh
+
+install-fuzz-tools:
+	./scripts/install-fuzz-tools.sh
 
 install-oracles:
 	./scripts/install-smt-oracles.sh

@@ -1,5 +1,11 @@
 # Architecture
 
+The runtime architecture is paired with three validation layers: deterministic
+unit/integration tests, pinned differential oracles, and sanitizer-backed
+coverage-guided targets. The latter exercise raw SMT-LIB parsing, structured
+incremental theory combinations, and SAT model/proof invariants; see
+[Fuzzing](FUZZING.md) for the precise boundary.
+
 ## Current Boolean kernel
 
 Literals use a packed `u32`: the high bits identify a variable and the low bit

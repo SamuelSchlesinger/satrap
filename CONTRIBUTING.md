@@ -8,13 +8,15 @@ Install the checked-in Git hooks once per clone:
 cargo install cargo-audit --version 0.22.2 --locked
 brew install actionlint shellcheck  # macOS; use your package manager elsewhere
 make install-oracles
+make install-fuzz-tools
 make install-hooks
 ```
 
 The pre-commit hook runs the fast formatting and compile gate. The pre-push
 hook runs the same full gate as the main CI job followed by the Rust 1.85 MSRV
 suite and RustSec audit. The integration gate requires the pinned Z3, cvc5, and
-Bitwuzla differential oracles installed by `make install-oracles`. Hosted CI
+Bitwuzla differential oracles installed by `make install-oracles` and the
+pinned fuzz toolchain installed by `make install-fuzz-tools`. Hosted CI
 independently reruns all three gates. The shared entrypoints live in `scripts/`,
 and the hygiene checker rejects broken gate wiring, so local hooks and GitHub
 Actions cannot drift silently.

@@ -108,9 +108,16 @@ corpora are not representative benchmarks, the 72 scalar and 16 full
 combination models are replayed through both Z3 and cvc5 but are not yet
 fragment-complete, and theory UNSAT results do not yet carry independently
 checkable proofs.
-Complete protocol conformance, signal-driven interruption, fuzzing, and the
-world-class benchmark gates remain open and are tracked candidly in
-[the roadmap](ROADMAP.md).
+
+Coverage-guided smoke campaigns now run on every push. One target passes
+arbitrary bytes through the public SMT-LIB session, another generates
+incremental sessions across eight representative fragments, and a third checks
+bounded SAT answers against brute force while exercising model and DRAT output.
+These sanitizer-backed campaigns are a durable baseline, not evidence of
+coverage completeness; sustained runs, measured coverage, and corpus curation
+remain open. Complete protocol conformance, signal-driven interruption, and
+the world-class benchmark gates are tracked candidly in
+[the roadmap](ROADMAP.md) and [fuzzing guide](FUZZING.md).
 
 The SAT proof stream has been checked with DRAT-trim on smoke and real
 competition instances. A targeted REGN comparison is now competitive with
@@ -483,11 +490,15 @@ The native-CPU flag is intentionally opt-in: it is useful for a controlled
 local comparison but produces a non-portable binary. The checked-in release
 profile enables fat LTO, one codegen unit, and abort-on-panic.
 
-Run every local quality gate with:
+Run the shared local integration gate with:
 
 ```sh
 make check
 ```
+
+`make check` includes the bounded coverage-guided smoke campaigns. See
+[Fuzzing](FUZZING.md) before running longer campaigns or promoting a reproducer
+into the permanent corpus.
 
 ## Compare solvers
 
@@ -566,6 +577,8 @@ performance still separate it from a general world-class SMT solver.
 - `src/main.rs`: competition-compatible command-line interface.
 - `src/bin/smt.rs`: streaming SMT-LIB command-line interface.
 - `tests/`: differential, structured, and end-to-end correctness tests.
+- `fuzz/`: raw-session, structured-session, and SAT proof/model fuzz targets
+  with durable seed corpora.
 - `tools/benchmark.py`: reproducible head-to-head runner.
 - `tools/summarize_benchmark.py`: repeated-run solved-count, PAR-2, and paired
   head-to-head summaries.

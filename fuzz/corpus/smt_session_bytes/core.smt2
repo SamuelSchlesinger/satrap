@@ -1,0 +1,7 @@
+(set-option :produce-models true)
+(set-logic QF_BV)
+(declare-const x (_ BitVec 4))
+(assert (= (bvadd x #b0001) #b1010))
+(check-sat)
+(get-value (x))
+(exit)

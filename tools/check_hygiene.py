@@ -25,7 +25,7 @@ TEXT_SUFFIXES = {
 }
 TEXT_FILENAMES = {".editorconfig", ".gitignore", "Makefile"}
 MARKDOWN_LINK = re.compile(r"!?\[[^\]]*]\(([^)]+)\)")
-VERSION = re.compile(r"\d+(?:\.\d+){1,2}")
+VERSION = re.compile(r"\d+(?:[.-]\d+){1,2}")
 
 
 def repository_files() -> list[Path]:
@@ -124,7 +124,7 @@ def normalized_version(value: str) -> tuple[int, int, int] | None:
     match = VERSION.search(value)
     if match is None:
         return None
-    parts = tuple(int(part) for part in match.group(0).split("."))
+    parts = tuple(int(part) for part in re.split(r"[.-]", match.group(0)))
     return (parts + (0, 0, 0))[:3]
 
 
@@ -223,6 +223,35 @@ def check_oracle_versions(errors: list[str]) -> None:
             errors.append(f"{name} versions disagree: {rendered}")
 
 
+def check_fuzz_tool_versions(errors: list[str]) -> None:
+    for name, gate_variable, installer_variable in (
+        ("cargo-fuzz", "required_cargo_fuzz_version", "cargo_fuzz_version"),
+        ("fuzz nightly", "fuzz_nightly", "fuzz_nightly"),
+    ):
+        declarations = {
+            "scripts/check-fuzz.sh": extract_version(
+                ROOT / "scripts/check-fuzz.sh",
+                rf"^{gate_variable}=(?:nightly-)?([0-9.-]+)",
+                errors,
+            ),
+            "scripts/install-fuzz-tools.sh": extract_version(
+                ROOT / "scripts/install-fuzz-tools.sh",
+                rf"^{installer_variable}=(?:nightly-)?([0-9.-]+)",
+                errors,
+            ),
+        }
+        versions = {
+            version for version in declarations.values() if version is not None
+        }
+        if len(versions) > 1:
+            rendered = ", ".join(
+                f"{path}={'.'.join(map(str, version))}"
+                for path, version in declarations.items()
+                if version is not None
+            )
+            errors.append(f"{name} versions disagree: {rendered}")
+
+
 def require_commands(path: Path, commands: tuple[str, ...], errors: list[str]) -> None:
     text = read_text(path, errors)
     if text is None:
@@ -250,6 +279,7 @@ def check_gate_wiring(errors: list[str]) -> None:
         ROOT / "scripts/ci.sh",
         (
             "scripts/quality.sh",
+            "scripts/check-fuzz.sh",
             "z3 --version",
             "cvc5 --version",
             "bitwuzla --version",
@@ -268,12 +298,27 @@ def check_gate_wiring(errors: list[str]) -> None:
     )
     require_commands(
         ROOT / ".github/workflows/ci.yml",
-        ("actions/checkout@v6", "scripts/install-smt-oracles.sh"),
+        (
+            "actions/checkout@v6",
+            "scripts/install-fuzz-tools.sh",
+            "scripts/install-smt-oracles.sh",
+        ),
         errors,
     )
     require_commands(
         ROOT / "scripts/install-smt-oracles.sh",
         ("Z3Prover/z3", "cvc5/cvc5", "bitwuzla/bitwuzla"),
+        errors,
+    )
+    require_commands(
+        ROOT / "scripts/check-fuzz.sh",
+        (
+            "--locked",
+            "clippy",
+            "smt_session_bytes",
+            "smt_structured_session",
+            "sat_proof",
+        ),
         errors,
     )
 
@@ -294,6 +339,7 @@ def main() -> int:
     check_msrv(errors)
     check_audit_version(errors)
     check_oracle_versions(errors)
+    check_fuzz_tool_versions(errors)
     check_gate_wiring(errors)
     check_executable_scripts(errors)
 

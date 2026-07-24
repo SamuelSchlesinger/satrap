@@ -24,8 +24,13 @@ Passing this gate means “worth iterating on,” not “competitive.”
 - extend the implemented textual DRAT stream with deletion/binary modes and an
   automated independent checker in every UNSAT benchmark run;
 - model checking integrated into every benchmark run;
-- coverage-guided parser and solver fuzzing;
-- differential testing against at least two independent established solvers;
+- deterministic coverage-guided smoke campaigns now exercise raw SMT-LIB
+  parsing, structured incremental sessions across the implemented theory
+  combinations, and SAT model/proof invariants; sustained campaigns, coverage
+  targets, corpus minimization, and a reproducible bug corpus remain;
+- deterministic differential testing now requires pinned Z3, cvc5, and
+  Bitwuzla releases; expanding every oracle across every supported fragment
+  and representative malformed sessions remains;
 - a reusable `Unknown` path, deterministic CDCL conflict/propagation limits,
   and a thread-safe interruption handle are implemented; charging one-time
   preprocessing, OS signal wiring, and end-to-end malformed interactive input

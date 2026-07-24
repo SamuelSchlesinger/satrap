@@ -620,7 +620,7 @@ impl Session {
 
     fn check_sat(&mut self, arguments: &[SExpr]) -> Result<CommandValue, CommandError> {
         expect_arity(arguments, 0, "check-sat")?;
-        self.run_check(Vec::new())
+        self.run_check(&[])
     }
 
     fn check_sat_assuming(&mut self, arguments: &[SExpr]) -> Result<CommandValue, CommandError> {
@@ -640,13 +640,10 @@ impl Session {
                 literal,
             });
         }
-        self.run_check(assumptions)
+        self.run_check(&assumptions)
     }
 
-    fn run_check(
-        &mut self,
-        user_assumptions: Vec<Assumption>,
-    ) -> Result<CommandValue, CommandError> {
+    fn run_check(&mut self, user_assumptions: &[Assumption]) -> Result<CommandValue, CommandError> {
         self.require_logic()?;
         let named = self
             .frames

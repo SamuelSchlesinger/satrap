@@ -84,7 +84,7 @@ pub(crate) trait Theory {
     fn begin_check(&mut self);
     fn push_level(&mut self);
     fn notify_assignment(&mut self, assignment: SignedTerm);
-    fn propagate(&mut self, terms: &TermStore) -> Vec<TheoryPropagation>;
+    fn propagate(&mut self, terms: &TermStore) -> Option<TheoryPropagation>;
     fn final_check(&mut self, terms: &TermStore) -> TheoryCheck<Self::Model>;
     fn backtrack(&mut self, level: usize);
 }
@@ -138,13 +138,10 @@ impl TheoryManager {
             self.uf.notify_assignment(assignment);
             self.arithmetic.notify_assignment(assignment);
         }
-        let propagations = self
-            .uf
-            .propagate(terms)
-            .into_iter()
-            .chain(self.arithmetic.propagate(terms))
-            .collect::<Vec<_>>();
-        let result = if let Some(propagation) = propagations.into_iter().next() {
+        let uf_propagation = self.uf.propagate(terms);
+        let arithmetic_propagation = self.arithmetic.propagate(terms);
+        let propagation = uf_propagation.or(arithmetic_propagation);
+        let result = if let Some(propagation) = propagation {
             let mut literals = propagation
                 .explanation
                 .into_iter()

@@ -104,8 +104,8 @@ impl Theory for UfTheory {
         self.trail.push((assignment.term, previous));
     }
 
-    fn propagate(&mut self, _terms: &TermStore) -> Vec<TheoryPropagation> {
-        Vec::new()
+    fn propagate(&mut self, _terms: &TermStore) -> Option<TheoryPropagation> {
+        None
     }
 
     fn final_check(&mut self, terms: &TermStore) -> TheoryCheck<Self::Model> {

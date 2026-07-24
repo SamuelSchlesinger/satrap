@@ -1429,8 +1429,8 @@ impl HybridSearchState {
 ///
 /// Add all permanent clauses, then call [`Solver::solve`] or
 /// [`Solver::solve_assuming`]. Learned clauses and heuristic state are retained
-/// across queries. Adding permanent clauses after the first query is not yet
-/// supported.
+/// across queries, and permanent clauses may be added between completed
+/// queries.
 #[derive(Debug)]
 pub struct Solver {
     config: SolverConfig,
@@ -2115,6 +2115,10 @@ impl Solver {
                     std::mem::size_of::<Option<usize>>(),
                 ));
         stats
+    }
+
+    pub(crate) const fn work_counters(&self) -> (u64, u64) {
+        (self.stats.conflicts, self.stats.propagations)
     }
 
     /// Streams learned clauses to `output` as a textual DRAT proof.

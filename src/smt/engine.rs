@@ -64,12 +64,13 @@ pub(crate) fn solve(
         .iter()
         .map(|&term| Ok((term, encoder.encode(terms, solver, term)?)))
         .collect::<Result<Vec<_>, IncrementalError>>()?;
-    let initial_stats = solver.stats();
+    let initial_work = solver.work_counters();
 
     loop {
+        let current_work = solver.work_counters();
         let result = solver.solve_assuming_with_limits(
             assumptions,
-            remaining_limits(limits, initial_stats, solver.stats()),
+            remaining_limits(limits, initial_work, current_work),
         );
         let SolveResult::Sat(model) = result else {
             return Ok(match result {
@@ -128,18 +129,14 @@ fn signed_value(
     value == literal.positive
 }
 
-fn remaining_limits(
-    limits: SolveLimits,
-    initial: crate::SolverStats,
-    current: crate::SolverStats,
-) -> SolveLimits {
+fn remaining_limits(limits: SolveLimits, initial: (u64, u64), current: (u64, u64)) -> SolveLimits {
     SolveLimits {
         conflicts: limits
             .conflicts
-            .map(|limit| limit.saturating_sub(current.conflicts.saturating_sub(initial.conflicts))),
-        propagations: limits.propagations.map(|limit| {
-            limit.saturating_sub(current.propagations.saturating_sub(initial.propagations))
-        }),
+            .map(|limit| limit.saturating_sub(current.0.saturating_sub(initial.0))),
+        propagations: limits
+            .propagations
+            .map(|limit| limit.saturating_sub(current.1.saturating_sub(initial.1))),
     }
 }
 

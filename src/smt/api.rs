@@ -311,7 +311,7 @@ enum LastCheck {
     },
 }
 
-/// A persistent typed SMT context for Core and QF_BV.
+/// A persistent typed SMT context for Core, bit-vectors, UF, and arrays.
 ///
 /// Declarations and definitions are global, as in an SMT-LIB session with
 /// `:global-declarations true`; `push` and `pop` scope assertions. A full
@@ -941,23 +941,23 @@ impl Context {
     }
 
     pub fn bv_and(&mut self, terms: &[BitVecTerm]) -> Result<BitVecTerm, ContextError> {
-        self.bv_nary(terms, |store, ids| store.bvand(ids))
+        self.bv_nary(terms, TermStore::bvand)
     }
 
     pub fn bv_or(&mut self, terms: &[BitVecTerm]) -> Result<BitVecTerm, ContextError> {
-        self.bv_nary(terms, |store, ids| store.bvor(ids))
+        self.bv_nary(terms, TermStore::bvor)
     }
 
     pub fn bv_xor(&mut self, terms: &[BitVecTerm]) -> Result<BitVecTerm, ContextError> {
-        self.bv_nary(terms, |store, ids| store.bvxor(ids))
+        self.bv_nary(terms, TermStore::bvxor)
     }
 
     pub fn bv_add(&mut self, terms: &[BitVecTerm]) -> Result<BitVecTerm, ContextError> {
-        self.bv_nary(terms, |store, ids| store.bvadd(ids))
+        self.bv_nary(terms, TermStore::bvadd)
     }
 
     pub fn bv_mul(&mut self, terms: &[BitVecTerm]) -> Result<BitVecTerm, ContextError> {
-        self.bv_nary(terms, |store, ids| store.bvmul(ids))
+        self.bv_nary(terms, TermStore::bvmul)
     }
 
     pub fn bv_nand(
@@ -965,7 +965,7 @@ impl Context {
         left: BitVecTerm,
         right: BitVecTerm,
     ) -> Result<BitVecTerm, ContextError> {
-        self.bv_binary(left, right, |store, a, b| store.bvnand(a, b))
+        self.bv_binary(left, right, TermStore::bvnand)
     }
 
     pub fn bv_nor(
@@ -973,7 +973,7 @@ impl Context {
         left: BitVecTerm,
         right: BitVecTerm,
     ) -> Result<BitVecTerm, ContextError> {
-        self.bv_binary(left, right, |store, a, b| store.bvnor(a, b))
+        self.bv_binary(left, right, TermStore::bvnor)
     }
 
     pub fn bv_xnor(
@@ -981,7 +981,7 @@ impl Context {
         left: BitVecTerm,
         right: BitVecTerm,
     ) -> Result<BitVecTerm, ContextError> {
-        self.bv_binary(left, right, |store, a, b| store.bvxnor(a, b))
+        self.bv_binary(left, right, TermStore::bvxnor)
     }
 
     pub fn bv_comp(
@@ -989,7 +989,7 @@ impl Context {
         left: BitVecTerm,
         right: BitVecTerm,
     ) -> Result<BitVecTerm, ContextError> {
-        self.bv_binary(left, right, |store, a, b| store.bvcomp(a, b))
+        self.bv_binary(left, right, TermStore::bvcomp)
     }
 
     pub fn bv_sub(
@@ -997,7 +997,7 @@ impl Context {
         left: BitVecTerm,
         right: BitVecTerm,
     ) -> Result<BitVecTerm, ContextError> {
-        self.bv_binary(left, right, |store, a, b| store.bvsub(a, b))
+        self.bv_binary(left, right, TermStore::bvsub)
     }
 
     pub fn bv_udiv(
@@ -1005,7 +1005,7 @@ impl Context {
         left: BitVecTerm,
         right: BitVecTerm,
     ) -> Result<BitVecTerm, ContextError> {
-        self.bv_binary(left, right, |store, a, b| store.bvudiv(a, b))
+        self.bv_binary(left, right, TermStore::bvudiv)
     }
 
     pub fn bv_urem(
@@ -1013,7 +1013,7 @@ impl Context {
         left: BitVecTerm,
         right: BitVecTerm,
     ) -> Result<BitVecTerm, ContextError> {
-        self.bv_binary(left, right, |store, a, b| store.bvurem(a, b))
+        self.bv_binary(left, right, TermStore::bvurem)
     }
 
     pub fn bv_sdiv(
@@ -1021,7 +1021,7 @@ impl Context {
         left: BitVecTerm,
         right: BitVecTerm,
     ) -> Result<BitVecTerm, ContextError> {
-        self.bv_binary(left, right, |store, a, b| store.bvsdiv(a, b))
+        self.bv_binary(left, right, TermStore::bvsdiv)
     }
 
     pub fn bv_srem(
@@ -1029,7 +1029,7 @@ impl Context {
         left: BitVecTerm,
         right: BitVecTerm,
     ) -> Result<BitVecTerm, ContextError> {
-        self.bv_binary(left, right, |store, a, b| store.bvsrem(a, b))
+        self.bv_binary(left, right, TermStore::bvsrem)
     }
 
     pub fn bv_smod(
@@ -1037,7 +1037,7 @@ impl Context {
         left: BitVecTerm,
         right: BitVecTerm,
     ) -> Result<BitVecTerm, ContextError> {
-        self.bv_binary(left, right, |store, a, b| store.bvsmod(a, b))
+        self.bv_binary(left, right, TermStore::bvsmod)
     }
 
     pub fn bv_shl(
@@ -1045,7 +1045,7 @@ impl Context {
         value: BitVecTerm,
         amount: BitVecTerm,
     ) -> Result<BitVecTerm, ContextError> {
-        self.bv_binary(value, amount, |store, a, b| store.bvshl(a, b))
+        self.bv_binary(value, amount, TermStore::bvshl)
     }
 
     pub fn bv_lshr(
@@ -1053,7 +1053,7 @@ impl Context {
         value: BitVecTerm,
         amount: BitVecTerm,
     ) -> Result<BitVecTerm, ContextError> {
-        self.bv_binary(value, amount, |store, a, b| store.bvlshr(a, b))
+        self.bv_binary(value, amount, TermStore::bvlshr)
     }
 
     pub fn bv_ashr(
@@ -1061,7 +1061,7 @@ impl Context {
         value: BitVecTerm,
         amount: BitVecTerm,
     ) -> Result<BitVecTerm, ContextError> {
-        self.bv_binary(value, amount, |store, a, b| store.bvashr(a, b))
+        self.bv_binary(value, amount, TermStore::bvashr)
     }
 
     pub fn concat(
@@ -1069,7 +1069,7 @@ impl Context {
         left: BitVecTerm,
         right: BitVecTerm,
     ) -> Result<BitVecTerm, ContextError> {
-        self.bv_binary(left, right, |store, a, b| store.concat(a, b))
+        self.bv_binary(left, right, TermStore::concat)
     }
 
     pub fn extract(
@@ -1147,7 +1147,7 @@ impl Context {
         left: BitVecTerm,
         right: BitVecTerm,
     ) -> Result<BoolTerm, ContextError> {
-        self.bv_predicate(left, right, |store, a, b| store.bvult(a, b))
+        self.bv_predicate(left, right, TermStore::bvult)
     }
 
     pub fn bv_ule(
@@ -1155,7 +1155,7 @@ impl Context {
         left: BitVecTerm,
         right: BitVecTerm,
     ) -> Result<BoolTerm, ContextError> {
-        self.bv_predicate(left, right, |store, a, b| store.bvule(a, b))
+        self.bv_predicate(left, right, TermStore::bvule)
     }
 
     pub fn bv_ugt(
@@ -1163,7 +1163,7 @@ impl Context {
         left: BitVecTerm,
         right: BitVecTerm,
     ) -> Result<BoolTerm, ContextError> {
-        self.bv_predicate(left, right, |store, a, b| store.bvugt(a, b))
+        self.bv_predicate(left, right, TermStore::bvugt)
     }
 
     pub fn bv_uge(
@@ -1171,7 +1171,7 @@ impl Context {
         left: BitVecTerm,
         right: BitVecTerm,
     ) -> Result<BoolTerm, ContextError> {
-        self.bv_predicate(left, right, |store, a, b| store.bvuge(a, b))
+        self.bv_predicate(left, right, TermStore::bvuge)
     }
 
     pub fn bv_slt(
@@ -1179,7 +1179,7 @@ impl Context {
         left: BitVecTerm,
         right: BitVecTerm,
     ) -> Result<BoolTerm, ContextError> {
-        self.bv_predicate(left, right, |store, a, b| store.bvslt(a, b))
+        self.bv_predicate(left, right, TermStore::bvslt)
     }
 
     pub fn bv_sle(
@@ -1187,7 +1187,7 @@ impl Context {
         left: BitVecTerm,
         right: BitVecTerm,
     ) -> Result<BoolTerm, ContextError> {
-        self.bv_predicate(left, right, |store, a, b| store.bvsle(a, b))
+        self.bv_predicate(left, right, TermStore::bvsle)
     }
 
     pub fn bv_sgt(
@@ -1195,7 +1195,7 @@ impl Context {
         left: BitVecTerm,
         right: BitVecTerm,
     ) -> Result<BoolTerm, ContextError> {
-        self.bv_predicate(left, right, |store, a, b| store.bvsgt(a, b))
+        self.bv_predicate(left, right, TermStore::bvsgt)
     }
 
     pub fn bv_sge(
@@ -1203,7 +1203,7 @@ impl Context {
         left: BitVecTerm,
         right: BitVecTerm,
     ) -> Result<BoolTerm, ContextError> {
-        self.bv_predicate(left, right, |store, a, b| store.bvsge(a, b))
+        self.bv_predicate(left, right, TermStore::bvsge)
     }
 
     pub fn bv_neg_overflow(&mut self, term: BitVecTerm) -> Result<BoolTerm, ContextError> {
@@ -1217,7 +1217,7 @@ impl Context {
         left: BitVecTerm,
         right: BitVecTerm,
     ) -> Result<BoolTerm, ContextError> {
-        self.bv_predicate(left, right, |store, a, b| store.bvuaddo(a, b))
+        self.bv_predicate(left, right, TermStore::bvuaddo)
     }
 
     pub fn bv_sadd_overflow(
@@ -1225,7 +1225,7 @@ impl Context {
         left: BitVecTerm,
         right: BitVecTerm,
     ) -> Result<BoolTerm, ContextError> {
-        self.bv_predicate(left, right, |store, a, b| store.bvsaddo(a, b))
+        self.bv_predicate(left, right, TermStore::bvsaddo)
     }
 
     pub fn bv_umul_overflow(
@@ -1233,7 +1233,7 @@ impl Context {
         left: BitVecTerm,
         right: BitVecTerm,
     ) -> Result<BoolTerm, ContextError> {
-        self.bv_predicate(left, right, |store, a, b| store.bvumulo(a, b))
+        self.bv_predicate(left, right, TermStore::bvumulo)
     }
 
     pub fn bv_smul_overflow(
@@ -1241,7 +1241,7 @@ impl Context {
         left: BitVecTerm,
         right: BitVecTerm,
     ) -> Result<BoolTerm, ContextError> {
-        self.bv_predicate(left, right, |store, a, b| store.bvsmulo(a, b))
+        self.bv_predicate(left, right, TermStore::bvsmulo)
     }
 
     pub fn bv_usub_overflow(
@@ -1249,7 +1249,7 @@ impl Context {
         left: BitVecTerm,
         right: BitVecTerm,
     ) -> Result<BoolTerm, ContextError> {
-        self.bv_predicate(left, right, |store, a, b| store.bvusubo(a, b))
+        self.bv_predicate(left, right, TermStore::bvusubo)
     }
 
     pub fn bv_ssub_overflow(
@@ -1257,7 +1257,7 @@ impl Context {
         left: BitVecTerm,
         right: BitVecTerm,
     ) -> Result<BoolTerm, ContextError> {
-        self.bv_predicate(left, right, |store, a, b| store.bvssubo(a, b))
+        self.bv_predicate(left, right, TermStore::bvssubo)
     }
 
     pub fn bv_sdiv_overflow(
@@ -1265,7 +1265,7 @@ impl Context {
         left: BitVecTerm,
         right: BitVecTerm,
     ) -> Result<BoolTerm, ContextError> {
-        self.bv_predicate(left, right, |store, a, b| store.bvsdivo(a, b))
+        self.bv_predicate(left, right, TermStore::bvsdivo)
     }
 
     fn bool_ids(&self, terms: &[BoolTerm]) -> Result<Vec<TermId>, ContextError> {

@@ -1,11 +1,12 @@
-//! A performance-oriented conflict-driven clause-learning SAT solver.
+//! A performance-oriented incremental SAT and SMT solver.
 //!
 //! The crate deliberately keeps the hot path dependency-free. [`Solver`] is a
 //! conventional CDCL engine with two-watched-literal propagation, first-UIP
 //! learning, EVSIDS/VMTF variable selection, phase saving, ablatable static,
 //! dynamic, focused, and stable search regimes, learned-clause reduction,
 //! reusable assumption queries, and activation-literal clause scopes.
-//! [`dimacs`] contains a strict DIMACS CNF parser.
+//! [`dimacs`] contains a strict DIMACS CNF parser, while [`smt`] provides a
+//! typed API and streaming SMT-LIB session over the same reusable kernel.
 
 pub mod dimacs;
 mod proof;

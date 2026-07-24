@@ -2591,7 +2591,7 @@ mod tests {
     fn proof_mode_rejects_uncertified_theory_logics() {
         let output = execute(
             "(set-option :produce-proofs true)
-             (set-logic QF_LIA)
+             (set-logic QF_UFLIA)
              (set-logic QF_BOOL)
              (check-sat)
              (get-proof)",
@@ -3230,6 +3230,64 @@ mod tests {
              (set-logic QF_LRA)
              (declare-const unused Real)
              (define-const unused-offset Real (+ (* 7.0 unused) 11.0))
+             {query}"
+        ));
+        assert_eq!(baseline, shifted);
+    }
+
+    #[test]
+    fn qf_lia_proofs_include_exact_cooper_elimination_lemmas() {
+        let output = execute(
+            "(set-option :produce-proofs true)
+             (set-logic QF_LIA)
+             (declare-const x Int)
+             (declare-const y Int)
+             (assert (= (+ (* 2 x) (* 4 y)) 1))
+             (check-sat)
+             (get-proof)",
+        );
+        assert!(output.starts_with("unsat\n(satrap-edrat :version 1 :logic QF_LIA"));
+        assert!(output.contains("(theory "));
+        assert!(output.ends_with("0\n\")\n"));
+    }
+
+    #[test]
+    fn qf_lia_proofs_cover_selected_arithmetic_ite_branches() {
+        let output = execute(
+            "(set-option :produce-proofs true)
+             (set-logic QF_LIA)
+             (declare-const p Bool)
+             (declare-const x Int)
+             (declare-const y Int)
+             (assert p)
+             (assert (= x (ite p (+ (* 2 y) 1) 0)))
+             (assert (= x (* 2 y)))
+             (check-sat)
+             (get-proof)",
+        );
+        assert!(output.starts_with("unsat\n(satrap-edrat :version 1 :logic QF_LIA"));
+        assert!(output.contains("(theory "));
+        assert!(output.ends_with("0\n\")\n"));
+    }
+
+    #[test]
+    fn qf_lia_proofs_ignore_unrelated_internal_allocation_history() {
+        let query = "
+             (declare-const x Int)
+             (declare-const y Int)
+             (assert (= (+ (* 2 x) (* 4 y)) 1))
+             (check-sat)
+             (get-proof)";
+        let baseline = execute(&format!(
+            "(set-option :produce-proofs true)
+             (set-logic QF_LIA)
+             {query}"
+        ));
+        let shifted = execute(&format!(
+            "(set-option :produce-proofs true)
+             (set-logic QF_LIA)
+             (declare-const unused Int)
+             (define-const unused-offset Int (+ (* 7 unused) 11))
              {query}"
         ));
         assert_eq!(baseline, shifted);

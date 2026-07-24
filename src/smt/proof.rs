@@ -74,6 +74,7 @@ pub(crate) enum ProofLogic {
     Abv,
     Aufbv,
     Idl,
+    Lia,
     Rdl,
     Lra,
 }
@@ -88,6 +89,7 @@ impl ProofLogic {
             "QF_ABV" => Some(Self::Abv),
             "QF_AUFBV" => Some(Self::Aufbv),
             "QF_IDL" => Some(Self::Idl),
+            "QF_LIA" => Some(Self::Lia),
             "QF_RDL" => Some(Self::Rdl),
             "QF_LRA" => Some(Self::Lra),
             _ => None,
@@ -103,6 +105,7 @@ impl ProofLogic {
             Self::Abv => "QF_ABV",
             Self::Aufbv => "QF_AUFBV",
             Self::Idl => "QF_IDL",
+            Self::Lia => "QF_LIA",
             Self::Rdl => "QF_RDL",
             Self::Lra => "QF_LRA",
         }
@@ -111,13 +114,21 @@ impl ProofLogic {
     fn admits_theory_clauses(self) -> bool {
         matches!(
             self,
-            Self::Uf | Self::UfBv | Self::Abv | Self::Aufbv | Self::Idl | Self::Rdl | Self::Lra
+            Self::Uf
+                | Self::UfBv
+                | Self::Abv
+                | Self::Aufbv
+                | Self::Idl
+                | Self::Lia
+                | Self::Rdl
+                | Self::Lra
         )
     }
 
     fn arithmetic_kind(self) -> Option<ArithmeticProofKind> {
         match self {
             Self::Idl => Some(ArithmeticProofKind::IntegerDifference),
+            Self::Lia => Some(ArithmeticProofKind::LinearInteger),
             Self::Rdl => Some(ArithmeticProofKind::RealDifference),
             Self::Lra => Some(ArithmeticProofKind::LinearReal),
             _ => None,
@@ -128,6 +139,7 @@ impl ProofLogic {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ArithmeticProofKind {
     IntegerDifference,
+    LinearInteger,
     RealDifference,
     LinearReal,
 }
@@ -135,7 +147,7 @@ enum ArithmeticProofKind {
 impl ArithmeticProofKind {
     fn sort(self) -> ProofSort {
         match self {
-            Self::IntegerDifference => ProofSort::Int,
+            Self::IntegerDifference | Self::LinearInteger => ProofSort::Int,
             Self::RealDifference | Self::LinearReal => ProofSort::Real,
         }
     }
@@ -819,7 +831,547 @@ fn arithmetic_constraints_unsat(
         ArithmeticProofKind::IntegerDifference | ArithmeticProofKind::RealDifference => {
             difference_constraints_unsat(constraints, &kind.sort())
         }
+        ArithmeticProofKind::LinearInteger => integer_linear_constraints_unsat(constraints),
         ArithmeticProofKind::LinearReal => real_linear_constraints_unsat(constraints),
+    }
+}
+
+const MAX_INTEGER_PROOF_VARIABLES: usize = 512;
+const MAX_INTEGER_PROOF_WORK: usize = 1_000_000;
+
+#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+struct ProofIntegerExpression {
+    constant: BigInt,
+    coefficients: BTreeMap<ProofArithmeticVariable, BigInt>,
+}
+
+impl ProofIntegerExpression {
+    fn from_linear(expression: &ProofLinearExpression) -> Option<Self> {
+        if !expression.constant.is_integer()
+            || expression
+                .coefficients
+                .values()
+                .any(|coefficient| !coefficient.is_integer())
+        {
+            return None;
+        }
+        Some(Self {
+            constant: expression.constant.to_integer(),
+            coefficients: expression
+                .coefficients
+                .iter()
+                .map(|(variable, coefficient)| (variable.clone(), coefficient.to_integer()))
+                .collect(),
+        })
+    }
+
+    fn variable(variable: ProofArithmeticVariable) -> Self {
+        Self {
+            constant: BigInt::zero(),
+            coefficients: BTreeMap::from([(variable, BigInt::one())]),
+        }
+    }
+
+    fn coefficient(&self, variable: &ProofArithmeticVariable) -> BigInt {
+        self.coefficients
+            .get(variable)
+            .cloned()
+            .unwrap_or_else(BigInt::zero)
+    }
+
+    fn without(&self, variable: &ProofArithmeticVariable) -> Self {
+        let mut result = self.clone();
+        result.coefficients.remove(variable);
+        result
+    }
+
+    fn scaled(mut self, scale: &BigInt) -> Self {
+        if scale.is_zero() {
+            return Self {
+                constant: BigInt::zero(),
+                coefficients: BTreeMap::new(),
+            };
+        }
+        self.constant *= scale;
+        for coefficient in self.coefficients.values_mut() {
+            *coefficient *= scale;
+        }
+        self
+    }
+
+    fn negated(self) -> Self {
+        self.scaled(&BigInt::from(-1))
+    }
+
+    fn add_scaled(&mut self, other: &Self, scale: &BigInt) {
+        self.constant += &other.constant * scale;
+        for (variable, coefficient) in &other.coefficients {
+            let updated = self
+                .coefficients
+                .get(variable)
+                .cloned()
+                .unwrap_or_else(BigInt::zero)
+                + coefficient * scale;
+            if updated.is_zero() {
+                self.coefficients.remove(variable);
+            } else {
+                self.coefficients.insert(variable.clone(), updated);
+            }
+        }
+    }
+
+    fn substitute(&self, variable: &ProofArithmeticVariable, value: &Self) -> Self {
+        let coefficient = self.coefficient(variable);
+        let mut result = self.without(variable);
+        result.add_scaled(value, &coefficient);
+        result
+    }
+}
+
+#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+struct ProofIntegerInequality {
+    expression: ProofIntegerExpression,
+}
+
+#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+struct ProofDivisibilityConstraint {
+    modulus: BigInt,
+    expression: ProofIntegerExpression,
+}
+
+#[derive(Clone, Debug, Default)]
+struct ProofIntegerProblem {
+    inequalities: Vec<ProofIntegerInequality>,
+    divisibilities: Vec<ProofDivisibilityConstraint>,
+}
+
+impl ProofIntegerProblem {
+    fn substitute(
+        &self,
+        variable: &ProofArithmeticVariable,
+        value: &ProofIntegerExpression,
+    ) -> Self {
+        Self {
+            inequalities: self
+                .inequalities
+                .iter()
+                .map(|constraint| ProofIntegerInequality {
+                    expression: constraint.expression.substitute(variable, value),
+                })
+                .collect(),
+            divisibilities: self
+                .divisibilities
+                .iter()
+                .map(|constraint| ProofDivisibilityConstraint {
+                    modulus: constraint.modulus.clone(),
+                    expression: constraint.expression.substitute(variable, value),
+                })
+                .collect(),
+        }
+    }
+
+    fn mentions(&self, variable: &ProofArithmeticVariable) -> bool {
+        self.inequalities
+            .iter()
+            .any(|constraint| constraint.expression.coefficients.contains_key(variable))
+            || self
+                .divisibilities
+                .iter()
+                .any(|constraint| constraint.expression.coefficients.contains_key(variable))
+    }
+}
+
+struct ProofCooperElimination {
+    normalized: ProofIntegerProblem,
+    period: BigInt,
+    lower_bases: Vec<ProofIntegerExpression>,
+    upper_bases: Vec<ProofIntegerExpression>,
+}
+
+struct IntegerProofBudget {
+    remaining: usize,
+}
+
+impl IntegerProofBudget {
+    fn new() -> Self {
+        Self {
+            remaining: MAX_INTEGER_PROOF_WORK,
+        }
+    }
+
+    fn spend(&mut self, amount: usize) -> Result<(), ProofError> {
+        self.remaining = self.remaining.checked_sub(amount).ok_or_else(|| {
+            ProofError::new(format!(
+                "linear-integer proof exceeded its deterministic work limit of \
+                 {MAX_INTEGER_PROOF_WORK} steps"
+            ))
+        })?;
+        Ok(())
+    }
+}
+
+fn integer_linear_constraints_unsat(
+    constraints: &[ProofLinearConstraint],
+) -> Result<bool, ProofError> {
+    let mut problem = ProofIntegerProblem::default();
+    for constraint in constraints {
+        if constraint.sort != ProofSort::Int {
+            return Err(ProofError::new(
+                "linear-integer proof contains a constraint of the wrong sort",
+            ));
+        }
+        let Some(mut expression) = ProofIntegerExpression::from_linear(&constraint.expression)
+        else {
+            return Err(ProofError::new(
+                "linear-integer proof contains a non-integral affine expression",
+            ));
+        };
+        if !constraint.strict {
+            expression.constant -= BigInt::one();
+        }
+        problem
+            .inequalities
+            .push(ProofIntegerInequality { expression });
+    }
+    let variables = problem
+        .inequalities
+        .iter()
+        .flat_map(|constraint| constraint.expression.coefficients.keys().cloned())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>();
+    if variables.len() > MAX_INTEGER_PROOF_VARIABLES {
+        return Err(ProofError::new(format!(
+            "linear-integer proof has {} variables; the deterministic proof limit is \
+             {MAX_INTEGER_PROOF_VARIABLES}",
+            variables.len()
+        )));
+    }
+    let mut budget = IntegerProofBudget::new();
+    Ok(!integer_problem_satisfiable(
+        problem,
+        &variables,
+        &mut budget,
+    )?)
+}
+
+fn integer_problem_satisfiable(
+    problem: ProofIntegerProblem,
+    variables: &[ProofArithmeticVariable],
+    budget: &mut IntegerProofBudget,
+) -> Result<bool, ProofError> {
+    budget.spend(1)?;
+    let Some(problem) = simplify_proof_integer_problem(problem, budget)? else {
+        return Ok(false);
+    };
+    let Some(variable) = choose_proof_elimination_variable(&problem, variables) else {
+        return Ok(true);
+    };
+    let remaining = variables
+        .iter()
+        .filter(|candidate| *candidate != variable)
+        .cloned()
+        .collect::<Vec<_>>();
+    if !problem.mentions(variable) {
+        return integer_problem_satisfiable(problem, &remaining, budget);
+    }
+
+    let elimination = normalize_proof_cooper_variable(&problem, variable, budget)?;
+    if !elimination.lower_bases.is_empty() {
+        for base in &elimination.lower_bases {
+            let mut offset = BigInt::one();
+            while offset <= elimination.period {
+                budget.spend(1)?;
+                let mut candidate = base.clone();
+                candidate.constant += &offset;
+                let reduced = elimination.normalized.substitute(variable, &candidate);
+                if integer_problem_satisfiable(reduced, &remaining, budget)? {
+                    return Ok(true);
+                }
+                offset += BigInt::one();
+            }
+        }
+    } else if !elimination.upper_bases.is_empty() {
+        for base in &elimination.upper_bases {
+            let mut offset = BigInt::one();
+            while offset <= elimination.period {
+                budget.spend(1)?;
+                let mut candidate = base.clone();
+                candidate.constant -= &offset;
+                let reduced = elimination.normalized.substitute(variable, &candidate);
+                if integer_problem_satisfiable(reduced, &remaining, budget)? {
+                    return Ok(true);
+                }
+                offset += BigInt::one();
+            }
+        }
+    } else {
+        let mut value = BigInt::zero();
+        while value < elimination.period {
+            budget.spend(1)?;
+            let candidate = ProofIntegerExpression {
+                constant: value.clone(),
+                coefficients: BTreeMap::new(),
+            };
+            let reduced = elimination.normalized.substitute(variable, &candidate);
+            if integer_problem_satisfiable(reduced, &remaining, budget)? {
+                return Ok(true);
+            }
+            value += BigInt::one();
+        }
+    }
+    Ok(false)
+}
+
+fn choose_proof_elimination_variable<'a>(
+    problem: &ProofIntegerProblem,
+    variables: &'a [ProofArithmeticVariable],
+) -> Option<&'a ProofArithmeticVariable> {
+    variables.iter().min_by(|left, right| {
+        proof_cooper_elimination_cost(problem, left)
+            .cmp(&proof_cooper_elimination_cost(problem, right))
+            .then_with(|| left.cmp(right))
+    })
+}
+
+fn proof_cooper_elimination_cost(
+    problem: &ProofIntegerProblem,
+    variable: &ProofArithmeticVariable,
+) -> BigInt {
+    let mut scale = BigInt::one();
+    let mut lower_count = 0_u64;
+    let mut upper_count = 0_u64;
+    let mut mentioned = false;
+    for constraint in &problem.inequalities {
+        let coefficient = constraint.expression.coefficient(variable);
+        if coefficient.is_zero() {
+            continue;
+        }
+        mentioned = true;
+        scale = proof_integer_lcm(&scale, &coefficient.abs());
+        if coefficient.is_negative() {
+            lower_count += 1;
+        } else {
+            upper_count += 1;
+        }
+    }
+    for constraint in &problem.divisibilities {
+        let coefficient = constraint.expression.coefficient(variable);
+        if coefficient.is_zero() {
+            continue;
+        }
+        mentioned = true;
+        scale = proof_integer_lcm(&scale, &coefficient.abs());
+    }
+    if !mentioned {
+        return BigInt::zero();
+    }
+
+    let mut period = scale.clone();
+    for constraint in &problem.divisibilities {
+        let coefficient = constraint.expression.coefficient(variable);
+        if coefficient.is_zero() {
+            continue;
+        }
+        let transformed_modulus = (&scale / coefficient.abs()) * constraint.modulus.abs();
+        period = proof_integer_lcm(&period, &transformed_modulus);
+    }
+    let candidate_count = if lower_count != 0 {
+        lower_count
+    } else if upper_count != 0 {
+        upper_count
+    } else {
+        1
+    };
+    period * BigInt::from(candidate_count)
+}
+
+fn normalize_proof_cooper_variable(
+    problem: &ProofIntegerProblem,
+    variable: &ProofArithmeticVariable,
+    budget: &mut IntegerProofBudget,
+) -> Result<ProofCooperElimination, ProofError> {
+    budget.spend(problem.inequalities.len() + problem.divisibilities.len())?;
+    let coefficients = problem
+        .inequalities
+        .iter()
+        .map(|constraint| constraint.expression.coefficient(variable))
+        .chain(
+            problem
+                .divisibilities
+                .iter()
+                .map(|constraint| constraint.expression.coefficient(variable)),
+        )
+        .filter(|coefficient| !coefficient.is_zero())
+        .collect::<Vec<_>>();
+    if coefficients.is_empty() {
+        return Err(ProofError::new(
+            "linear-integer proof tried to eliminate an absent variable",
+        ));
+    }
+    let scale = coefficients
+        .iter()
+        .fold(BigInt::one(), |result, coefficient| {
+            proof_integer_lcm(&result, &coefficient.abs())
+        });
+
+    let mut normalized = ProofIntegerProblem::default();
+    let mut lower_bases = Vec::new();
+    let mut upper_bases = Vec::new();
+    for constraint in &problem.inequalities {
+        let coefficient = constraint.expression.coefficient(variable);
+        if coefficient.is_zero() {
+            normalized.inequalities.push(constraint.clone());
+            continue;
+        }
+        let factor = &scale / coefficient.abs();
+        let mut expression = constraint.expression.without(variable).scaled(&factor);
+        expression.coefficients.insert(
+            variable.clone(),
+            if coefficient.is_positive() {
+                BigInt::one()
+            } else {
+                BigInt::from(-1)
+            },
+        );
+        if coefficient.is_positive() {
+            upper_bases.push(expression.without(variable).negated());
+        } else {
+            lower_bases.push(expression.without(variable));
+        }
+        normalized
+            .inequalities
+            .push(ProofIntegerInequality { expression });
+    }
+    for constraint in &problem.divisibilities {
+        let coefficient = constraint.expression.coefficient(variable);
+        if coefficient.is_zero() {
+            normalized.divisibilities.push(constraint.clone());
+            continue;
+        }
+        let factor = &scale / coefficient.abs();
+        let mut expression = constraint.expression.without(variable).scaled(&factor);
+        expression.coefficients.insert(
+            variable.clone(),
+            if coefficient.is_positive() {
+                BigInt::one()
+            } else {
+                BigInt::from(-1)
+            },
+        );
+        normalized.divisibilities.push(ProofDivisibilityConstraint {
+            modulus: &constraint.modulus * factor,
+            expression,
+        });
+    }
+    normalized.divisibilities.push(ProofDivisibilityConstraint {
+        modulus: scale.clone(),
+        expression: ProofIntegerExpression::variable(variable.clone()),
+    });
+    let period = normalized
+        .divisibilities
+        .iter()
+        .fold(BigInt::one(), |result, constraint| {
+            proof_integer_lcm(&result, &constraint.modulus)
+        });
+    Ok(ProofCooperElimination {
+        normalized,
+        period,
+        lower_bases,
+        upper_bases,
+    })
+}
+
+fn simplify_proof_integer_problem(
+    problem: ProofIntegerProblem,
+    budget: &mut IntegerProofBudget,
+) -> Result<Option<ProofIntegerProblem>, ProofError> {
+    budget.spend(problem.inequalities.len() + problem.divisibilities.len())?;
+    let mut inequalities = BTreeSet::new();
+    for mut constraint in problem.inequalities {
+        let coefficient_gcd = constraint
+            .expression
+            .coefficients
+            .values()
+            .fold(BigInt::zero(), |result, coefficient| {
+                proof_integer_gcd(&result, coefficient)
+            });
+        if coefficient_gcd > BigInt::one() {
+            constraint.expression.constant =
+                BigRational::new(constraint.expression.constant, coefficient_gcd.clone())
+                    .floor()
+                    .to_integer();
+            for coefficient in constraint.expression.coefficients.values_mut() {
+                *coefficient /= &coefficient_gcd;
+            }
+        }
+        if constraint.expression.coefficients.is_empty() {
+            if !constraint.expression.constant.is_negative() {
+                return Ok(None);
+            }
+        } else {
+            inequalities.insert(constraint);
+        }
+    }
+
+    let mut divisibilities = BTreeSet::new();
+    for mut constraint in problem.divisibilities {
+        constraint.modulus = constraint.modulus.abs();
+        if constraint.modulus.is_zero() {
+            return Err(ProofError::new(
+                "linear-integer proof produced a zero divisibility modulus",
+            ));
+        }
+        let common_gcd = constraint
+            .expression
+            .coefficients
+            .values()
+            .fold(constraint.modulus.clone(), |result, coefficient| {
+                proof_integer_gcd(&result, coefficient)
+            });
+        if (&constraint.expression.constant % &common_gcd) != BigInt::zero() {
+            return Ok(None);
+        }
+        if common_gcd > BigInt::one() {
+            constraint.modulus /= &common_gcd;
+            constraint.expression.constant /= &common_gcd;
+            for coefficient in constraint.expression.coefficients.values_mut() {
+                *coefficient /= &common_gcd;
+            }
+        }
+        if constraint.modulus == BigInt::one() {
+            continue;
+        }
+        if constraint.expression.coefficients.is_empty() {
+            if (&constraint.expression.constant % &constraint.modulus) != BigInt::zero() {
+                return Ok(None);
+            }
+        } else {
+            divisibilities.insert(constraint);
+        }
+    }
+    Ok(Some(ProofIntegerProblem {
+        inequalities: inequalities.into_iter().collect(),
+        divisibilities: divisibilities.into_iter().collect(),
+    }))
+}
+
+fn proof_integer_gcd(left: &BigInt, right: &BigInt) -> BigInt {
+    let mut left = left.abs();
+    let mut right = right.abs();
+    while !right.is_zero() {
+        let remainder = &left % &right;
+        left = right;
+        right = remainder;
+    }
+    left
+}
+
+fn proof_integer_lcm(left: &BigInt, right: &BigInt) -> BigInt {
+    if left.is_zero() || right.is_zero() {
+        BigInt::zero()
+    } else {
+        ((left / proof_integer_gcd(left, right)) * right).abs()
     }
 }
 
@@ -2511,5 +3063,68 @@ mod tests {
         assert_eq!(first.variable_count, second.variable_count);
         assert_eq!(first.clauses, second.clauses);
         assert_eq!(first.drat, second.drat);
+    }
+
+    #[test]
+    fn cooper_proof_decision_matches_bounded_exhaustive_search() {
+        let x = ProofArithmeticVariable::Declared {
+            sort: ProofSort::Int,
+            name: "x".to_owned(),
+        };
+        let y = ProofArithmeticVariable::Declared {
+            sort: ProofSort::Int,
+            name: "y".to_owned(),
+        };
+        let constraint = |constant: i64, coefficients: Vec<(ProofArithmeticVariable, i64)>| {
+            ProofLinearConstraint {
+                sort: ProofSort::Int,
+                expression: ProofLinearExpression {
+                    constant: BigRational::from_integer(BigInt::from(constant)),
+                    coefficients: coefficients
+                        .into_iter()
+                        .filter(|(_, coefficient)| *coefficient != 0)
+                        .map(|(variable, coefficient)| {
+                            (
+                                variable,
+                                BigRational::from_integer(BigInt::from(coefficient)),
+                            )
+                        })
+                        .collect(),
+                },
+                strict: false,
+            }
+        };
+        let bounds = [
+            constraint(-2, vec![(x.clone(), 1)]),
+            constraint(-2, vec![(x.clone(), -1)]),
+            constraint(-2, vec![(y.clone(), 1)]),
+            constraint(-2, vec![(y.clone(), -1)]),
+        ];
+        for left in -3_i64..=3 {
+            for right in -3_i64..=3 {
+                if left == 0 && right == 0 {
+                    continue;
+                }
+                for target in -6_i64..=6 {
+                    let mut constraints = bounds.to_vec();
+                    constraints.push(constraint(
+                        -target,
+                        vec![(x.clone(), left), (y.clone(), right)],
+                    ));
+                    constraints.push(constraint(
+                        target,
+                        vec![(x.clone(), -left), (y.clone(), -right)],
+                    ));
+                    let expected = !(-2_i64..=2).any(|x_value| {
+                        (-2_i64..=2).any(|y_value| left * x_value + right * y_value == target)
+                    });
+                    assert_eq!(
+                        integer_linear_constraints_unsat(&constraints).unwrap(),
+                        expected,
+                        "{left}*x + {right}*y = {target}"
+                    );
+                }
+            }
+        }
     }
 }

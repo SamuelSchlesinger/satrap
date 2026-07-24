@@ -30,11 +30,16 @@ claim.
 | Compatibility | `make check-msrv` | Full tests on the declared minimum Rust version |
 | Dependencies | `make audit` | RustSec advisory audit; requires `cargo-audit` and network access |
 
-The pre-commit hook runs the commit gate. The pre-push hook refuses a normal
-push unless integration, compatibility, and dependency gates all pass. Hosted
-CI independently calls the same integration and compatibility scripts and
-runs the RustSec audit on every push and pull request, plus weekly, so a newly
-published advisory is caught even when the repository is unchanged.
+The pre-commit hook runs the commit gate. For every content-bearing ref update,
+the pre-push hook first requires a clean index and worktree and requires every
+pushed ref to resolve to the checked-out `HEAD`. It then refuses the push
+unless integration, compatibility, and dependency gates all pass, and checks
+again that neither `HEAD` nor the worktree changed while they ran. This binds
+the evidence to the exact commit being published rather than to nearby
+uncommitted source. Hosted CI independently calls the same integration and
+compatibility scripts and runs the same RustSec script on every push and pull
+request, plus weekly, so a newly published advisory is caught even when the
+repository is unchanged.
 
 The pre-push gate requires `cargo-audit`, ShellCheck, Actionlint, Ruff 0.15.22,
 Z3 4.16.0, cvc5 1.3.3, Bitwuzla 0.9.1, nightly-2026-06-01, cargo-fuzz 0.13.2,
@@ -99,9 +104,12 @@ production is requested.
 `tools/check_hygiene.py` enforces the small but easy-to-forget invariants:
 UTF-8/LF text, final newlines, no trailing whitespace, valid local Markdown
 links, executable scripts, synchronized MSRV/oracle/fuzz-tool declarations, and
-synchronized Ruff declarations. It verifies identical top-level CI/pre-push
-entrypoints and that the integration script still includes the quality and
-fuzz gates, all three oracle version checks, every fuzz target, the
+synchronized Ruff declarations. It verifies that the hook still delegates to
+the exact-revision pre-push wrapper, that local and hosted execution still
+share the integration and MSRV entrypoints, and that the wrapper still runs
+RustSec. It also requires the wrapper's clean-`HEAD` checks and verifies that
+the integration script still includes the quality and fuzz gates, all three
+oracle version checks, every fuzz target, the
 proof-checked benchmark smoke, and that the security workflow remains wired to
 RustSec. It also requires every canonical QF_BOOL, QF_BV, QF_UF, QF_UFBV,
 QF_ABV, QF_AUFBV, QF_IDL, QF_LIA, QF_RDL, QF_LRA, QF_UFIDL, QF_UFLIA,
@@ -142,10 +150,13 @@ refactors, correctness fixes, and performance experiments should not be mixed.
 Include the regression test in the same commit as its fix whenever practical.
 
 Before committing, inspect `git diff --check` and the staged diff, then let the
-pre-commit hook run. Before pushing, leave enough time for the full hook rather
-than bypassing it. Repository policy forbids `git push --no-verify`: if a gate
-is wrong, repair the gate and retain a regression test instead of silently
-skipping it.
+pre-commit hook run. Commit every intended non-ignored change before pushing:
+the pre-push hook deliberately refuses to test one tree while publishing
+another. Leave enough time for the full hook rather than bypassing it.
+Repository policy forbids `git push --no-verify`. Git provides no local hook
+that can make that escape hatch impossible, so hosted checks remain the
+independent backstop; if a gate is wrong, repair it and retain a regression
+test instead of silently skipping it.
 
 ## Repository health and tone
 

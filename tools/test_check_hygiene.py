@@ -103,7 +103,10 @@ class HygieneChecksTests(unittest.TestCase):
         directory, root = self.temporary_root()
         files = {
             ".githooks/pre-commit": "scripts/check-fast.sh\n",
-            ".githooks/pre-push": (
+            ".githooks/pre-push": "scripts/pre-push.sh\n",
+            "scripts/pre-push.sh": (
+                "git rev-parse --verify HEAD\n"
+                "git status --porcelain=v1 --untracked-files=all\n"
                 "scripts/ci.sh\nscripts/check-msrv.sh\nscripts/check-security.sh\n"
             ),
             ".github/workflows/ci.yml": (

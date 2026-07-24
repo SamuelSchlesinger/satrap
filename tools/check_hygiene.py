@@ -457,12 +457,21 @@ def check_gate_wiring(errors: list[str]) -> None:
         ("scripts/check-python.sh",),
         errors,
     )
-    shared_gates = ("scripts/ci.sh", "scripts/check-msrv.sh")
-    require_commands(ROOT / ".githooks/pre-push", shared_gates, errors)
-    require_commands(ROOT / ".github/workflows/ci.yml", shared_gates, errors)
     require_commands(
         ROOT / ".githooks/pre-push",
-        ("scripts/check-security.sh",),
+        ("scripts/pre-push.sh",),
+        errors,
+    )
+    shared_gates = ("scripts/ci.sh", "scripts/check-msrv.sh")
+    require_commands(ROOT / "scripts/pre-push.sh", shared_gates, errors)
+    require_commands(ROOT / ".github/workflows/ci.yml", shared_gates, errors)
+    require_commands(
+        ROOT / "scripts/pre-push.sh",
+        (
+            "scripts/check-security.sh",
+            "git rev-parse --verify HEAD",
+            "git status --porcelain=v1 --untracked-files=all",
+        ),
         errors,
     )
     require_commands(

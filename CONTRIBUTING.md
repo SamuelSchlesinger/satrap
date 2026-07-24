@@ -16,7 +16,9 @@ make install-hooks
 
 The pre-commit hook runs the fast Rust/Python formatting, lint, and compile
 gate. The pre-push hook runs the same full gate as the main CI job followed by
-the Rust 1.85 MSRV suite and RustSec audit. The integration gate requires
+the Rust 1.85 MSRV suite and RustSec audit. It rejects a dirty checkout or a
+ref that is not the checked-out `HEAD`, so the revision Git publishes is the
+revision that was actually tested. The integration gate requires
 hash-verified Ruff installed by `make install-python-tools`, the pinned Z3,
 cvc5, and Bitwuzla differential oracles installed by `make install-oracles`,
 the pinned fuzz toolchain installed by `make install-fuzz-tools`, and the
